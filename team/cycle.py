@@ -477,8 +477,11 @@ class Cycle:
         """repo.mode: pr — the tests of the repository are the reviewer; a green branch becomes a pull request the owner merges
         (waiting_owner → accepted once merged). Used for the framework's own repository: nothing lands there without a human."""
         if self.p.test_cmd:
+            # the test suite never gets the dispatcher's secrets: a test that posts would post for real (Demo $25, 02.11)
+            test_env = {k: v for k, v in os.environ.items() if not k.startswith(("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"))}
+            test_env["TEAM_PUBLISH_DRY_RUN"] = "1"
             try:
-                cp = subprocess.run(self.p.test_cmd, shell=True, cwd=str(repo), capture_output=True, text=True, timeout=900)
+                cp = subprocess.run(self.p.test_cmd, shell=True, cwd=str(repo), capture_output=True, text=True, timeout=900, env=test_env)
             except subprocess.TimeoutExpired:
                 cp = None
             if cp is None or cp.returncode != 0:
@@ -691,7 +694,7 @@ class Cycle:
         text = daily_digest(self.p, self.store, day)
         out.write_text(text, encoding="utf-8")
         chat = os.environ.get("TELEGRAM_OPS_CHAT_ID")
-        if chat and os.environ.get("TELEGRAM_BOT_TOKEN") and not self.dry_run:
+        if chat and os.environ.get("TELEGRAM_BOT_TOKEN") and not self.dry_run and os.environ.get("TEAM_PUBLISH_DRY_RUN") != "1":
             r = publish.post("telegram", text[:3500], target=chat, disclosure=" ", dry_run=False)
             self.store.event("digest.sent", day, "dispatcher", {"ok": r.ok, "error": r.error})
 

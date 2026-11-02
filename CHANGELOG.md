@@ -7,6 +7,10 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- Tests are sealed: conftest strips every secret from the environment and forces publish dry-run; the dispatcher's
+  test command for PR-mode repositories runs with the same sanitised environment. Cause: the Demo budget test posted
+  a "$25.00" digest to the real ops channel during the first unattended PR run.
+
 - Marketer card: a Writing section (lead with the event, one idea, plain words, hook); diary VISION tone rewritten
   from "dry log with numbers" to a living story after the owner's review of the first Telegram post.
 
