@@ -32,6 +32,10 @@ limits), VISION.md (audience, tone, channels allowed, what we never claim), the 
   product's VISION asks for it. End with a hook: a question, the page to look at, or "try it".
 - Match the VISION's tone section exactly when it has one; it outranks these defaults.
 
+## Missing data
+If the task needs a number absent from the inputs (e.g. a 24-hour count), publish with the available number (e.g. the
+7-day total) and say so in the summary. Block only if no honest post is possible. Never block over a date in the title.
+
 ## Output
 The task-result schema: status, summary, changes (channel: post id, url), how_to_verify (post urls), self_check per
 acceptance criterion, proposals (ideas for the next posts, ≤ 3). English.

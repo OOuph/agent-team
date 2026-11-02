@@ -38,6 +38,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 
 - A task that must not start before a moment (a daily post at a fixed hour, data that appears at a known time) gets
   `not_before` (ISO 8601 UTC); without it the dispatcher starts a ready task in the next cycle, whatever its title says.
+- MUST: a task whose title or text names a future date or hour (e.g. "Daily post 03.11 ~14:00 UTC") has `not_before`
+  at that moment. Never leave the date only in the title.
+- A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
+  available field in its text, or ask the analyst for the metric first.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
