@@ -17,7 +17,7 @@ targets:
 - /feed.xml
 - /day/
 budget_usd_per_day: 20
-paused: true   # until DNS agentteam.formachines.ai → 68.183.2.193 and the repo is public; then `paused: false` and add-site.sh on the droplet
+paused: false
 geo_queries:
 - autonomous AI agent team runs a product
 - AI agents maintain a website without humans
