@@ -78,6 +78,14 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
             print(f"{p.slug}: {res}")
         finally:
             logging.getLogger().removeHandler(fh)
+    if a.product == "all" and not phases:
+        from . import friction, retro
+        try:
+            friction.collect_all(st, _products(st, "all"))
+            if retro.due(st) and not a.dry_run:
+                print(f"retro: {retro.run_retro(st, runner)}")
+        except Exception as exc:  # noqa: BLE001 — the framework's own loop must never break the products' one
+            log.exception("friction/retro failed: %s", exc)
     return rc
 
 

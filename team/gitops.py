@@ -117,3 +117,56 @@ def revert_merge(repo_dir: Path, sha: str, base: str = "main") -> str:
 
 def log_since(repo_dir: Path, n: int = 10) -> str:
     return git(repo_dir, "log", f"-{n}", "--oneline", check=False)
+
+
+def push_branch(repo_dir: Path, task_id: str) -> str:
+    """Push task/<id> to origin (force-with-lease: a retry replaces the previous attempt). Returns the branch head."""
+    br = f"task/{task_id}"
+    if dirty(repo_dir):
+        git(repo_dir, "add", "-A")
+        git(repo_dir, "commit", "-q", "-m", f"{task_id}: leftover changes committed by the dispatcher")
+    git(repo_dir, "push", "-q", "--force-with-lease", "-u", "origin", br)
+    return head(repo_dir)
+
+
+def _gh_repo(url: str) -> str:
+    m = re.search(r"github\.com[/:]([^/]+/[^/.]+)", url)
+    if not m:
+        raise GitError(f"not a GitHub url: {url}")
+    return m.group(1)
+
+
+def _gh(method: str, path: str, body: dict | None = None) -> dict:
+    import json
+    import urllib.request
+    tok = os.environ.get("GITHUB_TOKEN")
+    if not tok:
+        raise GitError("GITHUB_TOKEN not set")
+    req = urllib.request.Request(f"https://api.github.com{path}", method=method, data=json.dumps(body).encode() if body else None,
+                                 headers={"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json",
+                                          "Content-Type": "application/json", "User-Agent": "agent-team"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return json.loads(r.read().decode() or "{}")
+    except Exception as exc:  # noqa: BLE001
+        raise GitError(f"github {method} {path}: {redact(str(exc))[:300]}") from exc
+
+
+def open_pull_request(repo_url: str, task_id: str, base: str, title: str, body: str) -> str:
+    """One PR per task branch; an existing open PR for the branch is reused. Returns its html url."""
+    repo = _gh_repo(repo_url)
+    owner = repo.split("/")[0]
+    existing = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
+    if isinstance(existing, list) and existing:
+        return str(existing[0].get("html_url"))
+    r = _gh("POST", f"/repos/{repo}/pulls", {"title": title[:200], "head": f"task/{task_id}", "base": base, "body": body[:60000]})
+    return str(r.get("html_url"))
+
+
+def pull_request_state(pr_url: str) -> str:
+    """open / merged / closed for a PR html url."""
+    m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_url)
+    if not m:
+        return "unknown"
+    r = _gh("GET", f"/repos/{m.group(1)}/pulls/{m.group(2)}")
+    return "merged" if r.get("merged") else str(r.get("state") or "unknown")

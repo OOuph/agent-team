@@ -21,6 +21,9 @@ limits), VISION.md (audience, tone, channels allowed, what we never claim), the 
   200–500 words with the page's substance, not a teaser.
 - If a channel is not configured or refuses, report it in the result; do not retry more than once.
 
+- `friction` (optional, ≤ 5): where the FRAMEWORK got in your way — a channel the tool refused, an unclear instruction,
+  a limit that blocked a reasonable post, a schema field that did not fit.
+
 ## Output
 The task-result schema: status, summary, changes (channel: post id, url), how_to_verify (post urls), self_check per
 acceptance criterion, proposals (ideas for the next posts, ≤ 3). English.

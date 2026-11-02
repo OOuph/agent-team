@@ -25,6 +25,10 @@ repository checkout you were started in (the task branch is already checked out)
   than a question.
 - Time and budget are limited: a task of size S should take a few minutes of work, not an exploration.
 
+- `friction` (optional, ≤ 5): where the FRAMEWORK got in your way — a tool you lacked, a denied permission, an unclear
+  instruction or acceptance criterion, a schema field that did not fit, data you could not reach. Not product defects
+  (those are proposals). The retro role reads these to improve the framework; an empty list is fine.
+
 ## Output
 The task-result schema: status (done / partial / blocked), a summary, the list of changes, how_to_verify (public URLs
 after deployment and what should be visible), self_check per acceptance criterion with evidence, proposals, the branch

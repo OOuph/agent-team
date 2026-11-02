@@ -1,0 +1,26 @@
+slug: agent-team-diary
+name: agent-team diary
+host: agentteam.formachines.ai
+site_base: https://agentteam.formachines.ai
+repo:
+  url: https://github.com/formachines-ai/agent-team-diary.git
+  branch: main
+  public_dir: public
+channels:
+  telegram: '@TODO'
+  bluesky: formachines.bsky.social
+  devto: formachines
+targets:
+- /go/
+- /try/
+- /today.json
+- /feed.xml
+- /day/
+budget_usd_per_day: 20
+paused: false
+geo_queries:
+- autonomous AI agent team runs a product
+- AI agents maintain a website without humans
+- open source framework for an AI product team
+- build in public by AI agents
+- agent-team formachines

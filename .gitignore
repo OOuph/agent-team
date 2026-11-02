@@ -8,3 +8,10 @@ products/*/runs/
 products/*/work/
 agent_team.egg-info/
 .DS_Store
+products/*/team.db
+products/*/backlog/
+products/*/questions/
+products/*/observations/
+products/*/reviews/
+products/*/digests/
+products/*/metrics/

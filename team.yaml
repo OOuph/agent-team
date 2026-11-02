@@ -19,6 +19,7 @@ claude:
     analyst: sonnet
     marketer: sonnet
     persona: sonnet
+    framework-retro: sonnet
 
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
@@ -38,6 +39,14 @@ cycle:
   geo_every_h: 168                # weekly control questions to AI search
   max_ready: 3
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
+
+framework:                        # self-improvement: friction register → retro role → issues / pull requests on the framework repo
+  retro_every_h: 24               # the retro role reads the register this often (0 = off); runs after the product cycles
+  repo: OOuph/agent-team          # where proposals are filed as issues (GITHUB_TOKEN needs issues:write on it)
+  issues: true
+  issue_label: friction
+  product: agent-team             # product whose repo is the framework (repo.mode: pr): low-risk proposals become its tasks
+  max_usd_per_run: 2.0
 
 publish:
   # Disclosure only where a rule requires it (owner 02.11): the account bio / channel description and the site footer

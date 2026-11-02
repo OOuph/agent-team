@@ -117,6 +117,37 @@
   "summary": {
    "type": "string",
    "maxLength": 600
+  },
+  "friction": {
+   "type": "array",
+   "maxItems": 5,
+   "description": "where the FRAMEWORK got in your way (not the product under review): a tool you lacked, a page team-fetch could not show you, an unclear instruction, a schema that did not fit",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kind",
+     "what"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "missing_tool",
+       "denied_permission",
+       "unclear_instruction",
+       "schema_mismatch",
+       "missing_data",
+       "environment",
+       "other"
+      ]
+     },
+     "what": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
   }
  }
 }

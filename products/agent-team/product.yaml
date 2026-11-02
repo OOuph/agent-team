@@ -1,0 +1,15 @@
+# The framework itself as a product: its repository is worked on in PR mode — the developer implements low-risk retro
+# proposals (role cards, docs, config) on a task branch, the test suite must pass, a pull request is opened, the owner
+# merges. No site, no channels, no metrics: this product exists so the self-improvement loop has a place to put tasks.
+slug: agent-team
+name: agent-team (framework)
+host: ""
+site_base: ""
+repo:
+  url: https://github.com/OOuph/agent-team.git
+  branch: main
+  mode: pr
+  test_cmd: "python3 -m venv .venv-test >/dev/null 2>&1 || true; .venv-test/bin/pip install -q -e . pytest >/dev/null 2>&1 && .venv-test/bin/python -m pytest -q"
+channels: {}
+targets: []
+budget_usd_per_day: 5

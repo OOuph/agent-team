@@ -82,6 +82,37 @@
   },
   "commit": {
    "type": "string"
+  },
+  "friction": {
+   "type": "array",
+   "maxItems": 5,
+   "description": "where the FRAMEWORK got in your way (not the product): a tool you lacked, a denied permission, an unclear instruction, a schema that did not fit, data you could not reach",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kind",
+     "what"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "missing_tool",
+       "denied_permission",
+       "unclear_instruction",
+       "schema_mismatch",
+       "missing_data",
+       "environment",
+       "other"
+      ]
+     },
+     "what": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
   }
  }
 }

@@ -133,6 +133,15 @@ class Product:
         return str((self.raw.get("repo") or {}).get("branch") or "main")
 
     @property
+    def repo_mode(self) -> str:
+        """merge (default: task branch merged into base and pushed) or pr (branch pushed, tests must pass, pull request opened, owner merges)."""
+        return str((self.raw.get("repo") or {}).get("mode") or "merge")
+
+    @property
+    def test_cmd(self) -> str:
+        return str((self.raw.get("repo") or {}).get("test_cmd") or "")
+
+    @property
     def public_dir(self) -> str:
         return str((self.raw.get("repo") or {}).get("public_dir") or "public")
 

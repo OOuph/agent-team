@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import shutil
+import subprocess
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -239,6 +240,8 @@ class Cycle:
     # review: released tasks → reviewer --------------------------------------------------------------
 
     def phase_review(self) -> None:
+        if self.p.repo_mode == "pr":
+            self.check_pull_requests()
         after = timedelta(minutes=int(self.st.cycle.get("review_after_min", 6)))
         for t in self.store.tasks(["released"]):
             rel = parse_ts(t.get("released_at"))
@@ -409,6 +412,8 @@ class Cycle:
         if res.get("status") == "partial":
             self.store.transition(t["id"], "in_progress", "dispatcher", "partial — continues next cycle", force=True, last_review=None)
             return True
+        if self.p.repo_mode == "pr":
+            return self.release_as_pull_request(t, repo, res)
         try:
             sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch)
         except gitops.GitError as exc:
@@ -416,6 +421,50 @@ class Cycle:
             return True
         self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
         return True
+
+    def release_as_pull_request(self, t: dict[str, Any], repo: Path, res: dict[str, Any]) -> bool:
+        """repo.mode: pr — the tests of the repository are the reviewer; a green branch becomes a pull request the owner merges
+        (waiting_owner → accepted once merged). Used for the framework's own repository: nothing lands there without a human."""
+        if self.p.test_cmd:
+            try:
+                cp = subprocess.run(self.p.test_cmd, shell=True, cwd=str(repo), capture_output=True, text=True, timeout=900)
+            except subprocess.TimeoutExpired:
+                cp = None
+            if cp is None or cp.returncode != 0:
+                tail = (cp.stdout + cp.stderr)[-600:] if cp else "tests timed out"
+                attempts = int(t.get("attempts") or 0) + 1
+                self.store.add_result(t["id"], {"run_id": res.get("run_id"), "status": "tests_failed", "summary": tail})
+                self.store.transition(t["id"], "blocked" if attempts >= 2 else "ready", "dispatcher", f"tests failed: {tail[:300]}", force=True,
+                                      attempts=attempts, assignee_run=None)
+                return True
+        try:
+            gitops.push_branch(repo, t["id"])
+            body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
+                    "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
+                    "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +
+                    "\n\n_Opened by the agent-team dispatcher for task " + t["id"] + "; tests passed on the branch. A human merges._")
+            url = gitops.open_pull_request(self.p.repo_url, t["id"], self.p.repo_branch, f"{t['id']}: {t.get('title', '')}", body)
+        except gitops.GitError as exc:
+            self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
+            return True
+        self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}", force=True, pr_url=url, assignee_run=None)
+        return True
+
+    def check_pull_requests(self) -> None:
+        for t in self.store.tasks(["waiting_owner"]):
+            url = t.get("pr_url")
+            if not url or self.dry_run:
+                continue
+            try:
+                state = gitops.pull_request_state(url)
+            except gitops.GitError as exc:
+                log.warning("%s: PR state of %s: %s", self.p.slug, url, exc)
+                continue
+            if state == "merged":
+                self.store.transition(t["id"], "accepted", "owner", f"pull request merged {url}", force=True, accepted_at=utcnow())
+                self.store.transition(t["id"], "done", "dispatcher", "merged by the owner; framework tasks are not measured", force=True)
+            elif state == "closed":
+                self.store.transition(t["id"], "rejected", "owner", f"pull request closed without merge {url}", force=True)
 
     def exec_marketer(self, t: dict[str, Any], run_id: str) -> bool:
         channels = self.p.raw.get("channels") or {}
