@@ -102,3 +102,35 @@ def test_not_before_is_stored(tmp_path: Path) -> None:
                       not_before="2099-01-01T14:00:00+00:00")
     assert s.task(t["id"])["not_before"] == "2099-01-01T14:00:00+00:00"
     s.close()
+
+
+def test_ask_dedupes_same_question(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    q1 = s.ask(from_="po", to="owner", question="Is the retro loop running?")
+    q2 = s.ask(from_="po", to="owner", question="is the  retro loop running? ")
+    assert q2["id"] == q1["id"]
+    assert any(e["kind"] == "question.repeat" for e in s.events())
+    s.answer(q1["id"], "yes, every cycle", "owner")
+    q3 = s.ask(from_="po", to="owner", question="Is the retro loop running?")
+    assert q3["id"] == q1["id"]                        # answered recently: still not re-asked
+    q4 = s.ask(from_="po", to="owner", question="Which canary product?")
+    assert q4["id"] != q1["id"]
+    s.close()
+
+
+def test_po_prompt_has_answers_and_framework_context(tmp_path: Path) -> None:
+    from team import prompts
+    st = _settings(tmp_path)
+    st.raw["framework"] = {"product": "p1", "retro_every_h": 1, "auto_merge": True, "canary_product": "rr"}
+    p = _product(st)
+    s = Store(p.dir)
+    q = s.ask(from_="po", to="owner", question="May the dispatcher change its own code?")
+    s.answer(q["id"], "Yes, decision 18.", "owner")
+    (st.data_dir / "framework").mkdir(parents=True)
+    (st.data_dir / "framework" / "register.md").write_text("# Framework friction register\n\n| tool_denied | 5 |", encoding="utf-8")
+    txt = prompts.po_prompt(p, s, cycle_id="c", observations=[], questions=[], metrics_md="", spent_today=0, cap=5, max_ready=3, idle=False)
+    assert "ALREADY ANSWERED" in txt and "decision 18" in txt
+    assert "FRAMEWORK CONTEXT" in txt and "tool_denied" in txt and "do not ask the owner whether it does" in txt
+    s.close()

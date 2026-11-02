@@ -31,6 +31,9 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
     q_txt = "\n\n".join(_y(q) for q in questions) or "(none)"
+    answered = [q for q in store.questions(["answered"]) if q.get("to") == "owner" and str(q.get("answered") or "") >= _hours_ago(72)][-8:]
+    answered_txt = "\n\n".join(_y({k: q.get(k) for k in ("id", "question", "answer", "answered_by", "answered")}) for q in answered) or "(none)"
+    fw_txt = framework_context(product)
     return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
             f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
             + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
@@ -38,8 +41,36 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + "\n\n# BACKLOG (open tasks)\n" + (_y([_task_brief(t) for t in tasks]) if tasks else "(empty)")
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
+            + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
+            + (("\n\n# FRAMEWORK CONTEXT (this product is the framework itself)\n" + fw_txt) if fw_txt else "")
             + "\n\n# NEW OBSERVATIONS\n" + obs_txt
             + "\n\n# LATEST METRICS\n" + (_tail(metrics_md, 6000) or "(no metrics yet)") + "\n")
+
+
+def _hours_ago(h: int) -> str:
+    from datetime import datetime, timedelta, timezone
+    return (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat(timespec="seconds")
+
+
+def framework_context(product: Product) -> str:
+    """For the product whose repository is the framework: the friction register (7 days), the latest retro report and the
+    open retro tasks, so the PO reads the loop instead of asking the owner whether it runs."""
+    fw = dict(product.st.raw.get("framework") or {})
+    if product.slug != str(fw.get("product") or ""):
+        return ""
+    base = product.st.data_dir / "framework"
+    parts = []
+    reg = base / "register.md"
+    if reg.exists():
+        parts.append("## Friction register (last 7 days)\n" + _tail(reg.read_text(encoding="utf-8"), 6000))
+    retros = sorted((base / "retro").glob("20*.md"))
+    if retros:
+        parts.append(f"## Latest retro report ({retros[-1].name})\n" + _tail(retros[-1].read_text(encoding="utf-8"), 5000))
+    stamp = base / "last-retro"
+    parts.append("## Loop status\n" + (f"last retro: {stamp.read_text(encoding='utf-8').strip()}" if stamp.exists() else "retro has not run yet")
+                 + f" · retro every {fw.get('retro_every_h', '?')} h · auto_merge={fw.get('auto_merge')} · canary={fw.get('canary_product')}"
+                 + "\nThe loop register → retro → issues → tasks → PR → canary → merge runs by itself; do not ask the owner whether it does.")
+    return "\n\n".join(parts)
 
 
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],

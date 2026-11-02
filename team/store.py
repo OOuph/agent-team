@@ -45,6 +45,13 @@ QUESTION_STATES = ("open", "answered", "expired")
 _ID = re.compile(r"^(T|Q|OBS|R)-(\d{4})")
 
 
+QUESTION_DEDUPE_H = 72
+
+
+def _iso_hours_ago(h: int) -> str:
+    return (datetime.now(timezone.utc) - timedelta(hours=h)).isoformat(timespec="seconds")
+
+
 def utcnow() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
@@ -237,6 +244,17 @@ class Store:
 
     def ask(self, *, from_: str, to: str, question: str, task_id: str | None = None, options: list[str] | None = None,
             blocks: list[str] | None = None) -> dict[str, Any]:
+        norm = " ".join(question.lower().split())[:300]
+        for prev in self.questions(["open", "answered"]):
+            if prev.get("to") == to and " ".join(str(prev.get("question", "")).lower().split())[:300] == norm \
+                    and str(prev.get("created") or "") >= _iso_hours_ago(QUESTION_DEDUPE_H):
+                self.event("question.repeat", prev["id"], from_, {"to": to, "question": question[:200]})
+                if task_id and prev.get("state") == "open":
+                    try:
+                        self.transition(task_id, "waiting_owner" if to == "owner" else "blocked", from_, f"question {prev['id']} (repeat)", blocked_by=prev["id"])
+                    except ValueError:
+                        pass
+                return prev
         qid = self._next_id("Q", "questions")
         q = {"id": qid, "from": from_, "to": to, "task": task_id, "question": question[:1500], "options": list(options or []),
              "blocks": list(blocks or ([task_id] if task_id else [])), "state": "open", "answer": None, "answered_by": None,

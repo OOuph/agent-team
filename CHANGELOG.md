@@ -7,6 +7,11 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- PO prompt carries the owner's answers of the last 72 h and, for the framework product, the friction register, the
+  latest retro and the loop status; `Store.ask` returns the existing question instead of repeating the same text
+  within 72 h (event `question.repeat`); `product.yaml: models:` picks a model per role (framework PO on sonnet).
+  Ops finding: the framework PO asked the owner every cycle whether the loop runs ($0.17 per opus run).
+
 - First unattended framework change: retro → T-0002 → PR #5 → canary → merge (43acb7e). Found on the way: the
   running checkout was not fast-forwarded because untracked state files counted as dirty; `dirty_tracked` fixes it.
 

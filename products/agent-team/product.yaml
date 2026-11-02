@@ -13,3 +13,5 @@ repo:
 channels: {}
 targets: []
 budget_usd_per_day: 5
+models:
+  po: sonnet              # the framework PO reads the register and the retro; opus is not needed here (ops finding 02.11)

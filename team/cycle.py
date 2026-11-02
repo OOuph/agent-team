@@ -96,7 +96,8 @@ class Cycle:
         env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(),
                "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
                "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
-        rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd,
+        model = (self.p.raw.get("models") or {}).get(role)      # product.yaml may pick a cheaper model per role
+        rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
                              allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns)
         cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
         self.store.book_spend(run_id, role, cost, rr.cost_usd is not None)
