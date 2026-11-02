@@ -398,7 +398,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--tags", help="comma-separated")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--disclosure", default=DEFAULT_DISCLOSURE)
-    p.add_argument("--ledger", type=Path, help="JSONL journal to append the result to")
+    p.add_argument("--ledger", type=Path, default=(Path(os.environ["TEAM_PUBLISH_LEDGER"]) if os.environ.get("TEAM_PUBLISH_LEDGER") else None),
+                   help="JSONL journal to append the result to (default: $TEAM_PUBLISH_LEDGER, set by the dispatcher)")
     p.add_argument("-v", "--verbose", action="store_true")
     return p
 
