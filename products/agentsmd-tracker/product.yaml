@@ -1,0 +1,20 @@
+slug: agentsmd-tracker
+name: AGENTS.md Tracker
+host: agentsmd.formachines.ai
+site_base: https://agentsmd.formachines.ai
+repo:
+  url: https://github.com/formachines-ai/agentsmd-tracker.git
+  branch: main
+  public_dir: public
+channels:
+  bluesky: ""
+  telegram: "@TODO"
+  devto: ""
+targets:
+- /go/
+- /stats.json
+- /today.json
+- /feed.xml
+- /repo/
+budget_usd_per_day: 20
+paused: false
