@@ -72,9 +72,14 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
             continue
         den = r.get("denials") or []
         if den:
-            names = sorted({str((x or {}).get("tool_name") or x) for x in den})[:6]
-            out.append(_rec(slug, "tool_denied", f"{r.get('role')}: denied {', '.join(names)}", role=str(r.get("role")), ts=r.get("finished"),
-                            run_id=r.get("run_id"), fp=str(r.get("run_id"))))
+            calls = []
+            for x in den[:6]:
+                x = x if isinstance(x, dict) else {"tool_name": str(x)}
+                inp = x.get("tool_input") or {}
+                arg = str(inp.get("command") or inp.get("url") or inp.get("file_path") or inp.get("pattern") or "") if isinstance(inp, dict) else str(inp)
+                calls.append(f"{x.get('tool_name')}({redact(arg)[:80]})" if arg else str(x.get("tool_name")))
+            out.append(_rec(slug, "tool_denied", f"{r.get('role')}: denied {', '.join(dict.fromkeys(calls))}", role=str(r.get("role")), ts=r.get("finished"),
+                            run_id=r.get("run_id"), fp=str(r.get("run_id"))))      # fingerprint = run id: dedup unchanged (retro issue #1)
     for t in store.tasks():
         for h in t.get("history") or []:
             note, to, ts = str(h.get("note") or ""), h.get("to"), h.get("ts")

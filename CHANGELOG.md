@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- `tool_denied` friction records carry the denied command / url (≤ 80 chars, secrets stripped), so the retro can
+  tell a narrow allowlist from a role going off-card. First retro proposal, issue OOuph/agent-team#1 (F-0001…F-0006).
+
 - Self-improvement loop: friction register (`team friction`), `framework-retro` role (`team retro`), PR mode for the
   framework repository (`repo.mode: pr`, `test_cmd`), `friction` field in task-result and review-verdict. Owner
   decision 17. SCHEME.md §9.
