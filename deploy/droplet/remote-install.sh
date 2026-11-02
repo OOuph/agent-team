@@ -44,3 +44,4 @@ ssh "${SSH_OPTS[@]}" "$DROPLET_HOST" \
   "SRC_DIR='$REMOTE_TMP/$DEPLOY_REL' SITEMETRICS_SRC='$REMOTE_TMP/$SITEMETRICS_REL' bash '$REMOTE_TMP/$DEPLOY_REL/install.sh'"
 
 echo "== done. Check: ssh ${SSH_OPTS[*]} $DROPLET_HOST 'systemctl list-timers agent-team-\\*; tail -n 20 /var/log/agent-team/publish.log'"
+echo "   IndexNow: ssh ${SSH_OPTS[*]} $DROPLET_HOST 'cat /etc/agent-team/indexnow.key' → curl -s https://<host>/<key>.txt must print the key"

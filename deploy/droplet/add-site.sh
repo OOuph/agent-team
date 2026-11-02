@@ -15,7 +15,8 @@
 #   -  sites.tsv line (added once)
 #   a. http-only vhost (:80, root /var/www/<slug>) → nginx -t → reload   [skipped if cert exists]
 #   b. certbot --nginx -d <host> … --redirect                             [skipped if cert exists]
-#   c. full vhost from /etc/agent-team/site.conf.template → nginx -t → reload
+#   c. full vhost from /etc/agent-team/site.conf.template via render-vhost.sh (fills __HOST__,
+#      __SLUG__, __INDEXNOW_KEY__) → nginx -t → reload (previous vhost restored on failure)
 #   d. publish.sh --site <slug>
 set -euo pipefail
 umask 022
@@ -25,6 +26,8 @@ ETC_DIR="${ETC_DIR:-/etc/agent-team}"
 SITES_FILE="${SITES_FILE:-$ETC_DIR/sites.tsv}"
 ENV_FILE="${ENV_FILE:-$ETC_DIR/env}"
 TEMPLATE="${TEMPLATE:-$ETC_DIR/site.conf.template}"
+INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-$ETC_DIR/indexnow.key}"
+RENDER_VHOST="${RENDER_VHOST:-/opt/agent-team/bin/render-vhost.sh}"
 HEADERS_SNIPPET="${HEADERS_SNIPPET:-/etc/nginx/snippets/agent-team-headers.conf}"
 NGINX_AVAILABLE="${NGINX_AVAILABLE:-/etc/nginx/sites-available}"
 NGINX_ENABLED="${NGINX_ENABLED:-/etc/nginx/sites-enabled}"
@@ -56,6 +59,8 @@ done
 [ -f "$TEMPLATE" ] || { echo "ERROR: $TEMPLATE missing — run install.sh first" >&2; exit 1; }
 [ -f "$HEADERS_SNIPPET" ] || { echo "ERROR: $HEADERS_SNIPPET missing — run install.sh first" >&2; exit 1; }
 [ -x "$PUBLISH" ] || { echo "ERROR: $PUBLISH missing — run install.sh first" >&2; exit 1; }
+[ -x "$RENDER_VHOST" ] || { echo "ERROR: $RENDER_VHOST missing — run install.sh first" >&2; exit 1; }
+[ -s "$INDEXNOW_KEY_FILE" ] || { echo "ERROR: $INDEXNOW_KEY_FILE missing — run install.sh first (it generates the IndexNow key)" >&2; exit 1; }
 
 # CERTBOT_EMAIL: environment wins, then /etc/agent-team/env
 if [ -z "${CERTBOT_EMAIL:-}" ] && [ -f "$ENV_FILE" ]; then
@@ -147,38 +152,18 @@ EOF
 fi
 
 # ---------------------------------------------------------------- c. full vhost
-echo "c. rendering $TEMPLATE -> $CONF"
-rendered="$(mktemp)"
-sed -e "s|__HOST__|$HOST|g" -e "s|__SLUG__|$SLUG|g" "$TEMPLATE" > "$rendered"
-# certbot's shared ssl snippets exist when any cert was ever installed with --nginx; drop the lines otherwise
-if [ ! -f /etc/letsencrypt/options-ssl-nginx.conf ]; then
-  echo "WARNING: /etc/letsencrypt/options-ssl-nginx.conf missing — dropping its include from the vhost"
-  sed -i '\|include /etc/letsencrypt/options-ssl-nginx.conf;|d' "$rendered"
-fi
-if [ ! -f /etc/letsencrypt/ssl-dhparams.pem ]; then
-  echo "WARNING: /etc/letsencrypt/ssl-dhparams.pem missing — dropping ssl_dhparam from the vhost"
-  sed -i '\|ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;|d' "$rendered"
-fi
-if [ -f "$CONF" ] && cmp -s "$rendered" "$CONF"; then
-  echo "vhost unchanged"
-  rm -f "$rendered"
-  ln -sfn "$CONF" "$CONF_LINK"
-else
-  backup=""
-  if [ -f "$CONF" ]; then backup="$(mktemp)"; cp "$CONF" "$backup"; fi
-  mv "$rendered" "$CONF"
-  chmod 644 "$CONF"
-  ln -sfn "$CONF" "$CONF_LINK"
-  if ! nginx -t; then
-    echo "ERROR: nginx -t failed with the new vhost; restoring the previous one" >&2
-    if [ -n "$backup" ]; then mv "$backup" "$CONF"; else rm -f "$CONF" "$CONF_LINK"; fi
-    nginx -t || true
-    exit 1
-  fi
-  [ -n "$backup" ] && rm -f "$backup"
-  echo "systemctl reload nginx"
-  systemctl reload nginx
-fi
+echo "c. rendering $TEMPLATE -> $CONF via $RENDER_VHOST"
+# render-vhost.sh: substitutes __HOST__/__SLUG__/__INDEXNOW_KEY__, drops certbot's shared ssl
+# includes when they do not exist, writes only on change, nginx -t, restores the old vhost on
+# failure (exit 1), reloads nginx on change. Exit 0 = unchanged, 3 = updated.
+set +e
+"$RENDER_VHOST" "$SLUG" "$HOST"
+render_rc=$?
+set -e
+case "$render_rc" in
+  0|3) ;;
+  *) echo "ERROR: render-vhost.sh failed (rc=$render_rc); the previous vhost (if any) is back in place" >&2; exit 1 ;;
+esac
 
 # ---------------------------------------------------------------- d. first publish
 echo "d. first publish: $PUBLISH --site $SLUG"

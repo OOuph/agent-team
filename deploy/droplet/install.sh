@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # install.sh — install / upgrade the agent-team publishing stack on the droplet. Run as root.
-# Idempotent: scripts, units, template and snippet are overwritten; sites.tsv and env are kept.
+# Idempotent: scripts, units, template and snippet are overwritten; sites.tsv, env and the
+# IndexNow key are kept. Every site already in sites.tsv gets its nginx vhost re-rendered from
+# the (possibly new) template via render-vhost.sh (nginx -t, rollback on error, one reload).
 #
 # Usage (on the droplet): SRC_DIR=/tmp/agent-team-deploy/deploy/droplet bash install.sh
 #   SRC_DIR         directory with these deploy files (default: directory of this script)
@@ -22,10 +24,13 @@ LOG_DIR="${LOG_DIR:-/var/log/agent-team}"
 WWW_DIR="${WWW_DIR:-/var/www}"
 SYSTEMD_DIR="${SYSTEMD_DIR:-/etc/systemd/system}"
 NGINX_SNIPPETS="${NGINX_SNIPPETS:-/etc/nginx/snippets}"
+LETSENCRYPT_LIVE="${LETSENCRYPT_LIVE:-/etc/letsencrypt/live}"
+INDEXNOW_KEY_FILE="${INDEXNOW_KEY_FILE:-$ETC_DIR/indexnow.key}"               # the key (32 hex), read by publish.sh / render-vhost.sh
+INDEXNOW_KEYFILE_TXT="${INDEXNOW_KEYFILE_TXT:-$ETC_DIR/indexnow-keyfile.txt}" # same key, served by nginx as /<key>.txt
 
 echo "== agent-team install from $SRC_DIR"
 if [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root" >&2; exit 1; fi
-for f in publish.sh add-site.sh metrics.sh site.conf.template nginx-headers.snippet.conf \
+for f in publish.sh add-site.sh render-vhost.sh metrics.sh site.conf.template nginx-headers.snippet.conf \
          agent-team-publish.service agent-team-publish.timer \
          agent-team-metrics.service agent-team-metrics.timer sites.tsv.example env.example; do
   [ -f "$SRC_DIR/$f" ] || { echo "ERROR: $SRC_DIR/$f missing" >&2; exit 1; }
@@ -33,7 +38,7 @@ done
 
 echo "-- checking dependencies"
 missing=""
-for bin in nginx certbot git rsync curl python3 flock systemctl; do
+for bin in nginx certbot git rsync curl python3 flock systemctl openssl; do
   if command -v "$bin" >/dev/null 2>&1; then
     echo "   $bin: $(command -v "$bin")"
   else
@@ -53,11 +58,11 @@ for d in "$ETC_DIR" "$BIN_DIR" "$SITES_DIR" "$STATE_DIR" "$METRICS_DIR" "$LOG_DI
   mkdir -p "$d"
   echo "   $d"
 done
-# nginx (www-data) reads /var/lib/agent-team/metrics/<host>/ via alias
-chmod 755 /var/lib/agent-team "$METRICS_DIR"
+# nginx (www-data) reads /var/lib/agent-team/metrics/<host>/ and /etc/agent-team/indexnow-keyfile.txt via alias
+chmod 755 /var/lib/agent-team "$METRICS_DIR" "$ETC_DIR"
 
 echo "-- scripts -> $BIN_DIR"
-for f in publish.sh add-site.sh metrics.sh; do
+for f in publish.sh add-site.sh render-vhost.sh metrics.sh; do
   install -m 0755 "$SRC_DIR/$f" "$BIN_DIR/$f"
   echo "   $BIN_DIR/$f"
 done
@@ -87,12 +92,71 @@ else
   echo "   $ETC_DIR/env kept"
 fi
 
+echo "-- IndexNow key (one key for every pilot site)"
+if [ -s "$INDEXNOW_KEY_FILE" ] && [[ "$(tr -d '[:space:]' < "$INDEXNOW_KEY_FILE")" =~ ^[A-Za-z0-9-]{8,128}$ ]]; then
+  echo "   $INDEXNOW_KEY_FILE kept"
+else
+  # 32 hex chars; the key is public by design (served at https://<host>/<key>.txt), 0644 is fine
+  printf '%s\n' "$(openssl rand -hex 16)" > "$INDEXNOW_KEY_FILE"
+  echo "   $INDEXNOW_KEY_FILE generated"
+fi
+chmod 0644 "$INDEXNOW_KEY_FILE"
+indexnow_key="$(tr -d '[:space:]' < "$INDEXNOW_KEY_FILE")"
+# keyfile = the key itself, no trailing newline (what IndexNow fetches to verify the submitter)
+if [ -f "$INDEXNOW_KEYFILE_TXT" ] && [ "$(cat "$INDEXNOW_KEYFILE_TXT")" = "$indexnow_key" ]; then
+  echo "   $INDEXNOW_KEYFILE_TXT kept"
+else
+  printf '%s' "$indexnow_key" > "$INDEXNOW_KEYFILE_TXT.tmp"
+  mv -f "$INDEXNOW_KEYFILE_TXT.tmp" "$INDEXNOW_KEYFILE_TXT"
+  echo "   $INDEXNOW_KEYFILE_TXT written"
+fi
+chmod 0644 "$INDEXNOW_KEYFILE_TXT"
+echo "   key location on every host: https://<host>/$indexnow_key.txt"
+
 echo "-- nginx snippet"
 mkdir -p "$NGINX_SNIPPETS"
 install -m 0644 "$SRC_DIR/nginx-headers.snippet.conf" "$NGINX_SNIPPETS/agent-team-headers.conf"
 echo "   $NGINX_SNIPPETS/agent-team-headers.conf"
 echo "   nginx -t"
 nginx -t
+
+echo "-- re-render vhosts of registered sites from the template"
+# Sites whose certificate exists have a full vhost: re-render it so template changes (new
+# placeholders such as __INDEXNOW_KEY__) reach them. Bootstrap-only sites (no cert yet) are left
+# to add-site.sh. render-vhost.sh does nginx -t per site and restores the old file on failure.
+n_render_updated=0; n_render_same=0; n_render_skip=0; n_render_err=0; render_err_slugs=""
+if [ -f "$ETC_DIR/sites.tsv" ]; then
+  exec 3< "$ETC_DIR/sites.tsv"
+  while IFS= read -r -u 3 line || [ -n "$line" ]; do
+    line="${line%$'\r'}"
+    case "$line" in ''|'#'*) continue ;; esac
+    IFS=$'\t' read -r slug host _rest <<< "$line"
+    [ -n "$slug" ] && [ -n "$host" ] || { echo "   WARNING: bad sites.tsv line: $line" >&2; continue; }
+    if [ ! -f "$LETSENCRYPT_LIVE/$host/fullchain.pem" ]; then
+      echo "   [$slug] no certificate in $LETSENCRYPT_LIVE/$host — skipping (add-site.sh will render it)"
+      n_render_skip=$((n_render_skip + 1)); continue
+    fi
+    set +e
+    "$BIN_DIR/render-vhost.sh" "$slug" "$host" --no-reload
+    rc=$?
+    set -e
+    case "$rc" in
+      0) n_render_same=$((n_render_same + 1)) ;;
+      3) n_render_updated=$((n_render_updated + 1)) ;;
+      *) n_render_err=$((n_render_err + 1)); render_err_slugs="$render_err_slugs $slug" ;;
+    esac
+  done
+  exec 3<&-
+fi
+echo "   vhosts: updated=$n_render_updated unchanged=$n_render_same skipped=$n_render_skip errors=$n_render_err${render_err_slugs:+ (${render_err_slugs# })}"
+if [ "$n_render_updated" -gt 0 ]; then
+  echo "   nginx -t && systemctl reload nginx"
+  nginx -t
+  systemctl reload nginx
+fi
+if [ "$n_render_err" -gt 0 ]; then
+  echo "WARNING: $n_render_err vhost(s) failed to render and were left as before:${render_err_slugs}" >&2
+fi
 
 echo "-- systemd units -> $SYSTEMD_DIR"
 for u in agent-team-publish.service agent-team-publish.timer agent-team-metrics.service agent-team-metrics.timer; do
@@ -109,3 +173,4 @@ echo "-- first publish (no-op when sites.tsv is empty)"
 "$BIN_DIR/publish.sh" || echo "WARNING: publish.sh reported failures — see $LOG_DIR/publish.log" >&2
 
 echo "== install done. Next: fill $ETC_DIR/env (CERTBOT_EMAIL), then add-site.sh <slug> <host> <repo>"
+echo "   IndexNow: curl -s https://<host>/$indexnow_key.txt  → must print the key; log: grep indexnow= $LOG_DIR/publish.log"
