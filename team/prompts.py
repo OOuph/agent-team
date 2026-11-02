@@ -45,9 +45,11 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
                      review: dict[str, Any] | None) -> str:
     readme = ""
+    seen: set[Path] = set()
     for name in ("README.md", "readme.md", "AGENTS.md"):
         p = repo_dir / name
-        if p.exists():
+        if p.exists() and p.resolve() not in seen:          # case-insensitive file systems: README.md == readme.md
+            seen.add(p.resolve())
             readme += f"\n\n--- {name} ---\n" + _tail(p.read_text(encoding="utf-8", errors="replace"), 8000)
     prev = ("\n\n# PREVIOUS ATTEMPTS ON THIS TASK\n" + _y(previous[-2:])) if previous else ""
     rev = ("\n\n# REVIEW THAT FAILED (fix this first)\n" + _y({k: review.get(k) for k in ("verdict", "first_failure", "criteria", "summary")})) if review else ""
