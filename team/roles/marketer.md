@@ -27,3 +27,6 @@ limits), VISION.md (audience, tone, channels allowed, what we never claim), the 
 ## Output
 The task-result schema: status, summary, changes (channel: post id, url), how_to_verify (post urls), self_check per
 acceptance criterion, proposals (ideas for the next posts, ≤ 3). English.
+
+## Shell rule
+The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. `cd`, `;`, `&&`, `for` loops and pipes are denied, so issue one call per URL.

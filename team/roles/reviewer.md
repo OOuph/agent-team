@@ -26,3 +26,6 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 ## Output
 The review-verdict schema: verdict, steps (url, status, note), criteria with met/evidence, first_failure, limits,
 observations, a two-sentence summary. English.
+
+## Shell rule
+The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. `cd`, `;`, `&&`, `for` loops and pipes are denied, so issue one call per URL.
