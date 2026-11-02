@@ -12,8 +12,7 @@ server {
     access_log /var/log/nginx/access.log full;
 
     location /.well-known/acme-challenge/ { root /var/www/acme; }
-
-    return 301 https://$host$request_uri;
+    location / { return 301 https://$host$request_uri; }   # inside a location: a server-level return would run before the acme location
 }
 
 server {
