@@ -8,7 +8,7 @@ repo:
   public_dir: public
 channels:
   bluesky: formachines.bsky.social
-  telegram: '@TODO'
+  telegram: '@agentsmd_tracker'
   devto: ''
 targets:
 - /go/

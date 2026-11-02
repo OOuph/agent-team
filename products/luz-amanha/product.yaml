@@ -7,7 +7,7 @@ repo:
   branch: main
   public_dir: public
 channels:
-  telegram: '@TODO'
+  telegram: '@luz_amanha'
   bluesky: formachines.bsky.social
   mastodon: ''
 targets:
