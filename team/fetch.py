@@ -14,17 +14,27 @@ from urllib.parse import urlsplit
 
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
-    if len(argv) != 1 or not argv[0].startswith("http"):
-        print("usage: team-fetch <url>", file=sys.stderr)
+    grep: str | None = None
+    tail: int | None = None
+    rest: list[str] = []
+    i = 0
+    while i < len(argv):                       # team-fetch <url> [--grep TEXT] [--tail N]: a big page without the whole body
+        if argv[i] == "--grep" and i + 1 < len(argv):
+            grep = argv[i + 1]; i += 2; continue
+        if argv[i] == "--tail" and i + 1 < len(argv):
+            tail = int(argv[i + 1]); i += 2; continue
+        rest.append(argv[i]); i += 1
+    if len(rest) != 1 or not rest[0].startswith("http"):
+        print("usage: team-fetch <url> [--grep TEXT] [--tail N]", file=sys.stderr)
         return 2
-    url = argv[0]
+    url = rest[0]
     allowed = [h.strip().lower() for h in os.environ.get("TEAM_ALLOWED_HOSTS", "").split(",") if h.strip()]
     host = (urlsplit(url).hostname or "").lower()
     if allowed and host not in allowed and not any(host.endswith("." + h) for h in allowed):
         print(f"team-fetch: host {host} is not allowed (allowed: {', '.join(allowed)})", file=sys.stderr)
         return 3
     ua = os.environ.get("TEAM_USER_AGENT", "agent-team/fetch")
-    max_body = int(os.environ.get("TEAM_MAX_BODY", "12000"))
+    max_body = int(os.environ.get("TEAM_MAX_BODY", "30000"))
     timeout = float(os.environ.get("TEAM_TIMEOUT", "20"))
     pause = float(os.environ.get("TEAM_PAUSE", "0.5"))
     time.sleep(pause)
@@ -47,9 +57,18 @@ def main(argv: list[str] | None = None) -> int:
         if k in headers:
             print(f"{k}: {headers[k]}")
     print()
+    if grep:
+        hits = [ln for ln in body.splitlines() if grep.lower() in ln.lower()]
+        print(f"[grep {grep!r}: {len(hits)} matching lines of {len(body)} chars]")
+        print("\n".join(h.strip()[:500] for h in hits[:40]))
+        return 0
+    if tail:
+        print(f"[tail: last {tail} of {len(body)} chars]")
+        print(body[-tail:])
+        return 0
     print(body[:max_body])
     if len(body) > max_body:
-        print(f"\n… [cut: {len(body) - max_body} more chars; fetch a JSON address for structured data]")
+        print(f"\n… [cut: {len(body) - max_body} more chars; use --grep TEXT or --tail N to see the rest, or fetch a JSON address]")
     return 0
 
 
