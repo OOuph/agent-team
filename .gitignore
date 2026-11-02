@@ -6,3 +6,4 @@ __pycache__/
 .pytest_cache/
 products/*/runs/
 products/*/work/
+agent_team.egg-info/

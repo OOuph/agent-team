@@ -11,7 +11,8 @@
 # Env: CERTBOT_EMAIL (or CERTBOT_EMAIL= in /etc/agent-team/env) — required for a new certificate.
 #
 # Steps (each one idempotent, re-running is safe):
-#   0. DNS check: host must resolve to this server, else exit 2
+#   0. DNS check: host must resolve to this server, else exit 2 (nothing changed)
+#   -  sites.tsv line (added once)
 #   a. http-only vhost (:80, root /var/www/<slug>) → nginx -t → reload   [skipped if cert exists]
 #   b. certbot --nginx -d <host> … --redirect                             [skipped if cert exists]
 #   c. full vhost from /etc/agent-team/site.conf.template → nginx -t → reload
@@ -58,7 +59,8 @@ done
 
 # CERTBOT_EMAIL: environment wins, then /etc/agent-team/env
 if [ -z "${CERTBOT_EMAIL:-}" ] && [ -f "$ENV_FILE" ]; then
-  CERTBOT_EMAIL="$(sed -n 's/^CERTBOT_EMAIL=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | tr -d '"'"'" || true)"
+  CERTBOT_EMAIL="$(sed -n 's/^CERTBOT_EMAIL=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 \
+                   | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//' | tr -d '"'"'" || true)"
 fi
 CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 
@@ -75,19 +77,7 @@ reload_nginx() {
   systemctl reload nginx
 }
 
-# ---------------------------------------------------------------- sites.tsv
-mkdir -p "$ETC_DIR"
-touch "$SITES_FILE"
-existing="$(awk -F'\t' -v s="$SLUG" '$1 == s' "$SITES_FILE" || true)"
-if [ -n "$existing" ]; then
-  echo "sites.tsv: slug '$SLUG' already registered, keeping existing line:"
-  echo "  $existing"
-else
-  echo "sites.tsv: adding $SLUG"
-  printf '%s\t%s\t%s\t%s\t%s\n' "$SLUG" "$HOST" "$REPO" "$BRANCH" "$PUBLIC_DIR" >> "$SITES_FILE"
-fi
-
-# ---------------------------------------------------------------- 0. DNS check
+# ---------------------------------------------------------------- 0. DNS check (before touching anything)
 echo "DNS: resolving $HOST"
 resolved="$(getent ahosts "$HOST" | awk '{print $1}' | sort -u || true)"
 if [ -z "$resolved" ]; then
@@ -111,6 +101,18 @@ if [ "$dns_ok" -ne 1 ]; then
   exit 2
 fi
 echo "DNS: ok"
+
+# ---------------------------------------------------------------- sites.tsv
+mkdir -p "$ETC_DIR"
+touch "$SITES_FILE"
+existing="$(awk -F'\t' -v s="$SLUG" '$1 == s' "$SITES_FILE" || true)"
+if [ -n "$existing" ]; then
+  echo "sites.tsv: slug '$SLUG' already registered, keeping existing line:"
+  echo "  $existing"
+else
+  echo "sites.tsv: adding $SLUG"
+  printf '%s\t%s\t%s\t%s\t%s\n' "$SLUG" "$HOST" "$REPO" "$BRANCH" "$PUBLIC_DIR" >> "$SITES_FILE"
+fi
 
 # ---------------------------------------------------------------- a+b. certificate
 if [ -f "$CERT_DIR/fullchain.pem" ]; then

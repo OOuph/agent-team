@@ -34,12 +34,12 @@ ssh -i ~/.ssh/bymachines_lab_ed25519 root@68.183.2.193 'nano /etc/agent-team/env
 
 ## Новый сайт — порядок
 
-1. **Владелец** создаёт DNS A-запись `<slug>.formachines.ai → 68.183.2.193` (или `.bymachines.ai`). Без неё `add-site.sh` выходит с кодом 2 и ничего, кроме строки в `sites.tsv`, не меняет.
+1. **Владелец** создаёт DNS A-запись `<slug>.formachines.ai → 68.183.2.193` (или `.bymachines.ai`). Без неё `add-site.sh` выходит с кодом 2, ничего не изменив (проверка DNS идёт первой).
 2. На droplet:
    ```bash
    /opt/agent-team/bin/add-site.sh foo foo.formachines.ai https://github.com/formachines-ai/foo.git main public
    ```
-   Скрипт: (a) временный вхост только на :80 → `nginx -t` → reload; (b) `certbot --nginx -d foo.formachines.ai --non-interactive --agree-tos -m $CERTBOT_EMAIL --redirect` (если сертификат уже есть — шаг пропускается); (c) полный вхост из `/etc/agent-team/site.conf.template` → `nginx -t` → reload; (d) `publish.sh --site foo`.
+   Скрипт: проверка DNS → строка в `/etc/agent-team/sites.tsv` → (a) временный вхост только на :80 → `nginx -t` → reload; (b) `certbot --nginx -d foo.formachines.ai --non-interactive --agree-tos -m $CERTBOT_EMAIL --redirect` (если сертификат уже есть — шаг пропускается); (c) полный вхост из `/etc/agent-team/site.conf.template` → `nginx -t` → reload; (d) `publish.sh --site foo`.
 3. Дальше любой push в `main` репозитория — через ≤ 5 минут сайт обновлён (таймер). Руками: `/opt/agent-team/bin/publish.sh --site foo` (`--force` — переопубликовать тот же HEAD).
 
 ## Как проверить
