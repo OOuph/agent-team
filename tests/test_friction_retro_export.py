@@ -91,3 +91,13 @@ def test_pr_mode_config(tmp_path: Path) -> None:
     p = C.Product("fw", tmp_path / "fw", {**C.PRODUCT_DEFAULTS, "repo": {"url": "https://github.com/o/r.git", "mode": "pr", "test_cmd": "true"}}, st)
     assert p.repo_mode == "pr" and p.test_cmd == "true"
     assert C.Product("x", tmp_path / "x", dict(C.PRODUCT_DEFAULTS), st).repo_mode == "merge"
+
+
+def test_not_before_is_stored(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready",
+                      not_before="2099-01-01T14:00:00+00:00")
+    assert s.task(t["id"])["not_before"] == "2099-01-01T14:00:00+00:00"
+    s.close()

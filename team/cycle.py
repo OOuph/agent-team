@@ -327,7 +327,8 @@ class Cycle:
         for rt in res.get("ready_tasks") or []:
             self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
-                                   role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready")
+                                   role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
+                                   not_before=rt.get("not_before"))
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         digest = res.get("digest_md", "")
@@ -344,6 +345,9 @@ class Cycle:
                 break
             if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
                 continue        # a run is on it (lease alive); stale leases are handled in collect
+            nb = parse_ts(t.get("not_before"))
+            if nb and _now() < nb:
+                continue        # scheduled for later (daily posts): the PO set not_before
             if self.execute_task(t):
                 done += 1
 

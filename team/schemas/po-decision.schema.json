@@ -169,6 +169,11 @@
       "items": {
        "type": "string"
       }
+     },
+     "not_before": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "ISO 8601 UTC; the dispatcher does not start the task before this moment (daily posts, data that appears at a known hour). Omit when the task can start now."
      }
     }
    }

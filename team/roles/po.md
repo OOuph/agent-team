@@ -36,6 +36,9 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Explain each decision through the user outcome and VISION: "chosen X over Y because …; expected result …; we will
   check …".
 
+- A task that must not start before a moment (a daily post at a fixed hour, data that appears at a known time) gets
+  `not_before` (ISO 8601 UTC); without it the dispatcher starts a ready task in the next cycle, whatever its title says.
+
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
 acceptance, negative cases), optional reprioritize, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
