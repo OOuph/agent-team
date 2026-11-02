@@ -1,0 +1,63 @@
+# agent-team pilot site: __HOST__ (slug __SLUG__)
+# Rendered by add-site.sh from /etc/agent-team/site.conf.template:
+#   __HOST__ -> FQDN, __SLUG__ -> site slug.
+# Static site only; /var/www/__SLUG__ is a symlink to /var/www/__SLUG__-releases/<sha> (publish.sh).
+# Certificate obtained by certbot --nginx; the http-only bootstrap block lives in add-site.sh.
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __HOST__;
+
+    access_log /var/log/nginx/access.log full;
+
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __HOST__;
+
+    ssl_certificate     /etc/letsencrypt/live/__HOST__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__HOST__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    root  /var/www/__SLUG__;
+    index index.html;
+
+    access_log /var/log/nginx/access.log full;
+
+    include /etc/nginx/snippets/agent-team-headers.conf;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css text/xml application/json application/javascript
+               application/xml application/xml+rss image/svg+xml;
+
+    error_page 404 /404.html;
+
+    # Team metrics (written hourly by agent-team-metrics.timer), served straight from the
+    # metrics store so publish.sh never has to copy anything into a release.
+    location /_team/ {
+        alias /var/lib/agent-team/metrics/__HOST__/;
+        autoindex off;
+        default_type application/json;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/agent-team-headers.conf;
+    }
+
+    # Static assets: 1 hour in browser / CDN caches.
+    location ~* \.(css|js|mjs|png|jpg|jpeg|gif|webp|avif|svg|ico|woff|woff2|ttf|otf)$ {
+        expires 1h;
+        add_header Cache-Control "public, max-age=3600" always;
+        include /etc/nginx/snippets/agent-team-headers.conf;
+        try_files $uri =404;
+    }
+
+    location / {
+        try_files $uri $uri/ $uri.html =404;
+    }
+}

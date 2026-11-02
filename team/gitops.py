@@ -1,0 +1,119 @@
+"""Git operations on a product's site repository checkout (data/repos/<slug>): clone, task branch, merge, push."""
+from __future__ import annotations
+
+import logging
+import os
+import re
+import subprocess
+from pathlib import Path
+
+log = logging.getLogger("team.git")
+
+
+class GitError(RuntimeError):
+    pass
+
+
+def git(repo: Path, *args: str, check: bool = True, timeout: int = 300) -> str:
+    cp = subprocess.run(["git", *args], cwd=str(repo), capture_output=True, text=True, timeout=timeout,
+                        env={**os.environ, "GIT_TERMINAL_PROMPT": "0"})
+    if check and cp.returncode != 0:
+        raise GitError(f"git {' '.join(args)}: {cp.stderr.strip()[-500:]}")
+    return cp.stdout.strip()
+
+
+def _auth_url(url: str) -> str:
+    """https://github.com/o/r.git → with the token from GITHUB_TOKEN when set; ssh urls untouched."""
+    tok = os.environ.get("GITHUB_TOKEN")
+    if tok and url.startswith("https://github.com/"):
+        return url.replace("https://github.com/", f"https://x-access-token:{tok}@github.com/", 1)
+    return url
+
+
+def redact(s: str) -> str:
+    return re.sub(r"x-access-token:[^@]+@", "x-access-token:***@", s)
+
+
+def ensure_clone(repo_dir: Path, url: str, branch: str = "main") -> Path:
+    if (repo_dir / ".git").exists():
+        git(repo_dir, "remote", "set-url", "origin", _auth_url(url))
+        git(repo_dir, "fetch", "--prune", "origin")
+        return repo_dir
+    repo_dir.parent.mkdir(parents=True, exist_ok=True)
+    cp = subprocess.run(["git", "clone", "--branch", branch, _auth_url(url), str(repo_dir)], capture_output=True, text=True, timeout=600)
+    if cp.returncode != 0:
+        raise GitError("git clone: " + redact(cp.stderr.strip()[-500:]))
+    git(repo_dir, "config", "user.name", os.environ.get("TEAM_GIT_NAME", "agent-team"))
+    git(repo_dir, "config", "user.email", os.environ.get("TEAM_GIT_EMAIL", "agent-team@formachines.ai"))
+    return repo_dir
+
+
+def init_local(repo_dir: Path, branch: str = "main") -> Path:
+    """An empty local repository (tests and products without a remote yet)."""
+    repo_dir.mkdir(parents=True, exist_ok=True)
+    if not (repo_dir / ".git").exists():
+        git(repo_dir, "init", "-q", "-b", branch)
+        git(repo_dir, "config", "user.name", "agent-team")
+        git(repo_dir, "config", "user.email", "agent-team@formachines.ai")
+    return repo_dir
+
+
+def has_remote(repo_dir: Path) -> bool:
+    return bool(git(repo_dir, "remote", check=False))
+
+
+def start_task_branch(repo_dir: Path, task_id: str, base: str = "main") -> str:
+    """A clean task branch from the latest base; uncommitted leftovers of a previous run are discarded."""
+    br = f"task/{task_id}"
+    git(repo_dir, "reset", "--hard", check=False)
+    git(repo_dir, "clean", "-fdq", check=False)
+    if has_remote(repo_dir):
+        git(repo_dir, "fetch", "origin")
+        git(repo_dir, "checkout", "-q", "-B", base, f"origin/{base}")
+    else:
+        git(repo_dir, "checkout", "-q", base)
+    git(repo_dir, "checkout", "-q", "-B", br)
+    return br
+
+
+def head(repo_dir: Path) -> str:
+    return git(repo_dir, "rev-parse", "HEAD")
+
+
+def commits_ahead(repo_dir: Path, base: str = "main") -> int:
+    ref = f"origin/{base}" if has_remote(repo_dir) else base
+    out = git(repo_dir, "rev-list", "--count", f"{ref}..HEAD", check=False)
+    return int(out) if out.isdigit() else 0
+
+
+def dirty(repo_dir: Path) -> bool:
+    return bool(git(repo_dir, "status", "--porcelain", check=False))
+
+
+def merge_and_push(repo_dir: Path, task_id: str, base: str = "main") -> str:
+    """task/<id> → base with a merge commit, push when a remote exists. Returns the new base head."""
+    br = f"task/{task_id}"
+    if dirty(repo_dir):
+        git(repo_dir, "add", "-A")
+        git(repo_dir, "commit", "-q", "-m", f"{task_id}: leftover changes committed by the dispatcher")
+    git(repo_dir, "checkout", "-q", base)
+    if has_remote(repo_dir):
+        git(repo_dir, "pull", "-q", "--ff-only", "origin", base)
+    git(repo_dir, "merge", "--no-ff", "-q", "-m", f"Merge {br}: released by the dispatcher", br)
+    if has_remote(repo_dir):
+        git(repo_dir, "push", "-q", "origin", base)
+    sha = head(repo_dir)
+    git(repo_dir, "branch", "-D", br, check=False)
+    return sha
+
+
+def revert_merge(repo_dir: Path, sha: str, base: str = "main") -> str:
+    git(repo_dir, "checkout", "-q", base)
+    git(repo_dir, "revert", "-q", "-m", "1", "--no-edit", sha)
+    if has_remote(repo_dir):
+        git(repo_dir, "push", "-q", "origin", base)
+    return head(repo_dir)
+
+
+def log_since(repo_dir: Path, n: int = 10) -> str:
+    return git(repo_dir, "log", f"-{n}", "--oneline", check=False)

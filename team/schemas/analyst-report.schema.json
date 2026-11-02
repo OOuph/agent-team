@@ -1,0 +1,112 @@
+{
+ "title": "analyst-report",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "summary_md",
+  "observations",
+  "task_effects"
+ ],
+ "properties": {
+  "summary_md": {
+   "type": "string",
+   "maxLength": 2500
+  },
+  "observations": {
+   "type": "array",
+   "maxItems": 6,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "classification",
+     "evidence",
+     "actual"
+    ],
+    "properties": {
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "classification": {
+      "type": "string",
+      "enum": [
+       "measurement",
+       "reproducible_defect",
+       "need_hypothesis"
+      ]
+     },
+     "evidence": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "actual": {
+      "type": "string",
+      "maxLength": 400
+     },
+     "url": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "task_effects": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "effect",
+     "evidence"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "effect": {
+      "type": "string",
+      "enum": [
+       "positive",
+       "none",
+       "negative",
+       "insufficient_data"
+      ]
+     },
+     "evidence": {
+      "type": "string",
+      "maxLength": 400
+     }
+    }
+   }
+  },
+  "goal_status": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "goal",
+     "value",
+     "target",
+     "on_track"
+    ],
+    "properties": {
+     "goal": {
+      "type": "string"
+     },
+     "value": {
+      "type": "string"
+     },
+     "target": {
+      "type": "string"
+     },
+     "on_track": {
+      "type": "boolean"
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,16 @@
+[Unit]
+Description=agent-team: publish pilot sites from their git repos (publish.sh)
+Documentation=file:///opt/agent-team/README.md
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=20min
+ExecStart=/opt/agent-team/bin/publish.sh
+StandardOutput=journal
+StandardError=journal

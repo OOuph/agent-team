@@ -1,0 +1,11 @@
+# agent-team pilot sites. Real file: /etc/agent-team/sites.tsv
+# One site per line, TAB-separated, no quoting:
+# slug<TAB>host<TAB>repo<TAB>branch<TAB>public_dir
+#   slug       — [a-z0-9-], names /var/www/<slug>, /opt/agent-team/sites/<slug>, nginx <slug>.conf
+#   host       — FQDN served by nginx, <slug>.formachines.ai or <slug>.bymachines.ai
+#   repo       — public GitHub https URL (no secrets, no deploy keys)
+#   branch     — branch to publish (default: main)
+#   public_dir — directory inside the repo that is ALREADY BUILT and committed (default: public)
+# Lines starting with # and empty lines are ignored.
+foo	foo.formachines.ai	https://github.com/formachines-ai/foo.git	main	public
+bar	bar.bymachines.ai	https://github.com/formachines-ai/bar.git	main	public

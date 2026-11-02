@@ -1,0 +1,45 @@
+# agent-team — global settings. Per-product settings live in products/<slug>/product.yaml.
+# Secrets never here: .env (TELEGRAM_BOT_TOKEN, BLUESKY_*, DEVTO_API_KEY, CLAUDE_CODE_OAUTH_TOKEN / ANTHROPIC_API_KEY).
+
+paths:
+  products_dir: products          # <slug>/ : VISION.md, product.yaml, backlog/, questions/, observations/, reviews/, digests/, metrics/, decisions.md
+  data_dir: data                  # runs, work dirs, sqlite — never in git
+  repos_dir: data/repos           # clones of the site repositories (one per product)
+
+claude:
+  binary: claude                  # overridden on the server by CLAUDE_BINARY in .env (…/node_modules/.bin/claude)
+  auth: oauth_token               # oauth_token = CLAUDE_CODE_OAUTH_TOKEN (owner's plan, `claude setup-token`); api_key = ANTHROPIC_API_KEY
+  timeout_s: 1500                 # hard cap of one role run
+  inactivity_s: 300               # no stream-json line for this long → the run is killed (watchdog, Paperclip #18586 lesson)
+  max_turns: 60
+  models:
+    po: opus
+    developer: sonnet
+    reviewer: sonnet
+    analyst: sonnet
+    marketer: sonnet
+    persona: sonnet
+
+budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
+  max_usd_per_product_per_day: 20.0
+  max_usd_per_run: 3.0
+  unknown_cost_reserve_usd: 0.5   # a run without a reported cost is booked at this much
+  warn_share: 0.8
+
+cycle:
+  review_after_min: 6             # a released task is reviewed once the droplet has had time to pull (timer every 5 min)
+  measure_after_h: 24             # an accepted task is measured a day later
+  max_review_fails: 2             # then the task is blocked and the owner hears about it
+  persona_every_n_cycles: 6
+  digest_hour_utc: 7
+  max_ready: 3
+  max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
+
+publish:
+  disclosure: "Written and posted by an AI agent (agent-team) without human editing; responsible: Dmitry (formachines.ai)."
+  max_posts_per_channel_per_day: 2
+  dry_run: false
+
+deploy:
+  mode: git_pull                  # the droplet pulls the site repo and publishes public/ (deploy/droplet/); ssh_rsync when a key is authorized
+  droplet_host: root@68.183.2.193

@@ -1,0 +1,239 @@
+{
+ "title": "po-decision",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "decisions",
+  "answers",
+  "ready_tasks",
+  "owner_questions",
+  "no_new_tasks",
+  "digest_md"
+ ],
+ "properties": {
+  "decisions": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "observation_id",
+     "action",
+     "reason"
+    ],
+    "properties": {
+     "observation_id": {
+      "type": "string"
+     },
+     "action": {
+      "type": "string",
+      "enum": [
+       "link",
+       "needs_evidence",
+       "create_task",
+       "defer",
+       "reject"
+      ]
+     },
+     "linked_to": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string",
+      "maxLength": 500
+     },
+     "return_condition": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "answers": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "question_id",
+     "answer"
+    ],
+    "properties": {
+     "question_id": {
+      "type": "string"
+     },
+     "answer": {
+      "type": "string",
+      "maxLength": 1500
+     }
+    }
+   }
+  },
+  "ready_tasks": {
+   "type": "array",
+   "maxItems": 3,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "type",
+     "problem",
+     "scope",
+     "acceptance",
+     "negative_cases",
+     "goal",
+     "priority",
+     "size",
+     "role"
+    ],
+    "properties": {
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "feature",
+       "defect",
+       "research",
+       "content",
+       "marketing",
+       "ops"
+      ]
+     },
+     "problem": {
+      "type": "string",
+      "maxLength": 800
+     },
+     "scope": {
+      "type": "string",
+      "maxLength": 800
+     },
+     "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 6,
+      "items": {
+       "type": "string",
+       "maxLength": 300
+      }
+     },
+     "negative_cases": {
+      "type": "array",
+      "maxItems": 4,
+      "items": {
+       "type": "string",
+       "maxLength": 300
+      }
+     },
+     "goal": {
+      "type": "string",
+      "maxLength": 120,
+      "description": "the goal/metric id from VISION this task serves"
+     },
+     "priority": {
+      "type": "string",
+      "enum": [
+       "P0",
+       "P1",
+       "P2",
+       "P3"
+      ]
+     },
+     "size": {
+      "type": "string",
+      "enum": [
+       "XS",
+       "S",
+       "M"
+      ]
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "developer",
+       "marketer",
+       "analyst"
+      ]
+     },
+     "observations": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "links": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "reprioritize": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "priority",
+     "reason"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "priority": {
+      "type": "string",
+      "enum": [
+       "P0",
+       "P1",
+       "P2",
+       "P3"
+      ]
+     },
+     "reason": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "owner_questions": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "question",
+     "why_owner"
+    ],
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 600
+     },
+     "why_owner": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "task_id": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "no_new_tasks": {
+   "type": "boolean"
+  },
+  "digest_md": {
+   "type": "string",
+   "maxLength": 3000,
+   "description": "Markdown digest for the owner, Russian, ≤ 250 words"
+  }
+ }
+}

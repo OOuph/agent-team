@@ -1,0 +1,14 @@
+[Unit]
+Description=agent-team: site metrics from nginx access.log (sitemetrics.py)
+After=network-online.target nginx.service
+
+[Service]
+Type=oneshot
+User=root
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+TimeoutStartSec=30min
+ExecStart=/opt/agent-team/bin/metrics.sh
+StandardOutput=journal
+StandardError=journal

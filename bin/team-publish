@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# role-facing shim: the marketer may run only this command
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+PY="$HERE/.venv/bin/python"; [ -x "$PY" ] || PY=python3
+exec "$PY" -m team.publish "$@"

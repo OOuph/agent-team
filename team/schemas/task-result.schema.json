@@ -1,0 +1,87 @@
+{
+ "title": "task-result",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "status",
+  "summary",
+  "changes",
+  "how_to_verify",
+  "self_check"
+ ],
+ "properties": {
+  "status": {
+   "type": "string",
+   "enum": [
+    "done",
+    "partial",
+    "blocked"
+   ]
+  },
+  "summary": {
+   "type": "string",
+   "maxLength": 1200
+  },
+  "changes": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   },
+   "description": "files or things changed; for marketing: post ids and urls"
+  },
+  "how_to_verify": {
+   "type": "array",
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   },
+   "description": "public URLs and what the reviewer should see"
+  },
+  "self_check": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "criterion",
+     "met",
+     "evidence"
+    ],
+    "properties": {
+     "criterion": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "met": {
+      "type": "boolean"
+     },
+     "evidence": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "question": {
+   "type": "string",
+   "maxLength": 800,
+   "description": "only when status=blocked: what is needed"
+  },
+  "proposals": {
+   "type": "array",
+   "maxItems": 5,
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   },
+   "description": "things noticed for the backlog"
+  },
+  "branch": {
+   "type": "string"
+  },
+  "commit": {
+   "type": "string"
+  }
+ }
+}

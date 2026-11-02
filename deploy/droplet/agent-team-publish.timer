@@ -1,0 +1,11 @@
+[Unit]
+Description=agent-team: run publish.sh every 5 minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=agent-team-publish.service
+
+[Install]
+WantedBy=timers.target

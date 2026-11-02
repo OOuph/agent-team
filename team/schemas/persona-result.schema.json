@@ -1,0 +1,100 @@
+{
+ "title": "persona-result",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "outcome",
+  "steps",
+  "summary",
+  "observations"
+ ],
+ "properties": {
+  "outcome": {
+   "type": "string",
+   "enum": [
+    "success",
+    "product_limitation",
+    "own_mistake",
+    "environment_failure"
+   ]
+  },
+  "steps": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "url",
+     "status",
+     "note"
+    ],
+    "properties": {
+     "url": {
+      "type": "string"
+     },
+     "status": {
+      "type": "integer"
+     },
+     "note": {
+      "type": "string",
+      "maxLength": 200
+     }
+    }
+   }
+  },
+  "summary": {
+   "type": "string",
+   "maxLength": 600
+  },
+  "observations": {
+   "type": "array",
+   "maxItems": 6,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "classification",
+     "url",
+     "expected",
+     "actual"
+    ],
+    "properties": {
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "classification": {
+      "type": "string",
+      "enum": [
+       "reproducible_defect",
+       "synthetic_difficulty",
+       "need_hypothesis",
+       "success",
+       "environment_error"
+      ]
+     },
+     "url": {
+      "type": "string"
+     },
+     "expected": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "actual": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "confidence": {
+      "type": "string",
+      "enum": [
+       "low",
+       "medium",
+       "high"
+      ]
+     }
+    }
+   }
+  }
+ }
+}

@@ -1,0 +1,122 @@
+{
+ "title": "review-verdict",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "verdict",
+  "steps",
+  "criteria",
+  "summary"
+ ],
+ "properties": {
+  "verdict": {
+   "type": "string",
+   "enum": [
+    "pass",
+    "fail",
+    "inconclusive"
+   ]
+  },
+  "steps": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "url",
+     "status",
+     "note"
+    ],
+    "properties": {
+     "url": {
+      "type": "string"
+     },
+     "status": {
+      "type": "integer"
+     },
+     "note": {
+      "type": "string",
+      "maxLength": 200
+     }
+    }
+   }
+  },
+  "criteria": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "criterion",
+     "met",
+     "evidence"
+    ],
+    "properties": {
+     "criterion": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "met": {
+      "type": "boolean"
+     },
+     "evidence": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "first_failure": {
+   "type": "string",
+   "maxLength": 400
+  },
+  "limits": {
+   "type": "string",
+   "maxLength": 400
+  },
+  "observations": {
+   "type": "array",
+   "maxItems": 5,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "classification",
+     "url",
+     "actual"
+    ],
+    "properties": {
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "classification": {
+      "type": "string",
+      "enum": [
+       "reproducible_defect",
+       "success",
+       "need_hypothesis",
+       "environment_error"
+      ]
+     },
+     "url": {
+      "type": "string"
+     },
+     "expected": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "actual": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "summary": {
+   "type": "string",
+   "maxLength": 600
+  }
+ }
+}
