@@ -170,6 +170,14 @@ def cmd_stop(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_lesson(st: C.Settings, a: argparse.Namespace) -> int:
+    from . import editorial
+    p = _products(st, a.product)[0]
+    n = editorial.add_lessons(p, [a.text], a.by)
+    print(f"{p.slug}: {n} lesson(s) added → {editorial.lessons_path(p)}")
+    return 0
+
+
 def cmd_export(st: C.Settings, a: argparse.Namespace) -> int:
     from .export import export_product
     out = Path(a.out) if a.out else st.data_dir / "public"
@@ -235,6 +243,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("digest"); s.add_argument("product"); s.set_defaults(fn=cmd_digest)
     s = sub.add_parser("export-public"); s.add_argument("--product", default="all"); s.add_argument("--out"); s.add_argument("--days", type=int, default=14)
     s.set_defaults(fn=cmd_export)
+    s = sub.add_parser("lesson"); s.add_argument("product"); s.add_argument("--text", required=True); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_lesson)
     s = sub.add_parser("friction"); s.add_argument("--days", type=int, default=7); s.add_argument("--out"); s.set_defaults(fn=cmd_friction)
     s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     a = ap.parse_args(argv)

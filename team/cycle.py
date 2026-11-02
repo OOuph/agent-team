@@ -574,37 +574,116 @@ class Cycle:
             shutil.rmtree(work)
         work.mkdir(parents=True)
         ledger = self.run_dir / f"mkt-{t['id']}" / "ledger.jsonl"
-        prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [])
+        from . import editorial
+        lessons = editorial.read_lessons(self.p)
+        prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [], lessons=lessons)
         disc = self.st.publish.get("disclosure", "")
         disc_map = disc if isinstance(disc, dict) else {"default": str(disc)}
+        drafts_dir = work / "drafts"
         env = {"TEAM_PUBLISH_LEDGER": str(ledger), "TEAM_PUBLISH_DISCLOSURES": json.dumps(disc_map, ensure_ascii=False),
                "TEAM_PUBLISH_MAX_PER_DAY": str(self.st.publish.get("max_posts_per_channel_per_day", 2)),
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
+               "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
-        rr = self.role_run("marketer", prompt, "task-result", cwd=work, label=f"mkt-{t['id']}", cap=1.0, env_extra=env,
-                           allowed_tools=["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"])
-        posted = 0
-        if ledger.exists():
-            for ln in ledger.read_text(encoding="utf-8").splitlines():
-                try:
-                    e = json.loads(ln)
-                except json.JSONDecodeError:
-                    continue
-                if e.get("ok") and not e.get("dry_run"):
-                    self.store.record_post(str(e.get("channel")), str(e.get("post_id")), str(e.get("url")), t["id"])
-                    posted += 1
+        mkt_tools = ["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]
+        rr = self.role_run("marketer", prompt, "task-result", cwd=work, label=f"mkt-{t['id']}", cap=1.0, env_extra=env, allowed_tools=mkt_tools)
+        posted, editor_summary = 0, ""
+        if rr is not None and rr.ok and rr.structured and self.runner is not None:
+            posted, editor_summary = self.editorial_loop(t, work, drafts_dir, channels, env, mkt_tools, lessons)
         if rr is None or not (rr.ok and rr.structured):
             self.store.transition(t["id"], "ready" if posted == 0 else "accepted", "dispatcher", f"run failed: {rr.error if rr else 'no run'}; posted {posted}", force=True, assignee_run=None)
             return True
         res = rr.structured
         res["run_id"] = run_id
         res["posted"] = posted
+        if editor_summary:
+            res["editor"] = editor_summary[:600]
         self.store.add_result(t["id"], res)
         if res.get("status") == "blocked" or posted == 0:
-            self.store.ask(from_="marketer", to="po", question=str(res.get("question") or f"nothing was posted: {res.get('summary', '')}")[:1200], task_id=t["id"])
+            why = str(res.get("question") or f"nothing was posted: {res.get('summary', '')}")
+            if editor_summary:
+                why = f"editor: {editor_summary} / marketer: {res.get('summary', '')}"
+            self.store.ask(from_="marketer", to="po", question=why[:1200], task_id=t["id"])
             return True
-        self.store.transition(t["id"], "accepted", "dispatcher", f"posted {posted}", force=True, accepted_at=utcnow())
+        self.store.transition(t["id"], "accepted", "dispatcher", f"posted {posted} (editor-approved)", force=True, accepted_at=utcnow())
         return True
+
+    def editorial_loop(self, t: dict[str, Any], work: Path, drafts_dir: Path, channels: dict[str, Any], env: dict[str, str],
+                       mkt_tools: list[str], lessons: list[str]) -> tuple[int, str]:
+        """draft → editor → (one revision by the marketer) → editor → publish approved. Returns (posted, editor summary)."""
+        from . import editorial
+        drafts = self._load_drafts(drafts_dir)
+        if not drafts:
+            return 0, ""
+        _, _, recent_issues = editorial.rolling(self.st, self.p.slug)
+        verdicts: dict[str, dict[str, Any]] = {}
+        summary = ""
+        prev_issues: list[str] = []
+        for round_no in (1, 2):
+            prompt = editorial.editor_prompt(self.p, t, drafts, lessons, recent_issues, round_no, prev_issues or None)
+            ework = work / f"editor-{round_no}"
+            ework.mkdir(parents=True, exist_ok=True)
+            rr = self.role_run("editor", prompt, "editor-review", cwd=ework, label=f"editor-{t['id']}-{round_no}", cap=0.5, max_turns=16)
+            if rr is None or not (rr.ok and rr.structured):
+                log.warning("%s: editor run failed in round %d; drafts not published", self.p.slug, round_no)
+                return 0, f"editor run failed in round {round_no}"
+            rev = rr.structured
+            summary = str(rev.get("summary") or "")
+            verdicts = {str(r.get("draft")): r for r in rev.get("reviews") or []}
+            new_lessons = [ls for r in verdicts.values() for ls in (r.get("lessons") or [])][: editorial.MAX_LESSONS_PER_REVIEW]
+            if new_lessons:
+                editorial.add_lessons(self.p, new_lessons, "editor")
+            revise = [(n, r) for n, r in verdicts.items() if r.get("verdict") == "revise"]
+            final = round_no == 2 or not revise
+            for name, d in drafts:
+                r = verdicts.get(name) or {"verdict": "reject", "scores": {}, "issues": ["no verdict from the editor"]}
+                editorial.record_score(self.st, {"product": self.p.slug, "task": t["id"], "channel": d.get("channel"), "round": round_no,
+                                                 "verdict": r.get("verdict"), "scores": r.get("scores") or {}, "mean": editorial.mean_score(r.get("scores") or {}),
+                                                 "issues": r.get("issues") or [], "final": final or r.get("verdict") != "revise"})
+            self.store.event("editorial", t["id"], "editor", {"round": round_no, "verdicts": {n: r.get("verdict") for n, r in verdicts.items()}, "summary": summary[:200]})
+            if final:
+                break
+            prev_issues = [i for _, r in revise for i in (r.get("issues") or [])]
+            notes = [{"draft": n, "issues": r.get("issues"), "scores": r.get("scores")} for n, r in revise]
+            drafts_dir2 = work / "drafts-2"
+            prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=editorial.read_lessons(self.p), editor_notes=notes)
+            rr2 = self.role_run("marketer", prompt2, "task-result", cwd=work, label=f"mkt-{t['id']}-rev", cap=1.0,
+                                env_extra={**env, "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir2)}, allowed_tools=mkt_tools)
+            drafts2 = self._load_drafts(drafts_dir2) if rr2 is not None else []
+            if not drafts2:
+                return 0, summary or "marketer produced no revised drafts"
+            approved_r1 = [(n, d) for n, d in drafts if (verdicts.get(n) or {}).get("verdict") == "approve"]
+            drafts = approved_r1 + drafts2 if approved_r1 else drafts2
+        posted = 0
+        for name, d in drafts:
+            r = verdicts.get(name) or {}
+            if r.get("verdict") != "approve":
+                continue
+            text = str(r.get("final_text") or "").strip() or None
+            res = publish.publish_draft(Path(d["_path"]), text=text, dry_run=bool(self.st.publish.get("dry_run")))
+            if res.ok and not res.dry_run:
+                self.store.record_post(str(res.channel), str(res.post_id or ""), str(res.url or ""), t["id"])
+                posted += 1
+            elif not res.ok:
+                self.store.event("post.error", t["id"], "dispatcher", {"channel": d.get("channel"), "error": str(res.error)[:200]})
+        if editorial.degrading(self.st, self.p.slug):
+            m, n, top = editorial.rolling(self.st, self.p.slug)
+            self.store.add_observation({"title": f"Editorial quality falling: mean {m}/5 over the last {n} posts", "classification": "need_hypothesis",
+                                        "source": "editor", "url": self.p.site_base, "actual": "; ".join(top)[:400], "expected": f"≥ {editorial.DEGRADE_BELOW}",
+                                        "fingerprint": fingerprint("editor", "degrading", self.p.slug, _now().strftime("%Y-%m-%d"))})
+        return posted, summary
+
+    @staticmethod
+    def _load_drafts(dir_: Path) -> list[tuple[str, dict[str, Any]]]:
+        out = []
+        for p in sorted(dir_.glob("*.json")) if dir_.exists() else []:
+            try:
+                d = publish.load_draft(p)
+            except (json.JSONDecodeError, OSError):
+                continue
+            d["_path"] = str(p)
+            out.append((p.name, d))
+        return out
 
     def exec_analyst_task(self, t: dict[str, Any], run_id: str) -> bool:
         rr = self.analyst_run(label=f"an-{t['id']}", question=f"Task {t['id']}: {t.get('problem')}\nScope: {t.get('scope')}")
@@ -736,7 +815,10 @@ def daily_digest(p: Product, store: Store, day: str) -> str:
     an_txt = ans[-1].read_text(encoding="utf-8").split("\n", 2)[-1].split("```")[0].strip() if ans else "(аналитик сегодня не запускался)"
     qs = store.questions(["open"])
     owner_q = [q for q in qs if q.get("to") == "owner"]
-    lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "",
+    from . import editorial
+    em, en, _ = editorial.rolling(p.st, p.slug)
+    ed_line = f"Тексты: средний балл редактора {em}/5 за последние {en} постов" + (" ⚠ ниже планки" if em is not None and en >= 5 and em < editorial.DEGRADE_BELOW else "") if em is not None else "Тексты: редактор ещё не оценивал"
+    lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "", ed_line,
              f"Задачи: {s['tasks']} всего · " + ", ".join(f"{k} {v}" for k, v in sorted(s["by_state"].items())),
              f"Расход сегодня: ${s['spent_today']:.2f} (кап ${p.daily_cap:.0f}) · открытых вопросов: {len(qs)}, владельцу: {len(owner_q)}", "",
              "PO: " + po_txt[:1200], "", "Аналитик: " + an_txt[:1200]]

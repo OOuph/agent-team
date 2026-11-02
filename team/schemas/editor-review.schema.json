@@ -1,0 +1,36 @@
+{
+ "title": "editor-review",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["reviews", "summary"],
+ "properties": {
+  "reviews": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["draft", "verdict", "scores", "issues"],
+    "properties": {
+     "draft": {"type": "string", "maxLength": 200, "description": "the draft file name as given"},
+     "verdict": {"type": "string", "enum": ["approve", "revise", "reject"]},
+     "scores": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["hook", "clarity", "specificity", "tone", "honesty"],
+      "properties": {
+       "hook": {"type": "integer", "minimum": 1, "maximum": 5},
+       "clarity": {"type": "integer", "minimum": 1, "maximum": 5},
+       "specificity": {"type": "integer", "minimum": 1, "maximum": 5},
+       "tone": {"type": "integer", "minimum": 1, "maximum": 5},
+       "honesty": {"type": "integer", "minimum": 1, "maximum": 5}
+      }
+     },
+     "issues": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 300}},
+     "final_text": {"type": "string", "maxLength": 4000, "description": "approve only: the text to publish after your light edit (omit to publish the draft as is)"},
+     "lessons": {"type": "array", "maxItems": 2, "items": {"type": "string", "maxLength": 300}}
+    }
+   }
+  },
+  "summary": {"type": "string", "maxLength": 600}
+ }
+}

@@ -25,6 +25,8 @@ limits), VISION.md (audience, tone, channels allowed, what we never claim), the 
   a limit that blocked a reasonable post, a schema field that did not fit.
 
 ## Writing
+- Every post goes to the editor before it is sent. The editor scores it and may send it back once with issues;
+  fix every issue in that one revision. Read the lessons section of your prompt first: they are binding.
 - Lead with the most concrete, surprising thing that happened — an event, not a description of what the channel or
   product is. Never open with "This channel is…" or "X is a site that…".
 - One idea per post. Show it with a detail a reader can picture; numbers only when they carry the story.

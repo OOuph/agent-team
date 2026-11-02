@@ -108,13 +108,19 @@ def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, s
             + "\n\n# POSTS PUBLISHED\n" + (_y(posts) if posts else "(none)") + "\n")
 
 
-def marketer_prompt(product: Product, task: dict[str, Any], channels: dict[str, Any], previous: list[dict[str, Any]]) -> str:
+def marketer_prompt(product: Product, task: dict[str, Any], channels: dict[str, Any], previous: list[dict[str, Any]],
+                    lessons: list[str] | None = None, editor_notes: list[dict[str, Any]] | None = None) -> str:
     prev = ("\n\n# PREVIOUS ATTEMPTS\n" + _y(previous[-2:])) if previous else ""
+    les = ("\n\n# EDITORIAL LESSONS (binding for every post)\n" + "\n".join(f"- {x}" for x in lessons)) if lessons else ""
+    notes = ""
+    if editor_notes:
+        notes = "\n\n# THE EDITOR SENT YOUR DRAFTS BACK — this is your one revision. Fix every issue, then publish again:\n" + _y(editor_notes)
     return (f"# MARKETING TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
             "# TASK\n" + _y(_task_brief(task))
             + "\n\n# CHANNELS CONFIGURED (channel → target)\n" + _y(channels)
-            + "\n\n# VISION\n" + product.vision() + prev
-            + "\n\nWrite each post to a file here, then `team-publish --channel <channel> --target <target> --text-file <file> --url <url>`.\n")
+            + "\n\n# VISION\n" + product.vision() + les + prev + notes
+            + "\n\nWrite each post to a file here, then `team-publish --channel <channel> --target <target> --text-file <file> --url <url>`. "
+            "Every post goes to the editor before it is sent; the editor may approve, send it back once, or reject.\n")
 
 
 def persona_prompt(persona: dict[str, Any], body: str, scenario: dict[str, Any], sbody: str) -> str:

@@ -19,6 +19,7 @@
 | reviewer | независимая приёмка на живом сайте по каждому критерию | `team-fetch` (GET, `--grep`, `--tail`) | `review-verdict`: pass / fail / inconclusive с цитатами | автор свою работу не принимает |
 | analyst | метрики по логам, эффект принятых задач, прогресс к целям, SEO/GEO-срезы | только чтение метрик (в промпте) | `analyst-report` + наблюдения | PO |
 | marketer | посты в разрешённых каналах | `team-publish` (лимиты, пометка и метка источника ставятся инструментом), `team-fetch` | `task-result` со ссылками на посты | диспетчер записывает посты |
+| editor | вычитывает каждый черновик маркетолога до публикации: оценки 1–5 (крючок, ясность, конкретика, тон, честность), approve с лёгкой правкой / revise один раз / reject; пишет уроки в `editorial-lessons.md` | `team-fetch` | `editor-review`; оценки в `data/editorial/scores.jsonl`, средний балл в дайджесте, падение < 3.5 → наблюдение PO | PO; владелец видит балл в дайджесте |
 | persona | играет пользователя по карточке (слепая) | `team-fetch` | `persona-result` + наблюдения | PO отделяет синтетику от фактов |
 | geo-probe | раз в неделю контрольные вопросы ИИ-поиску: цитируют ли нас | WebSearch, WebFetch | `geo-report` + наблюдения + `metrics/geo-*.json` | analyst, PO |
 | support | отвечает людям (GitHub issues/комментарии, ответы и упоминания в Bluesky) в рамках VISION и живого сайта; за рамками — вопрос PO; ≤ 10 ответов в день | `team-fetch` | `support-reply` → комментарий в issue / ответ в Bluesky с пометкой ИИ | PO видит ту же карточку обратной связи |
@@ -33,7 +34,7 @@
 | collect | снимает истёкшие лизы; забирает `/_team/metrics.json` сайта; **собирает обратную связь** (GitHub Issues, ответы/упоминания Bluesky) в наблюдения и **отвечает людям** (роль support, в рамках VISION); раз в N циклов — персоны; раз в 12 ч — программная SEO-проверка | persona |
 | review | задачи `released` (после паузы на деплой) → reviewer → `accepted` / `in_progress` (fail, ≤ 2) / `blocked` + вопрос PO | reviewer |
 | triage | при новых наблюдениях, вопросах к PO или простое команды → PO | po |
-| execute | одна задача: developer → коммит → **merge в main + push** → droplet публикует ≤ 5 мин → `released`; marketer → `team-publish` → `accepted`; analyst-задача → `done` | developer / marketer / analyst |
+| execute | одна задача: developer → коммит → **merge в main + push** → droplet публикует ≤ 5 мин → `released`; marketer → черновики (`team-publish` в режиме черновика) → editor → при revise одна доработка маркетолога → editor → диспетчер публикует одобренное → `accepted`; analyst-задача → `done` | developer / marketer / analyst |
 | measure | каждые 6 ч (`measure_every_h`): analyst по метрикам, эффект задач → `measured` → `done` | analyst |
 | geo | раз в 168 ч: geo-probe | geo-probe |
 | digest | в 07 и 19 UTC: сводка в `digests/` и в Telegram ops | — |

@@ -7,6 +7,10 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- Editorial loop (owner, late evening: "вычитывание и критика постов, чтобы тексты не деградировали"): `team-publish`
+  draft mode (`TEAM_PUBLISH_DRAFT_DIR`), role `editor` with `editor-review` schema, one revision round, dispatcher publishes
+  approved drafts (`publish_draft`), scores ledger `data/editorial/scores.jsonl`, rolling mean in the daily digest,
+  degradation observation below 3.5, `products/<slug>/editorial-lessons.md` (+ `team lesson`). SCHEME.md §2–3.
 - PO card: tasks naming a future date/hour MUST carry `not_before`; metrics the data lacks must name the available field
   or go to the analyst. Marketer card: publish with the available number and say so; block only if no honest post is
   possible. Cause: F-0003, F-0017, F-0019, F-0020.

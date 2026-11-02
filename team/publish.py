@@ -35,6 +35,7 @@ TIMEOUT_S = 20
 ERROR_BODY_CHARS = 200
 USER_AGENT = "agent-team-publish/0.1"
 DRY_RUN_ENV = "TEAM_PUBLISH_DRY_RUN"
+DRAFT_DIR_ENV = "TEAM_PUBLISH_DRAFT_DIR"      # set by the dispatcher: posts become drafts for the editor, nothing is sent
 
 TELEGRAM_API = "https://api.telegram.org"
 TELEGRAM_MAX_CHARS = 4096
@@ -379,6 +380,31 @@ def post(channel: str, text: str, *, url: str | None = None, title: str | None =
     return res
 
 
+def save_draft(dir_: Path, channel: str, text: str, *, target: str | None, url: str | None, title: str | None,
+               tags: list[str] | None, reply_to: str | None, disclosure: str) -> PostResult:
+    """Draft mode: the composed post is written as JSON for the editor; the dispatcher publishes it later with
+    publish_draft(). Returned as dry_run so ledgers and daily caps do not count it."""
+    dir_.mkdir(parents=True, exist_ok=True)
+    n = len(list(dir_.glob("*.json"))) + 1
+    path = dir_ / f"{n:02d}-{channel}.json"
+    path.write_text(json.dumps({"channel": channel, "target": target, "text": text, "url": url, "title": title, "tags": tags or [],
+                                "reply_to": reply_to, "disclosure": disclosure}, ensure_ascii=False, indent=1), encoding="utf-8")
+    log.info("draft saved: %s (%d chars)", path, len(text))
+    return PostResult(True, channel, f"draft:{path}", None, None, True)
+
+
+def load_draft(path: Path) -> dict[str, Any]:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def publish_draft(path: Path, *, text: str | None = None, dry_run: bool = False) -> PostResult:
+    """Send a draft (optionally with the editor's final text) for real."""
+    d = load_draft(path)
+    return post(str(d["channel"]), text if text is not None else str(d["text"]), url=d.get("url"), title=d.get("title"),
+                tags=list(d.get("tags") or []), disclosure=str(d.get("disclosure") or ""), dry_run=dry_run,
+                target=d.get("target"), reply_to=d.get("reply_to"))
+
+
 def append_ledger(path: Path, res: PostResult, target: str | None, text: str) -> None:
     """Append one JSON line (the dispatcher's journal) to ``path``, creating parent dirs."""
     path = Path(path)
@@ -482,6 +508,9 @@ def main(argv: list[str] | None = None) -> int:
     limit_err = _daily_limit_error(args.channel, args.ledger)
     if limit_err:
         res = PostResult(False, args.channel, None, None, limit_err, args.dry_run)
+    elif os.environ.get(DRAFT_DIR_ENV):
+        res = save_draft(Path(os.environ[DRAFT_DIR_ENV]), args.channel, text, target=args.target, url=url, title=args.title,
+                         tags=_parse_tags(args.tags), reply_to=args.reply_to, disclosure=disclosure)
     else:
         res = post(args.channel, text, url=url, title=args.title, tags=_parse_tags(args.tags),
                    disclosure=disclosure, dry_run=args.dry_run, target=args.target, reply_to=args.reply_to)
