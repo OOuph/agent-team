@@ -7,3 +7,4 @@ __pycache__/
 products/*/runs/
 products/*/work/
 agent_team.egg-info/
+.DS_Store
