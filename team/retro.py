@@ -6,9 +6,10 @@ Runs once per ``framework.retro_every_h`` (team.yaml) after the product cycles, 
   GITHUB_TOKEN is set), one per proposal, deduped by title against open issues — this is the register the owner sees
   without reading the server;
 - tasks in the framework product (``framework.product``, a product whose repo is the framework in ``repo.mode: pr``) for
-  proposals of ``risk: low`` and kind role_card / docs / config — the developer implements them in a branch, the tests
-  must pass, a pull request is opened, the owner merges (L2). Dispatcher code changes stay proposals (an issue) — a bad
-  change there would break the loop that is supposed to fix it.
+  proposals whose risk is in ``framework.task_risks`` — the developer implements them in a branch, the tests must pass,
+  a pull request is opened; with ``framework.auto_merge`` the dispatcher runs a canary cycle on the candidate code and
+  merges itself unless a protected file (state machine, budgets, permissions, watchdog) is touched — those wait for a human.
+  An external watchdog (watchdog.sh, cron) rolls the checkout back to the last good commit when cycles stop completing.
 """
 from __future__ import annotations
 
@@ -30,7 +31,7 @@ from .store import Store, parse_ts, utcnow
 log = logging.getLogger("team.retro")
 ROLES_DIR = Path(__file__).parent / "roles"
 
-AUTO_TASK_KINDS = ("role_card", "docs", "config")
+AUTO_TASK_KINDS = ("role_card", "docs", "config", "schema", "tooling", "dispatcher")   # which become tasks: framework.task_risks decides by risk
 GITHUB_API = "https://api.github.com"
 
 
@@ -153,7 +154,7 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
             if url:
                 filed.append(url)
         slug = str(cfg.get("product") or "")
-        if slug and p.get("risk") == "low" and p.get("kind") in AUTO_TASK_KINDS:
+        if slug and (p.get("risk") in (cfg.get("task_risks") or ["low"])):
             pdir = st.products_dir / slug
             if (pdir / "product.yaml").exists():
                 s = Store(pdir)

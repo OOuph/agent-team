@@ -46,9 +46,12 @@ DEVTO_MAX_TAGS = 4
 MASTODON_MAX_CHARS = 500
 ELLIPSIS = "…"
 
-CHANNELS = ("telegram", "bluesky", "devto", "mastodon", "x")
+CHANNELS = ("telegram", "bluesky", "devto", "mastodon", "x", "github")
 SECRET_KEYS = {"telegram": ("TELEGRAM_BOT_TOKEN",), "bluesky": ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD"),
-               "devto": ("DEVTO_API_KEY",), "mastodon": ("MASTODON_INSTANCE", "MASTODON_TOKEN"), "x": ()}
+               "devto": ("DEVTO_API_KEY",), "mastodon": ("MASTODON_INSTANCE", "MASTODON_TOKEN"), "x": (), "github": ("GITHUB_TOKEN",)}
+BLUESKY_PUBLIC_API = "https://public.api.bsky.app"
+GITHUB_API = "https://api.github.com"
+GITHUB_COMMENT_MAX = 4000
 
 HttpFn = Callable[[str, str, dict[str, str], bytes | None, int], tuple[int, bytes]]
 
@@ -241,12 +244,28 @@ def _telegram(text: str, target: str | None, url: str | None, disclosure: str, e
     return PostResult(True, "telegram", str(mid) if mid is not None else None, link, None, False)
 
 
-def _bluesky(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn) -> PostResult:
+def bluesky_reply_ref(http: HttpFn, parent_uri: str) -> dict[str, Any]:
+    """{"root": {uri,cid}, "parent": {uri,cid}} for a reply to ``parent_uri`` (public API, no auth)."""
+    data = _call_json(http, "GET", f"{BLUESKY_PUBLIC_API}/xrpc/app.bsky.feed.getPosts?uris={urllib.parse.quote(parent_uri, safe='')}",
+                      None, {}, [], "bluesky.getPosts")
+    posts = data.get("posts") or []
+    if not posts:
+        raise PublishError(f"bluesky.getPosts: parent not found: {parent_uri}")
+    p = posts[0]
+    parent = {"uri": p.get("uri"), "cid": p.get("cid")}
+    root = ((p.get("record") or {}).get("reply") or {}).get("root") or parent
+    return {"root": {"uri": root.get("uri"), "cid": root.get("cid")}, "parent": parent}
+
+
+def _bluesky(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn,
+             reply_to: str | None = None) -> PostResult:
     body = compose(text, disclosure, url, limit=BLUESKY_MAX_GRAPHEMES, counter="graphemes")
     record: dict[str, Any] = {"$type": BLUESKY_POST_COLLECTION, "text": body, "createdAt": utcnow_iso()}
     facets = bluesky_facets(body)
     if facets:
         record["facets"] = facets
+    if reply_to:
+        record["reply"] = bluesky_reply_ref(http, reply_to) if not dry_run else {"root": {"uri": reply_to, "cid": "dry"}, "parent": {"uri": reply_to, "cid": "dry"}}
     if dry_run:
         _print_dry_run("bluesky", {"collection": BLUESKY_POST_COLLECTION, "record": record})
         return PostResult(True, "bluesky", None, None, None, True)
@@ -265,6 +284,23 @@ def _bluesky(text: str, url: str | None, disclosure: str, env: dict[str, str], d
     rkey = uri.rsplit("/", 1)[-1] if uri else None
     link = f"https://bsky.app/profile/{session.get('handle') or handle}/post/{rkey}" if rkey else None
     return PostResult(True, "bluesky", uri or None, link, None, False)
+
+
+def _github(text: str, target: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn) -> PostResult:
+    """A comment on a GitHub issue; ``target`` is the issue's html url. The disclosure goes on its own last line."""
+    m = re.match(r"https://github\.com/([^/]+)/([^/]+)/issues/(\d+)", target or "")
+    if not m:
+        raise PublishError("github: target must be an issue url https://github.com/<owner>/<repo>/issues/<n>")
+    owner, repo, num = m.group(1), m.group(2), m.group(3)
+    body = text.strip()[:GITHUB_COMMENT_MAX] + f"\n\n_{disclosure.strip()}_"
+    if dry_run:
+        _print_dry_run("github", {"issue": f"{owner}/{repo}#{num}", "body": body})
+        return PostResult(True, "github", None, None, None, True)
+    tok = _require(env, SECRET_KEYS["github"])["GITHUB_TOKEN"]
+    data = _call_json(http, "POST", f"{GITHUB_API}/repos/{owner}/{repo}/issues/{num}/comments", {"body": body},
+                      {"Authorization": f"Bearer {tok}", "Accept": "application/vnd.github+json"}, [tok], "github.comment")
+    cid = data.get("id")
+    return PostResult(True, "github", str(cid) if cid is not None else None, data.get("html_url"), None, False)
 
 
 def _devto(text: str, title: str | None, url: str | None, tags: list[str] | None, disclosure: str,
@@ -305,7 +341,7 @@ def _mastodon(text: str, url: str | None, disclosure: str, env: dict[str, str], 
 # ---- public API -------------------------------------------------------------------------------
 def post(channel: str, text: str, *, url: str | None = None, title: str | None = None, tags: list[str] | None = None,
          disclosure: str, dry_run: bool = False, env: dict[str, str] | None = None, http: HttpFn | None = None,
-         target: str | None = None) -> PostResult:
+         target: str | None = None, reply_to: str | None = None) -> PostResult:
     """Publish ``text`` to ``channel`` with the disclosure appended. Never raises: failures are PostResult(ok=False).
 
     ``target`` is channel-specific (telegram: chat id or @channel). ``dry_run`` builds and prints the payload
@@ -324,7 +360,9 @@ def post(channel: str, text: str, *, url: str | None = None, title: str | None =
         if channel == "telegram":
             res = _telegram(text, target, url, disclosure, env, dry_run, http)
         elif channel == "bluesky":
-            res = _bluesky(text, url, disclosure, env, dry_run, http)
+            res = _bluesky(text, url, disclosure, env, dry_run, http, reply_to=reply_to)
+        elif channel == "github":
+            res = _github(text, target, disclosure, env, dry_run, http)
         elif channel == "devto":
             res = _devto(text, title, url, tags, disclosure, env, dry_run, http)
         elif channel == "mastodon":
@@ -413,7 +451,8 @@ def _parse_tags(s: str | None) -> list[str]:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="team-publish", description=__doc__.splitlines()[0])
     p.add_argument("--channel", required=True, choices=CHANNELS)
-    p.add_argument("--target", help="telegram: chat id or @channel")
+    p.add_argument("--target", help="telegram: chat id or @channel; github: issue url")
+    p.add_argument("--reply-to", help="bluesky: at:// uri of the post to reply to")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--text-file", type=Path)
     src.add_argument("--text")
@@ -445,7 +484,7 @@ def main(argv: list[str] | None = None) -> int:
         res = PostResult(False, args.channel, None, None, limit_err, args.dry_run)
     else:
         res = post(args.channel, text, url=url, title=args.title, tags=_parse_tags(args.tags),
-                   disclosure=disclosure, dry_run=args.dry_run, target=args.target)
+                   disclosure=disclosure, dry_run=args.dry_run, target=args.target, reply_to=args.reply_to)
     if args.ledger:
         try:
             append_ledger(args.ledger, res, args.target, text)

@@ -170,3 +170,43 @@ def pull_request_state(pr_url: str) -> str:
         return "unknown"
     r = _gh("GET", f"/repos/{m.group(1)}/pulls/{m.group(2)}")
     return "merged" if r.get("merged") else str(r.get("state") or "unknown")
+
+
+def changed_files(repo_dir: Path, base: str = "main") -> list[str]:
+    ref = f"origin/{base}" if has_remote(repo_dir) else base
+    out = git(repo_dir, "diff", "--name-only", f"{ref}...HEAD", check=False)
+    return [ln.strip() for ln in out.splitlines() if ln.strip()]
+
+
+def _pr_parts(pr_url: str) -> tuple[str, str]:
+    m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_url)
+    if not m:
+        raise GitError(f"not a pull request url: {pr_url}")
+    return m.group(1), m.group(2)
+
+
+def comment_pull_request(pr_url: str, body: str) -> None:
+    repo, num = _pr_parts(pr_url)
+    _gh("POST", f"/repos/{repo}/issues/{num}/comments", {"body": body[:60000]})
+
+
+def merge_pull_request(pr_url: str, method: str = "merge") -> str:
+    """Merge via the API (the dispatcher never force-pushes main). Returns the merge sha."""
+    repo, num = _pr_parts(pr_url)
+    r = _gh("PUT", f"/repos/{repo}/pulls/{num}/merge", {"merge_method": method})
+    if not r.get("merged"):
+        raise GitError(f"merge refused: {r.get('message')}")
+    return str(r.get("sha") or "")
+
+
+def update_running_checkout(root: Path, branch: str = "main") -> str | None:
+    """Fast-forward the dispatcher's own checkout to origin/<branch> when it is a clean git clone; else leave it."""
+    if not (root / ".git").exists():
+        log.warning("running checkout %s is not a git clone; code not updated", root)
+        return None
+    if dirty(root):
+        log.warning("running checkout %s has local changes; code not updated", root)
+        return None
+    git(root, "fetch", "-q", "origin", branch)
+    git(root, "merge", "-q", "--ff-only", f"origin/{branch}")
+    return head(root)

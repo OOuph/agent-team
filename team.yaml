@@ -20,6 +20,7 @@ claude:
     marketer: sonnet
     persona: sonnet
     framework-retro: sonnet
+    support: sonnet
 
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
@@ -41,12 +42,33 @@ cycle:
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
 
 framework:                        # self-improvement: friction register → retro role → issues / pull requests on the framework repo
-  retro_every_h: 24               # the retro role reads the register this often (0 = off); runs after the product cycles
+  retro_every_h: 1                # the retro role reads the register this often (0 = off); runs after the product cycles (owner 02.11: every cycle)
   repo: OOuph/agent-team          # where proposals are filed as issues (GITHUB_TOKEN needs issues:write on it)
   issues: true
   issue_label: friction
-  product: agent-team             # product whose repo is the framework (repo.mode: pr): low-risk proposals become its tasks
+  product: agent-team             # product whose repo is the framework (repo.mode: pr): proposals become its tasks
+  task_risks: [low, medium, high] # which proposals become tasks (owner 02.11: all; protected_paths still need a human)
+  auto_merge: true                # tests green → canary cycle on the candidate code → merge by the dispatcher
+  canary_product: release-radar   # the product whose cycle runs on the candidate code before merging
+  protected_paths:                # a PR touching these waits for a human: the loop's own safety and the watchdog
+    - team/store.py
+    - team/runner.py
+    - team/config.py
+    - team/publish.py
+    - team.yaml
+    - run-cycle.sh
+    - watchdog.sh
+    - backup-state.sh
+    - sync.sh
+    - deploy/
+    - bin/
   max_usd_per_run: 2.0
+
+support:                          # answers to people within VISION (role support), see team/support.py
+  enabled: true
+  max_replies_per_day: 10
+  max_per_cycle: 3
+  ignore_authors: [OOuph, formachines.bsky.social, formachines]
 
 publish:
   # Disclosure only where a rule requires it (owner 02.11): the account bio / channel description and the site footer

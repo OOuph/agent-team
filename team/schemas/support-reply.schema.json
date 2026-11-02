@@ -1,0 +1,13 @@
+{
+ "title": "support-reply",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["action", "text", "reason"],
+ "properties": {
+  "action": {"type": "string", "enum": ["reply", "escalate", "skip"]},
+  "text": {"type": "string", "maxLength": 1500, "description": "the answer to post (empty when skip)"},
+  "reason": {"type": "string", "maxLength": 300},
+  "question": {"type": "string", "maxLength": 600, "description": "escalate: the question for the product owner role"},
+  "checked_urls": {"type": "array", "items": {"type": "string"}, "maxItems": 5}
+ }
+}

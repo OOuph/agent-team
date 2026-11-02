@@ -154,7 +154,7 @@ class Register:
         recs = self.since(days)
         by_kind: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for r in recs:
-            by_kind[r["kind"]].append(r)
+            by_kind[str(r.get("kind", "other"))].append(r)
         lines = [f"# Framework friction register — last {days} days", "",
                  f"{len(recs)} records ({len(self.records)} total) · products: " + ", ".join(sorted({r['product'] for r in recs}) or ["—"]), "",
                  "| kind | count | roles | last |", "|---|---|---|---|"]
@@ -163,7 +163,7 @@ class Register:
         for k, rs in sorted(by_kind.items(), key=lambda kv: -len(kv[1])):
             lines += ["", f"## {k} ({len(rs)})"]
             for r in sorted(rs, key=lambda r: str(r.get("ts")), reverse=True)[:8]:
-                lines.append(f"- {r['id']} {str(r.get('ts'))[:16]} {r['product']} · {r['summary']}")
+                lines.append(f"- {r.get('id', 'F-?')} {str(r.get('ts'))[:16]} {r.get('product', '-')} · {r.get('summary', '')}")
         return "\n".join(lines) + "\n"
 
     def write_md(self, days: int = 7) -> Path:
@@ -175,14 +175,14 @@ class Register:
         recs = self.since(days)
         by_day: dict[str, Counter] = defaultdict(Counter)
         for r in recs:
-            by_day[str(r.get("ts"))[:10]][r["kind"]] += 1
+            by_day[str(r.get("ts"))[:10]][str(r.get("kind", "other"))] += 1
         out.mkdir(parents=True, exist_ok=True)
         p = out / "friction.json"
         p.write_text(json.dumps({"generated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "days": days, "total": len(recs),
-                                 "by_kind": dict(Counter(r["kind"] for r in recs)),
+                                 "by_kind": dict(Counter(str(r.get("kind", "other")) for r in recs)),
                                  "by_day": {d: dict(c) for d, c in sorted(by_day.items())},
-                                 "recent": [{"ts": r.get("ts"), "product": r["product"], "role": r.get("role"), "kind": r["kind"],
-                                             "summary": redact(r["summary"])[:200]} for r in sorted(recs, key=lambda r: str(r.get("ts")), reverse=True)[:50]]},
+                                 "recent": [{"ts": r.get("ts"), "product": r.get("product"), "role": r.get("role"), "kind": r.get("kind"),
+                                             "summary": redact(str(r.get("summary", "")))[:200]} for r in sorted(recs, key=lambda r: str(r.get("ts")), reverse=True)[:50]]},
                                 ensure_ascii=False, indent=1), encoding="utf-8")
         return p
 

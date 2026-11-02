@@ -7,6 +7,12 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- Full self-improvement loop on (owner, late evening): retro every cycle, proposals of any risk become tasks,
+  canary cycle on the candidate code, auto-merge unless a protected path is touched, external `watchdog.sh` with
+  rollback to the last good commit; the server runs from a git clone, `sync.sh` deploys by fast-forward. SCHEME.md §9.
+- Role `support`: answers people in GitHub issues/comments and Bluesky replies within VISION (publish channels
+  `github`, Bluesky `--reply-to`), escalates the rest to the PO, ≤ 10 replies a day.
+
 - `tool_denied` friction records carry the denied command / url (≤ 80 chars, secrets stripped), so the retro can
   tell a narrow allowlist from a role going off-card. First retro proposal, issue OOuph/agent-team#1 (F-0001…F-0006).
 

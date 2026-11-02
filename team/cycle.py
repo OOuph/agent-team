@@ -9,8 +9,10 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
+import sys
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -148,6 +150,7 @@ class Cycle:
                 self.store.transition(t["id"], "ready", "dispatcher", f"lease of {c['run_id']} expired", force=True)
         self.fetch_metrics()
         self.collect_feedback()
+        self.support_replies()
         self.seo_check()
         n = len(self.store.cycles())
         every = int(self.st.cycle.get("persona_every_n_cycles", 6))
@@ -170,6 +173,49 @@ class Cycle:
             self.store.event("feedback.error", self.p.slug, "dispatcher", str(exc)[:300])
         if n:
             self.store.event("feedback.collected", self.p.slug, "dispatcher", {"items": n})
+        return n
+
+    def support_replies(self) -> int:
+        """People who wrote to the product get an answer within VISION (role support); outside VISION → question to the PO."""
+        if self.dry_run or self.runner is None:
+            return 0
+        from . import support
+        cfg = dict(self.st.raw.get("support") or {})
+        if not cfg.get("enabled", True):
+            return 0
+        cap_day = int(cfg.get("max_replies_per_day", support.DEFAULT_MAX_PER_DAY))
+        todo = support.pending(self.p, self.store)[: int(cfg.get("max_per_cycle", support.DEFAULT_MAX_PER_CYCLE))]
+        n = 0
+        for o in todo:
+            if support.replies_today(self.store) >= cap_day:
+                log.info("%s: support daily cap %d reached", self.p.slug, cap_day)
+                break
+            try:
+                channel, how = support.channel_for(o)
+            except ValueError as exc:
+                self.store.event("support.skip", str(o.get("fingerprint")), "dispatcher", str(exc))
+                continue
+            work = self.p.work_dir / self.cycle_id / f"support-{o['id']}"
+            work.mkdir(parents=True, exist_ok=True)
+            rr = self.role_run("support", support.support_prompt(self.p, o, self.p.vision()), "support-reply", cwd=work,
+                               label=f"support-{o['id']}", cap=0.5, max_turns=12)
+            if rr is None or not (rr.ok and rr.structured):
+                continue
+            res = rr.structured
+            if res.get("action") == "escalate" and res.get("question"):
+                self.store.ask(from_="support", to="po", question=f"{res['question']} (from {o.get('author')}: {o.get('url')})")
+            if res.get("action") == "skip" or not (res.get("text") or "").strip():
+                self.store.event("support.skip", str(o.get("fingerprint")), "support", str(res.get("reason"))[:200])
+                continue
+            disc = self.st.publish.get("disclosure", "")
+            disc_s = (disc.get(channel) or disc.get("default")) if isinstance(disc, dict) else str(disc)
+            r = publish.post(channel, str(res["text"]), disclosure=str(disc_s or ""), dry_run=bool(self.st.publish.get("dry_run")), **how)
+            if r.ok:
+                self.store.event("support.reply", str(o.get("fingerprint")), "support", {"channel": channel, "url": r.url, "action": res.get("action")})
+                self.store.record_post(channel, str(r.post_id or ""), str(r.url or ""), None)
+                n += 1
+            else:
+                self.store.event("support.error", str(o.get("fingerprint")), "support", str(r.error)[:300])
         return n
 
     def seo_check(self) -> None:
@@ -441,6 +487,9 @@ class Cycle:
                 self.store.transition(t["id"], "blocked" if attempts >= 2 else "ready", "dispatcher", f"tests failed: {tail[:300]}", force=True,
                                       attempts=attempts, assignee_run=None)
                 return True
+        fw = dict(self.st.raw.get("framework") or {})
+        touched = gitops.changed_files(repo, self.p.repo_branch)
+        protected = [f for f in touched if any(f == pp or f.startswith(pp.rstrip("/") + "/") for pp in fw.get("protected_paths") or [])]
         try:
             gitops.push_branch(repo, t["id"])
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
@@ -451,8 +500,49 @@ class Cycle:
         except gitops.GitError as exc:
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
-        self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}", force=True, pr_url=url, assignee_run=None)
+        if not fw.get("auto_merge") or protected:
+            why = f"protected files {', '.join(protected[:5])}" if protected else "auto_merge off"
+            self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url} ({why})", force=True, pr_url=url, assignee_run=None)
+            return True
+        ok, note = self.canary(repo, str(fw.get("canary_product") or ""))
+        if not ok:
+            self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}; canary failed: {note[:200]}", force=True, pr_url=url, assignee_run=None)
+            gitops.comment_pull_request(url, f"Canary cycle failed, left for a human:\n\n```\n{note[:1500]}\n```")
+            return True
+        try:
+            sha = gitops.merge_pull_request(url)
+            gitops.update_running_checkout(self.st.root, self.p.repo_branch)
+        except gitops.GitError as exc:
+            self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}; merge failed: {gitops.redact(str(exc))[:200]}", force=True, pr_url=url, assignee_run=None)
+            return True
+        self.store.transition(t["id"], "accepted", "dispatcher", f"canary passed ({note[:120]}); merged {sha[:10]}", force=True, pr_url=url, accepted_at=utcnow(), released_sha=sha)
+        self.store.transition(t["id"], "done", "dispatcher", "framework change live; the watchdog rolls back if the next cycles fail", force=True)
+        self.store.event("framework.merged", t["id"], "dispatcher", {"sha": sha, "pr": url, "files": touched[:20]})
         return True
+
+    def canary(self, repo: Path, product: str) -> tuple[bool, str]:
+        """One real cycle of one product on the candidate code (PYTHONPATH=candidate, TEAM_ROOT=this root): all phases
+        must finish and no phase may error. Returns (passed, note)."""
+        if not product:
+            return True, "no canary product configured"
+        env = {**os.environ, "PYTHONPATH": str(repo), "TEAM_ROOT": str(self.st.root)}
+        cyc = f"{self.cycle_id}-canary"
+        try:
+            cp = subprocess.run([sys.executable, "-m", "team.cli", "cycle", "--product", product, "--cycle", cyc], cwd=str(repo),
+                                env=env, capture_output=True, text=True, timeout=int(self.st.claude.get("timeout_s", 1500)) + 300)
+        except subprocess.TimeoutExpired:
+            return False, "canary timed out"
+        out = (cp.stdout + cp.stderr)
+        if cp.returncode != 0 or "Traceback" in out:
+            return False, f"rc={cp.returncode} " + out[-800:]
+        m = re.search(r"phases \[([^\]]*)\]", out)
+        phases = [x.strip(" '") for x in m.group(1).split(",")] if m else []
+        missing = [ph for ph in PHASES if ph not in phases]
+        if missing:
+            return False, f"phases missing: {missing}; " + out[-500:]
+        if "phase.error" in out or "phase %s failed" in out or " failed: " in out and "phase" in out:
+            return False, "phase error: " + out[-800:]
+        return True, f"cycle {cyc} of {product}: all phases"
 
     def check_pull_requests(self) -> None:
         for t in self.store.tasks(["waiting_owner"]):
