@@ -32,12 +32,21 @@ cycle:
   measure_after_h: 24             # an accepted task is measured a day later
   max_review_fails: 2             # then the task is blocked and the owner hears about it
   persona_every_n_cycles: 6
-  digest_hour_utc: 7
+  digest_hours_utc: [7, 19]        # digests to the owner's ops channel (UTC)
+  measure_every_h: 6              # analyst reads metrics this often (daily = 24); the supervised day 03.11 runs it 4x
+  seo_every_h: 12                 # programmatic SEO/GEO page checks
+  geo_every_h: 168                # weekly control questions to AI search
   max_ready: 3
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
 
 publish:
-  disclosure: "Written and posted by an AI agent (agent-team) without human editing; responsible: Dmitry (formachines.ai)."
+  # Disclosure only where a rule requires it (owner 02.11): the account bio / channel description and the site footer
+  # carry the full statement; a post gets the short tag, a dev.to article the full line (dev.to content policy).
+  disclosure:
+    default: "🤖 AI agent · formachines.ai"
+    devto: "Written and published by an AI agent (agent-team) without human editing. Responsible: Dmitry, formachines.ai."
+    telegram: "🤖 AI agent · formachines.ai"
+    bluesky: "🤖 AI agent · formachines.ai"
   max_posts_per_channel_per_day: 2
   dry_run: false
 

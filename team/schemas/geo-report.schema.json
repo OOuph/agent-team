@@ -1,0 +1,109 @@
+{
+ "title": "geo-report",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "queries",
+  "summary_md",
+  "observations"
+ ],
+ "properties": {
+  "queries": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "query",
+     "engine_note",
+     "our_site_cited",
+     "our_url",
+     "position",
+     "competitors",
+     "our_page_exists",
+     "note"
+    ],
+    "properties": {
+     "query": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "engine_note": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "our_site_cited": {
+      "type": "boolean"
+     },
+     "our_url": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "position": {
+      "type": [
+       "integer",
+       "null"
+      ],
+      "minimum": 1
+     },
+     "competitors": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+       "type": "string",
+       "maxLength": 120
+      }
+     },
+     "our_page_exists": {
+      "type": "boolean"
+     },
+     "note": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "summary_md": {
+   "type": "string",
+   "maxLength": 1500
+  },
+  "observations": {
+   "type": "array",
+   "maxItems": 5,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "classification",
+     "url",
+     "actual"
+    ],
+    "properties": {
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "classification": {
+      "type": "string",
+      "enum": [
+       "need_hypothesis",
+       "reproducible_defect",
+       "success"
+      ]
+     },
+     "url": {
+      "type": "string"
+     },
+     "actual": {
+      "type": "string",
+      "maxLength": 400
+     }
+    }
+   }
+  }
+ }
+}

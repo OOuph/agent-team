@@ -18,3 +18,9 @@ targets:
 - /repo/
 budget_usd_per_day: 20
 paused: false
+geo_queries:
+- how many github repos have AGENTS.md
+- what is AGENTS.md adoption
+- which popular open source projects have a CLAUDE.md file
+- AGENTS.md vs .cursorrules vs copilot-instructions adoption statistics
+- do big open source projects use AGENTS.md

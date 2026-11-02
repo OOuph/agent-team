@@ -85,7 +85,9 @@ class Runner:
         if tools:
             argv += ["--allowedTools", *tools]
         dis = list(DISALLOWED_DEFAULT) + list(rdef.get("_disallowed") or []) + list(disallowed_tools or [])
-        argv += ["--disallowedTools", *sorted(set(dis))]
+        dis = [d for d in sorted(set(dis)) if d not in set(tools)]   # a tool the role card allows explicitly wins over the default deny
+        if dis:
+            argv += ["--disallowedTools", *dis]
         for d in add_dirs or []:
             argv += ["--add-dir", str(d)]
         env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}

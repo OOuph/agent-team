@@ -16,3 +16,12 @@ targets:
 - /feed.xml
 budget_usd_per_day: 20
 paused: false
+geo_queries:
+- preço da luz amanhã por hora Portugal
+- horas mais baratas de eletricidade amanhã Portugal
+- preço OMIE amanhã Portugal
+- cheapest electricity hours tomorrow Portugal
+- electricity price tomorrow Portugal per hour
+langs:
+- pt
+- en

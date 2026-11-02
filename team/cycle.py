@@ -18,14 +18,14 @@ from typing import Any
 
 import yaml
 
-from . import gitops, prompts, publish
+from . import geo, gitops, prompts, publish
 from .config import Product, Settings
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 
 log = logging.getLogger("team.cycle")
 
-PHASES = ("collect", "review", "triage", "execute", "measure", "digest")
+PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "digest")
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
 
@@ -146,10 +146,54 @@ class Cycle:
             if t and t.get("state") in ("claimed", "in_progress"):
                 self.store.transition(t["id"], "ready", "dispatcher", f"lease of {c['run_id']} expired", force=True)
         self.fetch_metrics()
+        self.collect_feedback()
+        self.seo_check()
         n = len(self.store.cycles())
         every = int(self.st.cycle.get("persona_every_n_cycles", 6))
         if every and n % every == 1:
             self.run_personas()
+
+    def collect_feedback(self) -> int:
+        """External feedback -> observation cards: GitHub issues of the site repository, replies and mentions on Bluesky.
+        Real people's words weigh above anything synthetic; each item becomes one card, deduped by its id."""
+        if self.dry_run:
+            return 0
+        from . import feedback
+        n = 0
+        try:
+            for card in feedback.collect(self.p):
+                self.store.add_observation(card)
+                n += 1
+        except Exception as exc:  # noqa: BLE001 - a feedback source failing must not stop the cycle
+            log.warning("%s: feedback collection failed: %s", self.p.slug, exc)
+            self.store.event("feedback.error", self.p.slug, "dispatcher", str(exc)[:300])
+        if n:
+            self.store.event("feedback.collected", self.p.slug, "dispatcher", {"items": n})
+        return n
+
+    def seo_check(self) -> None:
+        """Programmatic SEO/GEO page checks every `seo_every_h` hours: defects become observation cards, the full table
+        goes to metrics/seo-<date>.json for the analyst."""
+        if self.dry_run or not self.p.site_base:
+            return
+        from . import seocheck
+        every = int(self.st.cycle.get("seo_every_h", 12))
+        last = sorted((self.p.dir / "metrics").glob("seo-*.json"))
+        if last:
+            prev = parse_ts(json.loads(last[-1].read_text(encoding="utf-8")).get("generated") or "")
+            if prev and _now() - prev < timedelta(hours=every):
+                return
+        langs = [str(x) for x in (self.p.raw.get("langs") or [])] or None
+        try:
+            rep = seocheck.report(self.p.site_base, seocheck.default_fetch, max_pages=8, langs=langs)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: seocheck failed: %s", self.p.slug, exc)
+            return
+        rep["generated"] = utcnow()
+        (self.p.dir / "metrics" / f"seo-{_now().strftime('%Y-%m-%d')}.json").write_text(json.dumps(rep, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
+        for card in rep.get("cards") or []:
+            self.store.add_observation({**card, "run_id": f"{self.cycle_id}-seo"})
+        self.store.event("seo.checked", self.p.slug, "dispatcher", {"passed": rep.get("passed"), "failed": rep.get("failed")})
 
     def fetch_metrics(self) -> Path | None:
         if not self.p.site_base or self.dry_run:
@@ -384,7 +428,9 @@ class Cycle:
         work.mkdir(parents=True)
         ledger = self.run_dir / f"mkt-{t['id']}" / "ledger.jsonl"
         prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [])
-        env = {"TEAM_PUBLISH_LEDGER": str(ledger), "TEAM_PUBLISH_DISCLOSURE": str(self.st.publish.get("disclosure", "")),
+        disc = self.st.publish.get("disclosure", "")
+        disc_map = disc if isinstance(disc, dict) else {"default": str(disc)}
+        env = {"TEAM_PUBLISH_LEDGER": str(ledger), "TEAM_PUBLISH_DISCLOSURES": json.dumps(disc_map, ensure_ascii=False),
                "TEAM_PUBLISH_MAX_PER_DAY": str(self.st.publish.get("max_posts_per_channel_per_day", 2)),
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
@@ -426,7 +472,9 @@ class Cycle:
 
     def phase_measure(self) -> None:
         day = _now().strftime("%Y-%m-%d")
-        marker = self.p.dir / "digests" / f"analyst-{day}.md"
+        every = int(self.st.cycle.get("measure_every_h", 24))
+        slot = _now().hour // max(1, every)
+        marker = self.p.dir / "digests" / (f"analyst-{day}.md" if every >= 24 else f"analyst-{day}-{slot:02d}.md")
         if marker.exists():
             return
         if not list((self.p.dir / "metrics").glob("*.json")):
@@ -448,6 +496,32 @@ class Cycle:
                 self.store.transition(t["id"], "measured", "analyst", f"effect: {e.get('effect', 'insufficient_data')} — {e.get('evidence', '')[:200]}", effect=e.get("effect", "insufficient_data"))
                 self.store.transition(t["id"], "done", "dispatcher", "measured")
 
+    # geo: weekly control questions to AI search -------------------------------------------------
+
+    def phase_geo(self) -> None:
+        every_h = int(self.st.cycle.get("geo_every_h", 168))
+        last = sorted((self.p.dir / "metrics").glob("geo-*.json"))
+        if last:
+            prev = parse_ts(json.loads(last[-1].read_text(encoding="utf-8")).get("generated") or "")
+            if prev and _now() - prev < timedelta(hours=every_h):
+                return
+        qs = geo.queries_for(self.p.raw)
+        if not qs:
+            return
+        prompt = geo.build_prompt(str(self.p.raw.get("name") or self.p.slug), self.p.site_base, qs, geo.audience_section(self.p.vision()))
+        rr = self.role_run("geo-probe", prompt, "geo-report", cwd=self.p.work_dir / self.cycle_id / "geo", label="geo", cap=1.5,
+                           allowed_tools=["WebSearch", "WebFetch"], max_turns=40)
+        if rr is None or not (rr.ok and rr.structured):
+            return
+        day = _now().strftime("%Y-%m-%d")
+        m = geo.to_metrics(rr.structured, day)
+        m["generated"] = utcnow()
+        (self.p.dir / "metrics" / f"geo-{day}.json").write_text(json.dumps(m, ensure_ascii=False, indent=1), encoding="utf-8")
+        (self.p.dir / "digests" / f"geo-{day}.md").write_text(
+            f"# GEO probe {day}\n\n{rr.structured.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump(m, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
+        for card in geo.to_observations(rr.structured, self.p.slug):
+            self.store.add_observation({**card, "run_id": f"{self.cycle_id}-geo"})
+
     def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]
         metrics = [(f.stem, f.read_text(encoding="utf-8")) for f in files]
@@ -463,8 +537,12 @@ class Cycle:
 
     def phase_digest(self) -> None:
         day = _now().strftime("%Y-%m-%d")
-        out = self.p.dir / "digests" / f"daily-{day}.md"
-        if out.exists() or _now().hour < int(self.st.cycle.get("digest_hour_utc", 7)):
+        hours = sorted(int(h) for h in (self.st.cycle.get("digest_hours_utc") or [self.st.cycle.get("digest_hour_utc", 7)]))
+        due = [h for h in hours if _now().hour >= h]
+        if not due:
+            return
+        out = self.p.dir / "digests" / f"daily-{day}-{due[-1]:02d}.md"
+        if out.exists():
             return
         text = daily_digest(self.p, self.store, day)
         out.write_text(text, encoding="utf-8")
@@ -507,8 +585,8 @@ def daily_digest(p: Product, store: Store, day: str) -> str:
     s = summary(store)
     po = sorted((p.dir / "digests").glob("20*.md"))
     po_txt = po[-1].read_text(encoding="utf-8").split("\n", 2)[-1].strip() if po else "(PO не запускался)"
-    an = p.dir / "digests" / f"analyst-{day}.md"
-    an_txt = an.read_text(encoding="utf-8").split("\n", 2)[-1].split("```")[0].strip() if an.exists() else "(аналитик сегодня не запускался)"
+    ans = sorted((p.dir / "digests").glob(f"analyst-{day}*.md"))
+    an_txt = ans[-1].read_text(encoding="utf-8").split("\n", 2)[-1].split("```")[0].strip() if ans else "(аналитик сегодня не запускался)"
     qs = store.questions(["open"])
     owner_q = [q for q in qs if q.get("to") == "owner"]
     lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "",

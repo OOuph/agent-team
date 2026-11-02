@@ -353,6 +353,30 @@ def append_ledger(path: Path, res: PostResult, target: str | None, text: str) ->
 
 
 
+def _disclosure_for(channel: str) -> str:
+    """Per-channel disclosure from the dispatcher (TEAM_PUBLISH_DISCLOSURES: JSON channel -> text, with `default`),
+    else TEAM_PUBLISH_DISCLOSURE, else the module default. Never empty: the tool always discloses."""
+    raw = os.environ.get("TEAM_PUBLISH_DISCLOSURES")
+    if raw:
+        try:
+            d = json.loads(raw) or {}
+            txt = str(d.get(channel) or d.get("default") or "").strip()
+            if txt:
+                return txt
+        except (ValueError, TypeError):
+            pass
+    return os.environ.get("TEAM_PUBLISH_DISCLOSURE") or DEFAULT_DISCLOSURE
+
+
+def _with_src(url: str | None, channel: str) -> str | None:
+    """Attribution: ?src=<channel> on the linked page so that sitemetrics can tell which channel brought a visit.
+    Only for http(s) links without a src= already; TEAM_PUBLISH_NO_SRC=1 switches it off."""
+    if not url or not url.startswith("http") or os.environ.get("TEAM_PUBLISH_NO_SRC") == "1" or "src=" in url:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}src={channel}"
+
+
 def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
     """The dispatcher's daily cap per channel: TEAM_PUBLISH_MAX_PER_DAY, plus posts already booked today
     (TEAM_PUBLISH_COUNTS, a JSON object channel → count) and the ok lines of this run's ledger. Final for today."""
@@ -414,12 +438,13 @@ def main(argv: list[str] | None = None) -> int:
         res = PostResult(False, args.channel, None, None, f"cannot read text file: {e}", args.dry_run)
         print(res.to_json())
         return 1
-    disclosure = args.disclosure if args.disclosure != DEFAULT_DISCLOSURE else (os.environ.get("TEAM_PUBLISH_DISCLOSURE") or DEFAULT_DISCLOSURE)
+    disclosure = args.disclosure if args.disclosure != DEFAULT_DISCLOSURE else _disclosure_for(args.channel)
+    url = _with_src(args.url, args.channel)
     limit_err = _daily_limit_error(args.channel, args.ledger)
     if limit_err:
         res = PostResult(False, args.channel, None, None, limit_err, args.dry_run)
     else:
-        res = post(args.channel, text, url=args.url, title=args.title, tags=_parse_tags(args.tags),
+        res = post(args.channel, text, url=url, title=args.title, tags=_parse_tags(args.tags),
                    disclosure=disclosure, dry_run=args.dry_run, target=args.target)
     if args.ledger:
         try:

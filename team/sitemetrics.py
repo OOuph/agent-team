@@ -22,12 +22,20 @@ loaded an asset (``ASSET_EXTS``, status < 400) or came with an external referer.
 engaged sources that were seen as human sources on any earlier day of the parsed logs (days before ``since``
 count as history, so a 7-day window over a month of logs still knows who came back).
 
+Channel attribution: a link in a post carries ``?src=<channel>`` (``SRC_PARAM``; value must match ``SRC_RE``,
+anything else is ignored). The query string is still stripped from ``path`` before classification, but ``src`` is
+kept on the record and aggregated into ``by_src`` per day and in ``totals``: ``requests`` and ``sources`` over all
+classes, ``human_sources`` (class human) and ``engaged_sources`` (human sources with that src that are engaged by
+the rule above — the asset/referer hit itself need not carry the src). Requests without a src are not counted.
+
 CLI::
 
     python3 -m team.sitemetrics --host x.formachines.ai --log /var/log/nginx/access.log [--log ...]
         [--since 2026-11-03] [--until 2026-11-10] [--target /feed.xml --target /api/] [--own-ua agent-team/]
         --out /var/www/x/_team/          # writes <out>/metrics.json and <out>/metrics.md ; --out - prints JSON
     python3 -m team.sitemetrics --all-hosts --log ... --out /var/www/_metrics/   # <out>/<host>/metrics.json per host
+        [--hosts a.example,b.example]    # only these hosts (others ignored, no directories created)
+        [--min-requests 1]
 """
 from __future__ import annotations
 
@@ -44,7 +52,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Iterator
-from urllib.parse import urlsplit
+from urllib.parse import parse_qsl, urlsplit
 
 log = logging.getLogger("team.sitemetrics")
 
@@ -156,6 +164,10 @@ TOP_PAGES_N = 20
 TOP_REFERERS_N = 10
 MAX_PATH_LEN = 200
 
+# Channel attribution: query parameter name and the accepted value shape (anything else is dropped).
+SRC_PARAM = "src"
+SRC_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
+
 JSON_NAME = "metrics.json"
 MD_NAME = "metrics.md"
 
@@ -183,6 +195,7 @@ class Record:
     referer: str        # raw $http_referer ("-" when absent)
     ua: str             # raw $http_user_agent ("-" when absent)
     host: str           # lower-cased $host
+    src: str = ""       # ?src=<channel> from the query string when it matches SRC_RE, else ""
 
 
 def _scrub_ip(s: str) -> str:
@@ -190,17 +203,29 @@ def _scrub_ip(s: str) -> str:
     return IPV4_RE.sub("x.x.x.x", s)
 
 
-def _split_request(request: str) -> tuple[str, str]:
-    """'GET /a/b?x=1 HTTP/1.1' -> ('GET', '/a/b'). Garbage (TLS bytes, '-') -> ('', <raw>)."""
+def _extract_src(query: str) -> str:
+    """Value of the ``src`` parameter when it matches SRC_RE; '' otherwise (first occurrence wins)."""
+    if not query:
+        return ""
+    for key, value in parse_qsl(query, keep_blank_values=True):
+        if key == SRC_PARAM:
+            return value if SRC_RE.match(value) else ""
+    return ""
+
+
+def _split_request(request: str) -> tuple[str, str, str]:
+    """'GET /a/b?src=x&y=1 HTTP/1.1' -> ('GET', '/a/b', 'x'). Garbage (TLS bytes, '-') -> ('', <raw>, '')."""
     parts = request.split(" ")
     if len(parts) >= 2 and parts[0].isalpha() and parts[0].isupper():
         method, target = parts[0], parts[1]
     else:
         method, target = "", request
     if target.startswith(("http://", "https://")):
-        target = urlsplit(target).path or "/"
-    target = target.split("?", 1)[0].split("#", 1)[0]
-    return method, _scrub_ip(target[:MAX_PATH_LEN])
+        parsed = urlsplit(target)
+        target = (parsed.path or "/") + ("?" + parsed.query if parsed.query else "")
+    target = target.split("#", 1)[0]
+    path, _, query = target.partition("?")
+    return method, _scrub_ip(path[:MAX_PATH_LEN]), _extract_src(query)
 
 
 def parse_line(line: str) -> Record | None:
@@ -211,7 +236,7 @@ def parse_line(line: str) -> Record | None:
     day = m.group("time")[:10]
     if not DAY_RE.match(day):
         return None
-    method, path = _split_request(m.group("request"))
+    method, path, src = _split_request(m.group("request"))
     ua = m.group("ua")
     return Record(
         ip=m.group("ip"),
@@ -222,6 +247,7 @@ def parse_line(line: str) -> Record | None:
         referer=m.group("referer"),
         ua="" if ua == "-" else ua,
         host=m.group("host").lower(),
+        src=src,
     )
 
 
@@ -354,6 +380,10 @@ class _Day:
     target_sources: dict[str, dict[str, set[Source]]] = field(default_factory=dict)  # target -> class -> sources
     human_pages: Counter = field(default_factory=Counter)
     referers: Counter = field(default_factory=Counter)
+    src_requests: Counter = field(default_factory=Counter)                       # src -> requests (all classes)
+    src_sources: dict[str, set[Source]] = field(default_factory=dict)            # src -> sources (all classes)
+    src_human: dict[str, set[Source]] = field(default_factory=dict)              # src -> human sources
+    src_engaged: dict[str, set[Source]] = field(default_factory=dict)            # src -> engaged human sources
 
 
 class Aggregator:
@@ -405,6 +435,11 @@ class Aggregator:
                 d.engaged.add(src)
         if ext_ref and cls != "own":
             d.referers[ext_ref] += 1
+        if rec.src:
+            d.src_requests[rec.src] += 1
+            d.src_sources.setdefault(rec.src, set()).add(src)
+            if cls == "human":
+                d.src_human.setdefault(rec.src, set()).add(src)
         for t in self.targets:
             if target_matches(rec.path, t):
                 d.target_requests[t][cls] += 1
@@ -419,6 +454,11 @@ class Aggregator:
             if d is not None:
                 d.returns = len(d.engaged & seen)
             seen |= self.history.get(day, set())
+
+    def _finalize_src(self) -> None:
+        """Engaged-by-src = human sources that arrived with the src and are engaged that day (by any request)."""
+        for d in self.days.values():
+            d.src_engaged = {s: srcs & d.engaged for s, srcs in d.src_human.items()}
 
     def _day_dict(self, d: _Day) -> dict[str, Any]:
         return {
@@ -435,6 +475,10 @@ class Aggregator:
             "targets": {t: _target_dict(d.target_requests[t], d.target_sources[t]) for t in self.targets},
             "top_pages": [{"path": p, "requests": n} for p, n in d.human_pages.most_common(TOP_PAGES_N)],
             "referers": [{"host": h, "requests": n} for h, n in d.referers.most_common(TOP_REFERERS_N)],
+            "by_src": {s: {"requests": n, "sources": len(d.src_sources.get(s, ())),
+                           "human_sources": len(d.src_human.get(s, ())),
+                           "engaged_sources": len(d.src_engaged.get(s, ()))}
+                       for s, n in d.src_requests.most_common()},
         }
 
     def _totals(self, days: list[str]) -> dict[str, Any]:
@@ -458,6 +502,13 @@ class Aggregator:
                     ts[c] |= d.target_sources[tg][c]
             t.human_pages.update(d.human_pages)
             t.referers.update(d.referers)
+            t.src_requests.update(d.src_requests)
+            for s, srcs in d.src_sources.items():
+                t.src_sources.setdefault(s, set()).update(srcs)
+            for s, srcs in d.src_human.items():
+                t.src_human.setdefault(s, set()).update(srcs)
+            for s, srcs in d.src_engaged.items():
+                t.src_engaged.setdefault(s, set()).update(srcs)
         for tg in self.targets:  # a window without days still lists every target
             t.target_requests.setdefault(tg, Counter())
             t.target_sources.setdefault(tg, {c: set() for c in CLASSES})
@@ -467,6 +518,7 @@ class Aggregator:
 
     def result(self, stats: ParseStats | None = None) -> dict[str, Any]:
         self._finalize_returns()
+        self._finalize_src()
         days = sorted(self.days)
         since = self.since or (days[0] if days else None)
         until = self.until or (days[-1] if days else None)
@@ -531,12 +583,22 @@ def run(log_paths: Iterable[str | os.PathLike[str]], host: str, since: str | dat
 
 def run_all_hosts(log_paths: Iterable[str | os.PathLike[str]], since: str | date | None = None,
                   until: str | date | None = None, targets: Iterable[str] = (),
-                  own_ua_prefixes: Iterable[str] | None = None, min_requests: int = 1) -> dict[str, dict[str, Any]]:
-    """One pass over the logs; a metrics dict per host seen. Hosts that are not safe directory names are dropped."""
+                  own_ua_prefixes: Iterable[str] | None = None, min_requests: int = 1,
+                  only_hosts: set[str] | None = None) -> dict[str, dict[str, Any]]:
+    """One pass over the logs; a metrics dict per host seen. Hosts that are not safe directory names are dropped.
+
+    ``only_hosts`` (lower-cased host names) restricts the output to those hosts; every other host is ignored
+    (no aggregator, no directory). None means every safe host seen in the logs.
+    """
+    wanted = {h.lower() for h in only_hosts} if only_hosts is not None else None
     aggs: dict[str, Aggregator] = {}
     stats = ParseStats()
     dropped: Counter = Counter()
+    ignored = 0
     for rec in iter_records(log_paths, stats):
+        if wanted is not None and rec.host not in wanted:
+            ignored += 1
+            continue
         if not HOST_SAFE_RE.match(rec.host) or IPV4_RE.fullmatch(rec.host) or rec.host in ("localhost", "_"):
             dropped[rec.host[:60]] += 1
             continue
@@ -546,6 +608,8 @@ def run_all_hosts(log_paths: Iterable[str | os.PathLike[str]], since: str | date
         agg.add(rec)
     if dropped:
         log.info("all-hosts: %d request(s) under %d unsafe/unnamed host(s) dropped", sum(dropped.values()), len(dropped))
+    if wanted is not None:
+        log.info("all-hosts: only %s; %d request(s) under other hosts ignored", sorted(wanted), ignored)
     out: dict[str, dict[str, Any]] = {}
     for host, agg in sorted(aggs.items()):
         if agg.added < min_requests:
@@ -598,6 +662,10 @@ def to_markdown(result: dict[str, Any]) -> str:
         tg = tot["targets"][t]
         lines.append(f"- target `{t}`: {tg['requests']} req · human {tg['human']['requests']}/{tg['human']['sources']} · "
                      f"agent {tg['agent']['requests']}/{tg['agent']['sources']} · crawler {tg['crawler']['requests']}")
+    if tot.get("by_src"):
+        lines += ["", "## Sources by src", "", "| src | human sources | engaged | requests |", "|---|---|---|---|"]
+        lines += [f"| `{s}` | {v['human_sources']} | {v['engaged_sources']} | {v['requests']} |"
+                  for s, v in tot["by_src"].items()]
     if tot["top_pages"]:
         lines += ["", "## Top pages (human requests)", ""]
         lines += [f"- `{p['path']}` — {p['requests']}" for p in tot["top_pages"]]
@@ -646,8 +714,20 @@ def build_parser() -> argparse.ArgumentParser:
                    help="output directory for metrics.json + metrics.md; '-' prints JSON to stdout (default)")
     p.add_argument("--min-requests", type=int, default=1,
                    help="--all-hosts: skip hosts with fewer matching requests (default 1)")
+    p.add_argument("--hosts", default=None, metavar="A,B,C",
+                   help="--all-hosts: report only these hosts (comma-separated); others are ignored entirely")
     p.add_argument("--log-level", default="INFO", choices=("DEBUG", "INFO", "WARNING", "ERROR"))
     return p
+
+
+def _parse_hosts(value: str | None) -> set[str] | None:
+    """'a.example, B.example' -> {'a.example', 'b.example'}; None/empty -> None (no filter)."""
+    if value is None:
+        return None
+    hosts = {h.strip().lower() for h in value.split(",") if h.strip()}
+    if not hosts:
+        raise ValueError("--hosts given but no host names in it")
+    return hosts
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -656,7 +736,9 @@ def main(argv: list[str] | None = None) -> int:
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     try:
         if args.all_hosts:
-            results = run_all_hosts(args.log, args.since, args.until, args.target, args.own_ua, args.min_requests)
+            only_hosts = _parse_hosts(args.hosts)
+            results = run_all_hosts(args.log, args.since, args.until, args.target, args.own_ua, args.min_requests,
+                                    only_hosts)
             if args.out == "-":
                 json.dump(results, sys.stdout, ensure_ascii=False, indent=1)
                 sys.stdout.write("\n")

@@ -13,8 +13,10 @@ VISION.md, the current backlog (tasks with states), open questions from roles, n
 the reviewer, the analyst and task results), the latest metrics, today's spend and the day's limits.
 
 ## Rules
-- Three kinds of material, weighted in this order: facts observed on the live site (URL, status, quote) · metrics ·
-  synthetic persona difficulties · hypotheses. Ten identical observations are one problem.
+- Material, weighted in this order: words of real people (classification `feedback`: GitHub issues, replies on
+  Bluesky/Telegram - answer each with a task or a reasoned `reject`, never ignore) · facts observed on the live site
+  (URL, status, quote) · metrics and SEO/GEO checks · synthetic persona difficulties · hypotheses. Ten identical
+  observations are one problem.
 - For every new observation choose exactly one action: `link` (to an existing task or observation; name it),
   `needs_evidence` (say what), `create_task` (only with a user outcome, scope, acceptance criteria the reviewer can check
   from outside, and a `goal` from VISION), `defer` (with a return condition) or `reject` (with the reason).

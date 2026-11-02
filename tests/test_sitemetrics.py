@@ -57,12 +57,34 @@ def test_parse_line_example_format():
 
 def test_parse_line_strips_query_and_handles_garbage():
     rec = sm.parse_line(line("1.2.3.4", CURL, "/api/x?token=abc&y=1"))
-    assert rec is not None and rec.path == "/api/x"
+    assert rec is not None and rec.path == "/api/x" and rec.src == ""
     raw = '1.2.3.4 - - [2026-11-03T10:00:00+00:00] "\\x16\\x03\\x01" 400 0 "-" "-" x.formachines.ai 0.000\n'
     rec = sm.parse_line(raw)
-    assert rec is not None and rec.method == "" and rec.ua == "" and rec.status == 400
+    assert rec is not None and rec.method == "" and rec.ua == "" and rec.status == 400 and rec.src == ""
     assert sm.parse_line("not a log line\n") is None
     assert sm.parse_line("") is None
+
+
+@pytest.mark.parametrize("path,src", [
+    ("/errata/?src=bluesky", "bluesky"),
+    ("/errata/?utm=1&src=telegram&x=2", "telegram"),
+    ("/errata/?src=dev-to_2", "dev-to_2"),
+    ("/errata/?src=bluesky#frag", "bluesky"),
+    ("https://x.formachines.ai/errata/?src=devto", "devto"),      # absolute-form request target
+    ("/errata/?src=", ""),                                        # empty
+    ("/errata/?src=Bluesky", ""),                                 # upper-case not allowed
+    ("/errata/?src=blue%20sky", ""),                              # space after unquoting
+    ("/errata/?src=" + "a" * 33, ""),                             # too long
+    ("/errata/?src=../etc", ""),
+    ("/errata/?source=bluesky", ""),                              # other parameter name
+    ("/errata/", ""),
+])
+def test_parse_line_extracts_src_and_strips_query(path, src):
+    rec = sm.parse_line(line("1.2.3.4", CHROME, path))
+    assert rec is not None
+    assert rec.src == src
+    assert rec.path == "/errata/"
+    assert "?" not in rec.path and "src" not in rec.path
 
 
 def test_iter_records_reads_plain_and_gz(tmp_path: Path):
@@ -206,6 +228,69 @@ def test_targets_count_requests_and_sources_by_class(tmp_path: Path):
     assert res["totals"]["crawlers"]["by_bot"] == {"Googlebot": 1}
 
 
+# ------------------------------------------------------------------------------------------------------- by_src
+
+def test_by_src_counts_classes_human_and_engaged(tmp_path: Path):
+    lines = [
+        # bluesky, day 1: A human + css (engaged, css without src) · B human page only · C human with ext referer
+        line("10.0.0.1", CHROME, "/errata/?src=bluesky", day="2026-11-03"),
+        line("10.0.0.1", CHROME, "/static/site.css", day="2026-11-03"),
+        line("10.0.0.2", IPHONE, "/errata/?src=bluesky", day="2026-11-03"),
+        line("10.0.0.3", CHROME, "/errata/?src=bluesky", day="2026-11-03", referer="https://bsky.app/profile/x"),
+        # bluesky: a link-preview bot and an agent also follow the tagged link — counted in requests/sources only
+        line("10.0.0.4", TELEGRAM, "/errata/?src=bluesky", day="2026-11-03"),
+        line("10.0.0.5", PYREQ, "/errata/?src=bluesky", day="2026-11-03"),
+        line("10.0.0.5", PYREQ, "/errata/?src=bluesky", day="2026-11-03"),
+        # telegram, day 1: one human, not engaged
+        line("10.0.0.6", CHROME, "/errata/?src=telegram", day="2026-11-03"),
+        # invalid src values are ignored: not a key in by_src, request still counted as human
+        line("10.0.0.7", CHROME, "/errata/?src=Bluesky", day="2026-11-03"),
+        line("10.0.0.8", CHROME, "/errata/?src=blue%20sky", day="2026-11-03"),
+        line("10.0.0.9", CHROME, "/errata/?src=" + "z" * 40, day="2026-11-03"),
+        # day 2: A again via telegram (engaged via css), B via bluesky again (totals must not double-count B)
+        line("10.0.0.1", CHROME, "/errata/?src=telegram", day="2026-11-04"),
+        line("10.0.0.1", CHROME, "/static/site.css", day="2026-11-04"),
+        line("10.0.0.2", IPHONE, "/errata/?src=bluesky", day="2026-11-04"),
+    ]
+    res = sm.run([write_log(tmp_path / "access.log", lines)], HOST)
+    d1, d2 = res["days"]["2026-11-03"], res["days"]["2026-11-04"]
+    # classification unchanged by the query string
+    assert d1["humans"]["sources"] == 7 and d1["humans"]["engaged"] == 2
+    assert d1["classes"]["crawler"]["requests"] == 1 and d1["classes"]["agent"]["requests"] == 2
+    assert d1["top_pages"][0] == {"path": "/errata/", "requests": 7}
+    assert set(d1["by_src"]) == {"bluesky", "telegram"}
+    assert d1["by_src"]["bluesky"] == {"requests": 6, "sources": 5, "human_sources": 3, "engaged_sources": 2}
+    assert d1["by_src"]["telegram"] == {"requests": 1, "sources": 1, "human_sources": 1, "engaged_sources": 0}
+    assert list(d1["by_src"]) == ["bluesky", "telegram"]       # ordered by requests
+    assert d2["by_src"]["telegram"] == {"requests": 1, "sources": 1, "human_sources": 1, "engaged_sources": 1}
+    assert d2["by_src"]["bluesky"] == {"requests": 1, "sources": 1, "human_sources": 1, "engaged_sources": 0}
+    tot = res["totals"]["by_src"]
+    assert tot["bluesky"] == {"requests": 7, "sources": 5, "human_sources": 3, "engaged_sources": 2}
+    assert tot["telegram"] == {"requests": 2, "sources": 2, "human_sources": 2, "engaged_sources": 1}
+    md = sm.to_markdown(res)
+    assert "## Sources by src" in md
+    assert "| src | human sources | engaged | requests |" in md
+    assert "| `bluesky` | 3 | 2 | 7 |" in md
+    assert "| `telegram` | 2 | 1 | 2 |" in md
+    assert "Bluesky" not in json.dumps(res["totals"]["by_src"]) and "blue sky" not in md
+
+
+def test_by_src_window_and_empty(tmp_path: Path):
+    lines = [
+        line("10.0.0.1", CHROME, "/?src=devto", day="2026-11-01"),
+        line("10.0.0.2", CHROME, "/?src=devto", day="2026-11-02"),
+        line("10.0.0.3", CHROME, "/", day="2026-11-03"),
+    ]
+    log_path = write_log(tmp_path / "access.log", lines)
+    res = sm.run([log_path], HOST, since="2026-11-02")
+    assert res["days"]["2026-11-02"]["by_src"]["devto"]["human_sources"] == 1
+    assert res["days"]["2026-11-03"]["by_src"] == {}
+    assert res["totals"]["by_src"] == {"devto": {"requests": 1, "sources": 1, "human_sources": 1, "engaged_sources": 0}}
+    res = sm.run([log_path], HOST, since="2026-11-03")
+    assert res["totals"]["by_src"] == {}
+    assert "Sources by src" not in sm.to_markdown(res)
+
+
 # ----------------------------------------------------------------------------------------------------- privacy
 
 def test_output_contains_no_ip_addresses(tmp_path: Path):
@@ -241,7 +326,9 @@ def test_other_hosts_are_ignored_and_status_buckets(tmp_path: Path):
     assert res["parse"]["parsed"] == 6
     assert set(res) == {"host", "generated", "window", "targets", "parse", "days", "totals"}
     assert set(d) == {"requests_raw", "status", "classes", "humans", "agents", "crawlers", "scanners", "targets",
-                      "top_pages", "referers"}
+                      "top_pages", "referers", "by_src"}
+    assert d["by_src"] == {} and res["totals"]["by_src"] == {}
+    assert "## Sources by src" not in sm.to_markdown(res)
 
 
 def test_empty_result_is_well_formed(tmp_path: Path):
@@ -283,6 +370,30 @@ def test_cli_all_hosts_writes_per_host_and_skips_unsafe(tmp_path: Path):
     assert sorted(p.name for p in out.iterdir()) == ["a.example", "b.example"]
     assert json.loads((out / "a.example" / "metrics.json").read_text())["totals"]["requests_raw"] == 1
     assert not (tmp_path / "evil").exists()
+
+
+def test_cli_all_hosts_filters_with_hosts_flag(tmp_path: Path):
+    log_path = write_log(tmp_path / "access.log", [
+        line("10.0.0.1", CHROME, "/", host="a.example"), line("10.0.0.1", CHROME, "/", host="b.example"),
+        line("10.0.0.1", CHROME, "/", host="b.example"), line("10.0.0.1", CHROME, "/", host="c.example"),
+        line("10.0.0.1", CHROME, "/", host="junk-host.example"),
+    ])
+    # API: only_hosts restricts the result; names are case-insensitive; a listed host absent from the log is just absent
+    res = sm.run_all_hosts([log_path], only_hosts={"A.example", "b.example", "zzz.example"})
+    assert sorted(res) == ["a.example", "b.example"]
+    assert res["b.example"]["totals"]["requests_raw"] == 2
+    assert sorted(sm.run_all_hosts([log_path], only_hosts=None)) == ["a.example", "b.example", "c.example",
+                                                                      "junk-host.example"]
+    # --min-requests still applies on top of --hosts
+    assert sorted(sm.run_all_hosts([log_path], only_hosts={"a.example", "b.example"}, min_requests=2)) == ["b.example"]
+    # CLI: only the listed directories are created
+    out = tmp_path / "all"
+    assert sm.main(["--all-hosts", "--log", str(log_path), "--out", str(out), "--hosts", "a.example, b.example"]) == 0
+    assert sorted(p.name for p in out.iterdir()) == ["a.example", "b.example"]
+    assert not (out / "c.example").exists() and not (out / "junk-host.example").exists()
+    # empty --hosts is an error, not "no filter"
+    assert sm.main(["--all-hosts", "--log", str(log_path), "--out", str(tmp_path / "x"), "--hosts", " , "]) == 2
+    assert not (tmp_path / "x").exists()
 
 
 def test_cli_rejects_bad_date(tmp_path: Path):

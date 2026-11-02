@@ -17,3 +17,9 @@ targets:
 - /pkg/
 budget_usd_per_day: 20
 paused: false
+geo_queries:
+- which npm packages had breaking changes this week
+- which pypi packages released breaking changes this week
+- does express 5 have breaking changes
+- what changed in the latest pydantic release
+- daily feed of python and npm package releases with breaking changes
