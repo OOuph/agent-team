@@ -1,20 +1,19 @@
-# Luz Amanhã — per-product settings. Secrets (bot tokens) live in agent-team/.env, never here.
 slug: luz-amanha
-name: "Luz Amanhã"
+name: Luz Amanhã
 host: luz.bymachines.ai
 site_base: https://luz.bymachines.ai
 repo:
-  url: https://github.com/formachines-ai/luz-amanha.git   # created by the owner; local source: /Users/Shared/files/info/agent-team-sites/luz-amanha
+  url: https://github.com/formachines-ai/luz-amanha.git
   branch: main
   public_dir: public
 channels:
-  telegram: "@TODO"       # owner creates the channel and the bot (03.11); also update TELEGRAM_URL in build.py
-  bluesky: ""
-  mastodon: ""            # masto.pt account, #bot tag in profile
-targets:                  # paths counted as the target action by sitemetrics
-  - /tomorrow.json
-  - /go/telegram/
-  - /d/
-  - /feed.xml
+  telegram: '@TODO'
+  bluesky: formachines.bsky.social
+  mastodon: ''
+targets:
+- /tomorrow.json
+- /go/telegram/
+- /d/
+- /feed.xml
 budget_usd_per_day: 20
 paused: false

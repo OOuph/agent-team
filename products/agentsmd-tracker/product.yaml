@@ -7,9 +7,9 @@ repo:
   branch: main
   public_dir: public
 channels:
-  bluesky: ""
-  telegram: "@TODO"
-  devto: ""
+  bluesky: formachines.bsky.social
+  telegram: '@TODO'
+  devto: ''
 targets:
 - /go/
 - /stats.json

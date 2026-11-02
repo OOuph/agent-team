@@ -1,22 +1,20 @@
-# Release Radar — product settings for the dispatcher (team.yaml holds the global ones).
-# Secrets never here (.env). Channel targets are placeholders until the owner creates the accounts (02–03.11).
 slug: release-radar
 name: Release Radar
 host: releases.formachines.ai
 site_base: https://releases.formachines.ai
 repo:
-  url: https://github.com/formachines-ai/release-radar.git   # public; the owner creates it, local source: /Users/Shared/files/info/agent-team-sites/release-radar
+  url: https://github.com/formachines-ai/release-radar.git
   branch: main
   public_dir: public
 channels:
-  telegram: "@TODO"       # channel handle; bot token in .env (TELEGRAM_BOT_TOKEN)
-  bluesky: ""             # handle, e.g. releases.formachines.ai; BLUESKY_HANDLE / BLUESKY_APP_PASSWORD in .env
-  devto: ""               # weekly digest only; DEVTO_API_KEY in .env
-  mastodon: ""            # fosstodon.org account; MASTODON_INSTANCE / MASTODON_TOKEN in .env
-targets:                  # paths counted as the target action by sitemetrics (see VISION.md G3/G4)
-  - "/go/"
-  - "/today.json"
-  - "/feed.xml"
-  - "/pkg/"
+  telegram: '@TODO'
+  bluesky: formachines.bsky.social
+  devto: ''
+  mastodon: ''
+targets:
+- /go/
+- /today.json
+- /feed.xml
+- /pkg/
 budget_usd_per_day: 20
 paused: false
