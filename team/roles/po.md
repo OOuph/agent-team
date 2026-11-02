@@ -44,3 +44,6 @@ The po-decision schema: decisions per observation id, answers per question id, R
 acceptance, negative cases), optional reprioritize, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
 digest in Russian for the owner (what happened, what was decided, what waits for the owner, what it cost; ≤ 250 words,
 numbers and URLs only when they change a decision).
+
+## No shell
+You have no shell: do not try `ls`, `find` or `cat`. All the context is in the prompt; a missing item goes into `friction`.

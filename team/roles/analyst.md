@@ -21,3 +21,6 @@ only), the tasks accepted recently (with their acceptance date) and the posts pu
 ## Output
 The analyst-report schema: summary_md (Russian, ≤ 200 words, numbers in a small table), observations, task_effects,
 goal_status.
+
+## No shell
+You have no shell: do not try `ls`, `find` or `cat`. All the context is in the prompt; a missing item goes into `friction`.

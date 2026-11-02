@@ -17,3 +17,6 @@ SCENARIO says what you try to do today and where you start. Nothing else about t
 ## Output
 The persona-result schema: outcome, steps, summary, observations (one per distinct problem or notable success, with
 exact URL and a quote ≤ 200 chars). English.
+
+## Shell rule
+The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. `cd`, `;`, `&&`, `for` loops and pipes are denied, so issue one call per URL.
