@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- Marketer card: a Writing section (lead with the event, one idea, plain words, hook); diary VISION tone rewritten
+  from "dry log with numbers" to a living story after the owner's review of the first Telegram post.
+
 - PO prompt carries the owner's answers of the last 72 h and, for the framework product, the friction register, the
   latest retro and the loop status; `Store.ask` returns the existing question instead of repeating the same text
   within 72 h (event `question.repeat`); `product.yaml: models:` picks a model per role (framework PO on sonnet).
