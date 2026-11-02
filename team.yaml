@@ -23,6 +23,7 @@ claude:
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
   max_usd_per_run: 3.0
+  min_usd_per_run: 0.3            # below this remaining daily budget no run is started
   unknown_cost_reserve_usd: 0.5   # a run without a reported cost is booked at this much
   warn_share: 0.8
 

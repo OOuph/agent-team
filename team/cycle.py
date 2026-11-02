@@ -76,7 +76,11 @@ class Cycle:
             log.error("no runner: %s skipped", label)
             return None
         cap = float(cap or self.st.budget["max_usd_per_run"])
-        if not self.budget_ok(cap):
+        remaining = self.p.daily_cap - self.store.spent_today()
+        cap = min(cap, remaining)                                   # a run may use what is left of the day
+        if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap):
+            if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
+                self.store.event("budget.stop", self.p.slug, "dispatcher", {"remaining": round(remaining, 3), "cap": self.p.daily_cap})
             return None
         if self.dry_run:
             log.info("[dry-run] would run %s (%s): prompt %d chars", role, label, len(prompt))

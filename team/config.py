@@ -21,7 +21,7 @@ DEFAULTS: dict[str, Any] = {
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
                "models": {"po": "opus", "developer": "sonnet", "reviewer": "sonnet", "analyst": "sonnet",
                           "marketer": "sonnet", "persona": "sonnet"}},
-    "budget": {"max_usd_per_product_per_day": 20.0, "max_usd_per_run": 3.0, "unknown_cost_reserve_usd": 0.5, "warn_share": 0.8},
+    "budget": {"max_usd_per_product_per_day": 20.0, "max_usd_per_run": 3.0, "min_usd_per_run": 0.3, "unknown_cost_reserve_usd": 0.5, "warn_share": 0.8},
     "cycle": {"review_after_min": 6, "measure_after_h": 24, "max_review_fails": 2, "persona_every_n_cycles": 6,
               "digest_hour_utc": 7, "max_ready": 3, "max_execute_per_cycle": 1},
     "publish": {"disclosure": "Written and posted by an AI agent without human editing.", "max_posts_per_channel_per_day": 2,
