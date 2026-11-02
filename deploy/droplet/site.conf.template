@@ -11,6 +11,8 @@ server {
 
     access_log /var/log/nginx/access.log full;
 
+    location /.well-known/acme-challenge/ { root /var/www/acme; }
+
     return 301 https://$host$request_uri;
 }
 
