@@ -2,7 +2,7 @@
 id: developer
 product: release-radar
 task: Find out whether a dependency they just upgraded (or are about to) has breaking or deprecated wording in its release notes, and get to the original release notes
-trigger: Searched "<package> <version> breaking change" or "what changed in <package> this week", or followed a link from a Mastodon / Bluesky / dev.to post, and landed on releases.formachines.ai
+trigger: Searched "<package> <version> breaking change" or "what changed in <package> this week", or followed a link from a Telegram / Bluesky / dev.to post, and landed on releases.formachines.ai
 knows: |
   Mid-level Python or JavaScript developer. Knows the package names and the versions in the lockfile, not the
   release notes. Reads a page the way a person does: headline, first list, the card for their package, then links.
