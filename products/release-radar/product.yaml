@@ -10,7 +10,6 @@ channels:
   telegram: '@relesae_radar'
   bluesky: formachines.bsky.social
   devto: formachines
-  mastodon: ''
 targets:
 - /go/
 - /today.json

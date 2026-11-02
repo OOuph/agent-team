@@ -9,7 +9,6 @@ repo:
 channels:
   telegram: '@luz_amanha'
   bluesky: formachines.bsky.social
-  mastodon: ''
 targets:
 - /tomorrow.json
 - /go/telegram/
