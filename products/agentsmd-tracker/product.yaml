@@ -9,7 +9,7 @@ repo:
 channels:
   bluesky: formachines.bsky.social
   telegram: '@agentsmd_tracker'
-  devto: ''
+  devto: formachines
 targets:
 - /go/
 - /stats.json

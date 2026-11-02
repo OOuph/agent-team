@@ -9,7 +9,7 @@ repo:
 channels:
   telegram: '@relesae_radar'
   bluesky: formachines.bsky.social
-  devto: ''
+  devto: formachines
   mastodon: ''
 targets:
 - /go/
