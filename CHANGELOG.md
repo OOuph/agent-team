@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-02
 
+- First unattended framework change: retro → T-0002 → PR #5 → canary → merge (43acb7e). Found on the way: the
+  running checkout was not fast-forwarded because untracked state files counted as dirty; `dirty_tracked` fixes it.
+
 - Role cards (T-0002; F-0001, F-0002, F-0008, F-0009, F-0011, F-0012, F-0013, F-0016): persona, marketer, reviewer: one bare
   `team-fetch`/`team-publish` call per URL, no cd/;/&&/loops/pipes; po, analyst: no shell, missing context goes into `friction`.
 

@@ -90,6 +90,11 @@ def dirty(repo_dir: Path) -> bool:
     return bool(git(repo_dir, "status", "--porcelain", check=False))
 
 
+def dirty_tracked(repo_dir: Path) -> bool:
+    """Modified tracked files only: untracked state files (team.db-wal, decisions.md) must not block a fast-forward."""
+    return bool(git(repo_dir, "status", "--porcelain", "--untracked-files=no", check=False))
+
+
 def merge_and_push(repo_dir: Path, task_id: str, base: str = "main") -> str:
     """task/<id> → base with a merge commit, push when a remote exists. Returns the new base head."""
     br = f"task/{task_id}"
@@ -204,8 +209,8 @@ def update_running_checkout(root: Path, branch: str = "main") -> str | None:
     if not (root / ".git").exists():
         log.warning("running checkout %s is not a git clone; code not updated", root)
         return None
-    if dirty(root):
-        log.warning("running checkout %s has local changes; code not updated", root)
+    if dirty_tracked(root):
+        log.warning("running checkout %s has local changes to tracked files; code not updated", root)
         return None
     git(root, "fetch", "-q", "origin", branch)
     git(root, "merge", "-q", "--ff-only", f"origin/{branch}")
