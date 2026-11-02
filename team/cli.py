@@ -170,6 +170,35 @@ def cmd_stop(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_export(st: C.Settings, a: argparse.Namespace) -> int:
+    from .export import export_product
+    out = Path(a.out) if a.out else st.data_dir / "public"
+    n = 0
+    for p in _products(st, a.product):
+        n += len(export_product(p, out, days=a.days))
+    print(f"exported {n} day files to {out}")
+    return 0
+
+
+def cmd_friction(st: C.Settings, a: argparse.Namespace) -> int:
+    from . import friction
+    friction.collect_all(st, _products(st, "all"))
+    reg = friction.Register(friction.register_dir(st))
+    print(reg.register_md(a.days))
+    if a.out:
+        print(f"written {reg.export_public(Path(a.out), a.days)}")
+    return 0
+
+
+def cmd_retro(st: C.Settings, a: argparse.Namespace) -> int:
+    from . import friction, retro
+    friction.collect_all(st, _products(st, "all"))
+    roles = load_roles(ROLES_DIR)
+    res = retro.run_retro(st, Runner(st.claude, roles) if roles and not a.dry_run else None, dry_run=a.dry_run)
+    print(res or "retro: nothing done (dry-run, empty register, or run failed)")
+    return 0
+
+
 def cmd_digest(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
@@ -204,6 +233,10 @@ def main(argv: list[str] | None = None) -> int:
     for name in ("stop", "resume"):
         s = sub.add_parser(name); s.add_argument("product"); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("digest"); s.add_argument("product"); s.set_defaults(fn=cmd_digest)
+    s = sub.add_parser("export-public"); s.add_argument("--product", default="all"); s.add_argument("--out"); s.add_argument("--days", type=int, default=14)
+    s.set_defaults(fn=cmd_export)
+    s = sub.add_parser("friction"); s.add_argument("--days", type=int, default=7); s.add_argument("--out"); s.set_defaults(fn=cmd_friction)
+    s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     a = ap.parse_args(argv)
     logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     st = C.load()

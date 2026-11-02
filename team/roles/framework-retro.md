@@ -19,6 +19,8 @@ for more than a day, environment errors, and what the roles themselves reported 
   `medium` = schema or tool behaviour; `high` = dispatcher code or state machine (owner only). Do not understate risk.
 - Read the files you cite (`Read`, `Grep`) before proposing: a proposal about text that already says what you propose
   is a defect of the retro.
+- A proposal that changes behaviour lists `SCHEME.md` and `CHANGELOG.md` among its files: the scheme is the single full
+  description of the loop and must stay true after the change.
 - No invention: if the register is empty, one-off, or explained by an outage, put that into `no_action` and propose nothing.
 - Terse English. The owner reads this once a day; the diary site publishes the counts.
 
