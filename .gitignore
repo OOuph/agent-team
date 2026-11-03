@@ -16,3 +16,4 @@ products/*/reviews/
 products/*/digests/
 products/*/metrics/
 products/*/decisions.md
+builds/

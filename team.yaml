@@ -53,6 +53,7 @@ framework:                        # self-improvement: friction register → retr
   canary_product: release-radar   # the product whose cycle runs on the candidate code before merging
   protected_paths:                # a PR touching these waits for a human: the loop's own safety and the watchdog
     - team/store.py
+    - build-site.sh
     - team/runner.py
     - team/config.py
     - team/publish.py
