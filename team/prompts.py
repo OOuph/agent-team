@@ -84,8 +84,10 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
             readme += f"\n\n--- {name} ---\n" + _tail(p.read_text(encoding="utf-8", errors="replace"), 8000)
     prev = ("\n\n# PREVIOUS ATTEMPTS ON THIS TASK\n" + _y(previous[-2:])) if previous else ""
     rev = ("\n\n# REVIEW THAT FAILED (fix this first)\n" + _y({k: review.get(k) for k in ("verdict", "first_failure", "criteria", "summary")})) if review else ""
+    tests = (f"Tests: run `{product.test_cmd}` from the checkout root before reporting done (it creates its own venv; "
+             "the checkout has no .venv). A task is not done while that command fails.\n\n") if product.test_cmd else ""
     return (f"# TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
-            f"You are in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n"
+            f"You are in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
             "# TASK\n" + _y(_task_brief(task)) + prev + rev
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# REPOSITORY NOTES" + (readme or "\n(no README — follow the conventions you find in the tree)") + "\n")

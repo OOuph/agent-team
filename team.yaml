@@ -42,6 +42,10 @@ cycle:
   geo_every_h: 168                # weekly control questions to AI search
   max_ready: 3
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
+  execute_slots:                  # seats per role per cycle (overrides max_execute_per_cycle when present; product.yaml may override)
+    developer: 1                  # 03.11: a single seat starved the daily post behind P1/P2 developer tasks
+    marketer: 1
+    analyst: 1
 
 framework:                        # self-improvement: friction register → retro role → issues / pull requests on the framework repo
   retro_every_h: 1                # the retro role reads the register this often (0 = off); runs after the product cycles (owner 02.11: every cycle)

@@ -338,6 +338,14 @@ class Cycle:
             self.store.add_observation({**o, "source": "reviewer", "task": t["id"], "run_id": f"{self.cycle_id}-review-{t['id']}",
                                         "fingerprint": fingerprint("review", o.get("classification", ""), o.get("url", ""), o.get("title", ""))})
         verdict = v.get("verdict")
+        if verdict in ("pass", None, "inconclusive") and self.content_without_post(t):
+            # a marketing task is accepted only by a recorded publication (release-radar T-0006 went `accepted` on
+            # "inconclusive 3×" with posted 0); the PO re-plans it instead
+            self.store.transition(t["id"], "blocked", "reviewer", "content task without a recorded publication: nothing to accept",
+                                  force=True, blocked_by="po")
+            self.store.ask(from_="reviewer", to="po", question=f"Task {t['id']} ({t.get('title', '')[:80]}) has no recorded publication; "
+                           "re-plan it (new slot with not_before) or close it with close_tasks.", task_id=t["id"], blocks=[t["id"]])
+            return
         if verdict == "pass":
             self.store.transition(t["id"], "accepted", "reviewer", v.get("summary", "")[:300], accepted_at=utcnow())
         elif verdict == "fail":
@@ -355,6 +363,12 @@ class Cycle:
             self.store.save_task(t)
             if t["review_inconclusive"] >= 3:
                 self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    def content_without_post(self, t: dict[str, Any]) -> bool:
+        if str(t.get("role") or "") != "marketer":
+            return False
+        n = self.store.db.execute("SELECT COUNT(*) FROM posts WHERE task_id=?", (t["id"],)).fetchone()[0]
+        return int(n or 0) == 0
 
     # triage: PO ------------------------------------------------------------------------------------
 
@@ -419,13 +433,32 @@ class Cycle:
 
     # execute: one ready task → developer / marketer / analyst ------------------------------------
 
+    def execute_slots(self) -> dict[str, int]:
+        """How many tasks per role one cycle may start. `cycle.execute_slots` (team.yaml, overridable in product.yaml) —
+        03.11: with a single `max_execute_per_cycle` the daily content task starved behind P1/P2 developer tasks
+        (release-radar T-0009 missed its 06:30 slot); content and measurement now have their own seats."""
+        slots = self.p.raw.get("execute_slots") or self.st.cycle.get("execute_slots")
+        if isinstance(slots, dict) and slots:
+            return {str(k): int(v) for k, v in slots.items()}
+        return {"*": int(self.st.cycle.get("max_execute_per_cycle", 1))}
+
     def phase_execute(self) -> None:
-        n_max = int(self.st.cycle.get("max_execute_per_cycle", 1))
-        done = 0
+        slots = self.execute_slots()
+        used: dict[str, int] = {}
+
+        def seat(role: str) -> str | None:
+            key = role if role in slots else ("*" if "*" in slots else None)
+            if key is None or used.get(key, 0) >= slots[key]:
+                return None
+            return key
+
         # finish tasks that are in_progress (a failed review or a partial result) before starting new ones
         for t in sorted(self.store.tasks(["in_progress", "ready"]), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", ""))):
-            if done >= n_max:
+            if all(used.get(k, 0) >= v for k, v in slots.items()):
                 break
+            key = seat(str(t.get("role") or "developer"))
+            if key is None:
+                continue        # this role's seat for the cycle is taken
             if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
                 continue        # a run is on it (lease alive); stale leases are handled in collect
             nb = parse_ts(t.get("not_before"))
@@ -439,7 +472,7 @@ class Cycle:
                     "detail": "PO: set not_before on this task (or fix the title)."})
                 continue
             if self.execute_task(t):
-                done += 1
+                used[key] = used.get(key, 0) + 1
 
     def execute_task(self, t: dict[str, Any]) -> bool:
         run_id = f"{self.cycle_id}-exec-{t['id']}"

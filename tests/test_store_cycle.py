@@ -211,3 +211,33 @@ def test_allowed_hosts_by_role(tmp_path: Path):
     assert "raw.githubusercontent.com" in cy._allowed_hosts("reviewer").split(",")
     assert "raw.githubusercontent.com" not in cy._allowed_hosts("developer").split(",")
     assert cy._allowed_hosts(None).split(",")[-1] == "dev.to"
+
+
+def test_execute_slots_per_role(tmp_path: Path, monkeypatch):
+    st = _settings(tmp_path)
+    st.raw["cycle"]["execute_slots"] = {"developer": 1, "marketer": 1}
+    p = _product(st)
+    s = Store(p.dir)
+    base = dict(type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    d1 = s.create_task(title="dev P1", priority="P1", role="developer", **base)
+    d2 = s.create_task(title="dev P2", priority="P2", role="developer", **base)
+    m = s.create_task(title="post", priority="P3", role="marketer", **base)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    started = []
+    monkeypatch.setattr(cy, "execute_task", lambda t: started.append(t["id"]) or True)
+    cy.phase_execute()
+    assert started == [d1["id"], m["id"]]          # one developer seat (P1 first), one marketer seat; dev P2 waits
+    s.close()
+
+
+def test_content_without_post_guard(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    m = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="marketer")
+    d = s.create_task(title="code", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    assert cy.content_without_post(m) and not cy.content_without_post(d)
+    s.record_post("telegram", "1", "https://t.me/x/1", m["id"])
+    assert not cy.content_without_post(m)
+    s.close()
