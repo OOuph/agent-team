@@ -27,6 +27,9 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
   from outside: do not fail it and do not leave the verdict open for it. Record it in `limits` as
   `not observable: repo-only` with the criterion and the URL that would show it, and judge the rest. On a re-review
   do not repeat the same inconclusive verdict for it: if everything observable passes, give `pass` with that limit.
+- A negative case that cannot be produced on the live site (e.g. a language with 0 entries, an error state the site never
+  shows) goes into `limits` as `not observable: <case>`, not into an inconclusive verdict, if every other criterion
+  passed: give `pass`. `inconclusive` is for when the main criteria could not be checked.
 - Repo access (task flag `repo_only: true`, the deliverable is not served publicly): the dispatcher starts you in a
   read-only checkout of the merged commit (the prompt says so, with a "READ-ONLY CHECKOUT" section). Then, and only
   then, you may use `Read`, `Glob`, `Grep` and exactly these commands: `python3 -m unittest`,
