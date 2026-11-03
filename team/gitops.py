@@ -63,7 +63,7 @@ def has_remote(repo_dir: Path) -> bool:
 
 
 def start_task_branch(repo_dir: Path, task_id: str, base: str = "main") -> str:
-    """A clean task branch from the latest base; uncommitted leftovers of a previous run are discarded."""
+    """A task branch from the latest base, or the earlier attempt's branch with base merged in; uncommitted leftovers are discarded."""
     br = f"task/{task_id}"
     git(repo_dir, "reset", "--hard", check=False)
     git(repo_dir, "clean", "-fdq", check=False)
@@ -72,6 +72,21 @@ def start_task_branch(repo_dir: Path, task_id: str, base: str = "main") -> str:
         git(repo_dir, "checkout", "-q", "-B", base, f"origin/{base}")
     else:
         git(repo_dir, "checkout", "-q", base)
+    base_ref = f"origin/{base}" if has_remote(repo_dir) else base
+    # A retry continues the earlier attempt: reuse task/<id> (local, else origin) when it has commits ahead of base.
+    for cand in (br, f"origin/{br}"):
+        if git(repo_dir, "rev-parse", "--verify", "-q", f"refs/heads/{br}" if cand == br else f"refs/remotes/{cand}", check=False) \
+                and git(repo_dir, "rev-list", "--count", f"{base_ref}..{cand}", check=False) not in ("", "0"):
+            git(repo_dir, "checkout", "-q", "-B", br, cand)
+            try:
+                git(repo_dir, "merge", "-q", "--no-edit", base_ref)
+                return br
+            except GitError:
+                log.warning("task branch %s conflicts with %s; starting fresh", br, base)
+                git(repo_dir, "merge", "--abort", check=False)
+                git(repo_dir, "reset", "--hard", check=False)
+                git(repo_dir, "checkout", "-q", base)
+                break
     git(repo_dir, "checkout", "-q", "-B", br)
     return br
 
