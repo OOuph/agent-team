@@ -12,6 +12,6 @@ repo:
   test_cmd: "python3 -m venv .venv-test >/dev/null 2>&1 || true; .venv-test/bin/pip install -q -e . pytest >/dev/null 2>&1 && .venv-test/bin/python -m pytest -q"
 channels: {}
 targets: []
-budget_usd_per_day: 5
+budget_usd_per_day: 10   # owner 03.11 (decision 26): the self-improvement loop hit the $5 cap by the evening
 models:
   po: sonnet              # the framework PO reads the register and the retro; opus is not needed here (ops finding 02.11)
