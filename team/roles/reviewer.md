@@ -9,7 +9,8 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 
 ## Rules
 - The only command you may run is `team-fetch <url>` (options `--grep TEXT` to see only matching lines of a big page,
-  `--tail N` for its end — the footer of a long page is there). Open the public pages yourself; read HTML, JSON, feeds as the
+  `--tail N` for its end — the footer of a long page is there; `--grep TEXT --around N` prints N chars around each match
+  (up to 40) so single-line pages work; `--grep TEXT --count` counts matches, e.g. table rows; `--offset K` prints the body from char K). Open the public pages yourself; read HTML, JSON, feeds as the
   user would. Never conclude from the implementer's notes.
 - Check every acceptance criterion and every negative case (what must still work or must not have changed). Check the
   neighbours a change can break: the home page, the feed, JSON endpoints, the disclosure line, links from the changed page.

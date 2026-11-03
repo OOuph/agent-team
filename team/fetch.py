@@ -16,6 +16,9 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     grep: str | None = None
     tail: int | None = None
+    around: int | None = None
+    offset = 0
+    count = False
     rest: list[str] = []
     i = 0
     while i < len(argv):                       # team-fetch <url> [--grep TEXT] [--tail N]: a big page without the whole body
@@ -23,9 +26,15 @@ def main(argv: list[str] | None = None) -> int:
             grep = argv[i + 1]; i += 2; continue
         if argv[i] == "--tail" and i + 1 < len(argv):
             tail = int(argv[i + 1]); i += 2; continue
+        if argv[i] == "--around" and i + 1 < len(argv):
+            around = int(argv[i + 1]); i += 2; continue
+        if argv[i] == "--offset" and i + 1 < len(argv):
+            offset = int(argv[i + 1]); i += 2; continue
+        if argv[i] == "--count":
+            count = True; i += 1; continue
         rest.append(argv[i]); i += 1
     if len(rest) != 1 or not rest[0].startswith("http"):
-        print("usage: team-fetch <url> [--grep TEXT] [--tail N]", file=sys.stderr)
+        print("usage: team-fetch <url> [--grep TEXT [--around N] [--count]] [--tail N] [--offset K]", file=sys.stderr)
         return 2
     url = rest[0]
     allowed = [h.strip().lower() for h in os.environ.get("TEAM_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -57,6 +66,20 @@ def main(argv: list[str] | None = None) -> int:
         if k in headers:
             print(f"{k}: {headers[k]}")
     print()
+    if grep and (around is not None or count):
+        low, needle = body.lower(), grep.lower()
+        pos, start = [], low.find(needle)
+        while start != -1:
+            pos.append(start); start = low.find(needle, start + max(1, len(needle)))
+        lines = sum(1 for ln in body.splitlines() if needle in ln.lower())
+        print(f"[grep {grep!r}: {len(pos)} matches in {lines} lines of {len(body)} chars]")
+        if count:
+            return 0
+        for n, p in enumerate(pos[:40], 1):
+            a = max(0, p - around)
+            print(f"--- match {n} at char {p} ---")
+            print(body[a:p + len(grep) + around])
+        return 0
     if grep:
         hits = [ln for ln in body.splitlines() if grep.lower() in ln.lower()]
         print(f"[grep {grep!r}: {len(hits)} matching lines of {len(body)} chars]")
@@ -66,9 +89,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[tail: last {tail} of {len(body)} chars]")
         print(body[-tail:])
         return 0
-    print(body[:max_body])
-    if len(body) > max_body:
-        print(f"\n… [cut: {len(body) - max_body} more chars; use --grep TEXT or --tail N to see the rest, or fetch a JSON address]")
+    chunk = body[offset:offset + max_body]
+    print(chunk)
+    rest_chars = len(body) - offset - len(chunk)
+    if rest_chars > 0:
+        print(f"\n… [cut: {rest_chars} more chars after char {offset + len(chunk)}; use --offset K, --grep TEXT [--around N] or --tail N to see the rest, or fetch a JSON address]")
     return 0
 
 
