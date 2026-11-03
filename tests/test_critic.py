@@ -74,3 +74,39 @@ def test_disabled_or_missing_dir(tmp_path: Path) -> None:
     st.raw["external_critic"] = {"enabled": True, "dir": str(tmp_path / "nope")}
     assert critic.ingest(st, p, s, [p]) == 0
     s.close()
+
+
+TECH = """# Отчёт
+
+**Вердикт:** без изменений.
+
+**Release Radar**
+
+**RR-01 · P1 · подтверждено снова.** Факт: среди 16 флагов остаются исправления. Источники: [главная](https://releases.formachines.ai/).
+
+**RR-02 · P2 · визуально не проверено повторно.** Текст.
+
+**Luz Amanhã**
+
+**LU-01 · P1 · подтверждено снова.** На 04.11 перечислены 24 позиции.
+
+**Социальные каналы**
+
+| Канал | Наблюдение | Фидбэк |
+|---|---|---|
+| [Telegram Radar](https://t.me/s/relesae_radar) | 2 подписчика | Отбирать пример по пользе |
+| [Bluesky](https://bsky.app/profile/formachines.bsky.social) | 7 постов | Текст обрезан |
+"""
+
+
+def test_parse_technical_format_and_channel_rows() -> None:
+    fs = critic.parse_report(TECH, {})
+    assert [f.id for f in fs] == ["RR-01", "RR-02", "LU-01"]
+    assert fs[0].slug == "release-radar" and fs[0].title == "подтверждено снова." and fs[0].body.startswith("Факт:")
+    assert fs[0].heading == "Release Radar" and "Luz" not in fs[1].body      # the bold section line ends RR-02
+    assert fs[2].slug == "luz-amanha"
+    rows = critic.parse_channel_rows(TECH)
+    assert [r["channel"] for r in rows] == ["Telegram Radar", "Bluesky"]
+    assert rows[0]["slug"] == "release-radar" and rows[1]["slug"] is None and rows[0]["text"] == "2 подписчика — Отбирать пример по пользе"
+    c = critic.channel_card(rows[0], "r.md", "critic")
+    assert c["fingerprint"] == "critic:channel:telegram-radar" and c["url"].startswith("https://t.me")

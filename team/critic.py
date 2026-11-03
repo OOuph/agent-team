@@ -24,8 +24,13 @@ from .store import Store
 
 log = logging.getLogger("team.critic")
 
-FINDING_RE = re.compile(r"^\*\*([A-Z]{2,6}-([A-Z]{2,4})-\d{2,3})\s*·\s*(P\d)\s*·\s*(.+?)\*\*\s*(.*)$", re.M)
-HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.M)
+# `**TXT-RR-01 · P2 · title**` and `**RR-01 · P1 · title.** body…` (optional family prefix; title may close with a period)
+FINDING_RE = re.compile(r"^\*\*((?:[A-Z]{2,6}-)?([A-Z]{2,4})-\d{2,3})\s*·\s*(P\d)\s*·\s*(.+?)\*\*\s*(.*)$", re.M)
+# section = a markdown heading of any depth, or a whole line in bold without "·" (the technical report uses `**Release Radar**`)
+HEADING_RE = re.compile(r"^(?:#{2,4}\s+(.+?)|\*\*([^*·\n]{2,60})\*\*)\s*$", re.M)
+# channel rows of the social table: `| [Telegram Radar](url) | observation | feedback |`
+CHANNEL_ROW_RE = re.compile(r"^\|\s*\[([^\]]+)\]\((https?://[^)\s]+)\)\s*\|(.+)\|\s*$", re.M)
+CHANNEL_KEYS = {"radar": "release-radar", "tracker": "agentsmd-tracker", "luz": "luz-amanha", "команд": "agent-team-diary", "team": "agent-team-diary"}
 LINK_RE = re.compile(r"\((https?://[^)\s]+)\)")
 MAX_DETAIL = 2500
 MAX_FALLBACK = 1800
@@ -92,7 +97,7 @@ def _slug_for_heading(heading: str, hosts: dict[str, str]) -> str | None:
 def parse_report(text: str, hosts: dict[str, str] | None = None) -> list[Finding]:
     """Findings with their section heading and the product they concern (by id token, heading, or a host in the body)."""
     hosts = hosts or {}
-    heads = [(m.start(), m.group(1)) for m in HEADING_RE.finditer(text)]
+    heads = [(m.start(), (m.group(1) or m.group(2) or "").strip()) for m in HEADING_RE.finditer(text)]
     finds = list(FINDING_RE.finditer(text))
     out: list[Finding] = []
     for i, m in enumerate(finds):
@@ -119,6 +124,28 @@ def parse_report(text: str, hosts: dict[str, str] | None = None) -> list[Finding
         out.append(Finding(id=m.group(1), priority=m.group(3), title=" ".join(m.group(4).split())[:120], body=body[:MAX_DETAIL],
                            heading=heading, slug=slug, url=links[0] if links else None, links=links[:5]))
     return out
+
+
+def parse_channel_rows(text: str) -> list[dict[str, Any]]:
+    """Rows of the social-channel table: channel name, link, the rest of the row (observation | feedback)."""
+    out = []
+    for m in CHANNEL_ROW_RE.finditer(text):
+        name, url, rest = m.group(1).strip(), m.group(2), m.group(3)
+        if name.lower() in ("канал", "channel"):
+            continue
+        cells = [c.strip() for c in rest.split("|") if c.strip()]
+        low = name.lower()
+        slug = next((s for k, s in CHANNEL_KEYS.items() if k in low), None)
+        out.append({"channel": name, "url": url, "text": " — ".join(cells)[:MAX_DETAIL], "slug": slug})
+    return out
+
+
+def channel_card(row: dict[str, Any], report_name: str, author: str) -> dict[str, Any]:
+    key = re.sub(r"[^a-z0-9]+", "-", row["channel"].lower()).strip("-")
+    return {"title": f"[критик, канал {row['channel']}] {row['text']}"[:140], "classification": "feedback", "source": "external-critic",
+            "author": author[:80], "url": row["url"], "fingerprint": f"critic:channel:{key}", "detail": row["text"], "report": report_name,
+            "section": "Социальные каналы",
+            "note": "Строка таблицы каналов внешнего критика: наблюдение и фидбэк по каналу; для маркетолога и PO."}
 
 
 def card(f: Finding, report_name: str, author: str) -> dict[str, Any]:
@@ -155,12 +182,17 @@ def ingest(st: Settings, product: Product, store: Store, all_products: list[Prod
             log.warning("critic report %s unreadable: %s", f.name, exc)
             continue
         findings = parse_report(text, hosts)
+        rows = parse_channel_rows(text)
         mine = [x for x in findings if (x.slug or default_slug) == product.slug]
-        if not findings and product.slug == default_slug:
+        my_rows = [r for r in rows if (r["slug"] or default_slug) == product.slug]
+        if not findings and not rows and product.slug == default_slug:
             store.add_observation(fallback_card(text, f.name, author))
             n += 1
         for x in mine:
             store.add_observation(card(x, f.name, author))
+            n += 1
+        for r in my_rows:
+            store.add_observation(channel_card(r, f.name, author))
             n += 1
         seen.setdefault(f.name, []).append(product.slug)
         log.info("%s: critic report %s → %d card(s)", product.slug, f.name, len(mine))
