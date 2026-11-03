@@ -75,6 +75,8 @@ def test_narrative_text_and_prompt(tmp_path: Path) -> None:
     led = report.ledger(st, [p], 12)
     txt = report.narrative_text({"headline": "H", "roles": [{"role": "developer", "text": "Я сделал."}], "po": "Выбрали X."}, led)
     assert txt.startswith("🗂 H") and "РАЗРАБОТЧИК" in txt and "МЕНЕДЖЕР ПРОДУКТА" in txt and "**" not in txt
+    assert "Без результата за окно: Аналитик — нет данных" in report.narrative_text({"headline": "H", "roles": [], "po": "P", "quiet": "Аналитик — нет данных"}, led)
+    assert "Номера задач" in report.reporter_prompt(led) and "quiet" in report.reporter_prompt(led)
     big = {**led, "products": [{"product": "x", "name": "x", "site": "", "po": {"created": [], "decisions": {}, "answers": 0, "closed": [], "implemented": [], "owner_questions": []},
                                 "dispatcher": {"merged": [], "duplicates_skipped": 0, "phase_errors": 0, "posts": []}, "spend_usd": {},
                                 "roles": {"developer": {"tasks": [{"id": f"T-{i:04d}", "title": "t", "state": "done", "result": "r" * 500, "moves": ["a→b"]} for i in range(40)], "items": []}}}]}

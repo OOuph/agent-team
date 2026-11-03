@@ -2,22 +2,59 @@
  "title": "role-report",
  "type": "object",
  "additionalProperties": false,
- "required": ["headline", "roles", "po"],
+ "required": [
+  "headline",
+  "roles",
+  "po"
+ ],
  "properties": {
-  "headline": {"type": "string", "maxLength": 300, "description": "one line: the main event of the window and the total spend"},
+  "headline": {
+   "type": "string",
+   "maxLength": 200,
+   "description": "one line: the main event of the window and the total spend"
+  },
   "roles": {
    "type": "array",
    "maxItems": 10,
    "items": {
     "type": "object",
     "additionalProperties": false,
-    "required": ["role", "text"],
+    "required": [
+     "role",
+     "text"
+    ],
     "properties": {
-     "role": {"type": "string", "enum": ["developer", "marketer", "analyst", "reviewer", "editor", "support", "framework-retro", "persona", "geo-probe"]},
-     "text": {"type": "string", "maxLength": 900, "description": "first person, by product, what was taken / what came out / what is stuck and why"}
+     "role": {
+      "type": "string",
+      "enum": [
+       "developer",
+       "marketer",
+       "analyst",
+       "reviewer",
+       "editor",
+       "support",
+       "framework-retro",
+       "persona",
+       "geo-probe"
+      ]
+     },
+     "text": {
+      "type": "string",
+      "maxLength": 600,
+      "description": "first person, by product, what was taken / what came out / what is stuck and why"
+     }
     }
    }
   },
-  "po": {"type": "string", "maxLength": 1200, "description": "what was chosen (decisions, created and closed tasks) and what got implemented (accepted tasks), by product; owner questions on a separate line"}
+  "po": {
+   "type": "string",
+   "maxLength": 700,
+   "description": "what was chosen (decisions, created and closed tasks) and what got implemented (accepted tasks), by product; owner questions on a separate line"
+  },
+  "quiet": {
+   "type": "string",
+   "maxLength": 400,
+   "description": "one line for roles that have nothing to show this window: 'Role — reason in five words; Role — reason'"
+  }
  }
 }
