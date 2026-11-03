@@ -40,3 +40,11 @@ def test_offset(monkeypatch):
     body = "a" * 30000 + "START" + "z" * 100
     out = run(monkeypatch, body, ["--offset", "30000"])
     assert "START" in out and "aaaa" not in out
+
+
+def test_json_path_count_and_keys(monkeypatch):
+    body = '{"releases": [{"tag": "a"}, {"tag": "b"}], "meta": {"x": 1, "y": 2}}'
+    assert run(monkeypatch, body, ["--json-path", "releases", "--count"]).strip().endswith("\n2")
+    assert run(monkeypatch, body, ["--json-path", "releases[1].tag"]).strip().endswith("b")
+    assert run(monkeypatch, body, ["--json-path", "meta", "--json-keys"]).strip().endswith('["x", "y"]')
+    assert run(monkeypatch, body, ["--json-keys"]).strip().endswith('["releases", "meta"]')

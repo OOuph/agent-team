@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0018: `team-fetch` gets `--json-path a.b[0].c` (prints the value, or its length with `--count`) and `--json-keys`, so roles read counts from JSON without pipes; flags listed in the editor and marketer cards (F-0038, F-0039, F-0040, F-0041, F-0072).
 - PO rule: a new tool (channel, flag, data file) is tried the day it becomes available — first real use in the next cycle, not in the weekly plan days later (owner 03.11: Mastodon/X/Threads were live since the morning but the first posts were planned for 04–06.11).
 - T-0017: dispatcher fallback for `repo_only` — if the developer's `how_to_verify` lists only `raw.githubusercontent.com` URLs, `review_task` sets `repo_only` on the task before the review, so the reviewer gets the read-only checkout (F-0046, F-0048, F-0053, F-0055, F-0062, F-0058). The PO flag itself came with T-0015.
 - T-0016: marketer card — `dry_run: true` in draft mode and missing post URLs are the expected flow and are never reported as friction (F-0071, F-0073, F-0074). Card text only; SCHEME.md unchanged.
