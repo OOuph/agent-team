@@ -85,3 +85,12 @@ def test_narrative_text_and_prompt(tmp_path: Path) -> None:
     pr = report.reporter_prompt(led)
     assert "ВЕДОМОСТЬ" in pr and "Только факты" in pr and "премия" in pr
     assert "премия" not in report.reporter_prompt(led, "plain") and "Только факты" in report.reporter_prompt(led, "plain")
+
+
+def test_narrative_problems_catch_placeholders() -> None:
+    ok = {"headline": "Принято 36 задач по пяти продуктам, расход $22.", "roles": [{"role": "developer", "text": "Я вывел на сайт страницы по языкам и разметку; MCP-сервер пока не подтверждён ревьюером."}], "po": "Направил команду на разметку и обратную связь, принято 36 задач, два вопроса владельцу."}
+    assert report.narrative_problems(ok) == []
+    bad = {**ok, "roles": [{"role": "developer", "text": "x"}, {"role": "marketer", "text": " ... "}]}
+    pr = report.narrative_problems(bad)
+    assert len(pr) == 2 and pr[0].startswith("role developer")
+    assert report.narrative_problems({**ok, "po": "короткий"}) == ["po too short"]

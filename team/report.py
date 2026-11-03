@@ -334,8 +334,29 @@ def reporter_prompt(led: dict[str, Any], style: str = DEFAULT_STYLE) -> str:
             "Ниже ведомость (JSON) — всё, что команда ролей сделала за окно, по продуктам. Напиши отчёт владельцу в Telegram.\n\n"
             "## ПРАВИЛА\n" + rules +
             "- Только факты из ведомости. Ни одного числа, названия, ссылки или причины, которых в ней нет. Если роль ничего не "
-            "завершила — так и написать. Без обещаний на будущее.\n\n"
+            "завершила — так и написать. Без обещаний на будущее.\n"
+            "- Порядок работы: сначала напиши весь отчёт обычным текстом, затем передай те же абзацы в структурированный вывод. "
+            "Каждое поле — полным текстом; заглушки вроде «x» недопустимы, такой отчёт отбрасывается.\n\n"
             "## ВЕДОМОСТЬ\n```json\n" + body + "\n```\n")
+
+
+MIN_SECTION_CHARS = 60
+_PLACEHOLDER = re.compile(r"^\W*(x+|tbd|todo|\.{1,3}|-+)?\W*$", re.I)
+
+
+def narrative_problems(n: dict[str, Any]) -> list[str]:
+    """Why a structured report is not publishable: placeholders ('x') or empty sections. The first live run of the short
+    style returned 'x' for every role and went out to Telegram; nothing with these defects is sent again."""
+    out = []
+    if len(str(n.get("headline") or "").strip()) < 20:
+        out.append("headline too short")
+    for sec in n.get("roles") or []:
+        t = str(sec.get("text") or "").strip()
+        if len(t) < MIN_SECTION_CHARS or _PLACEHOLDER.match(t):
+            out.append(f"role {sec.get('role')}: placeholder or {len(t)} chars")
+    if len(str(n.get("po") or "").strip()) < MIN_SECTION_CHARS:
+        out.append("po too short")
+    return out
 
 
 def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, book_store: Store | None, style: str = DEFAULT_STYLE) -> dict[str, Any] | None:
@@ -343,17 +364,30 @@ def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, bo
     work_dir.mkdir(parents=True, exist_ok=True)
     prompt = reporter_prompt(led, style)
     (work_dir / "prompt.md").write_text(prompt, encoding="utf-8")
-    run_id = "report-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
     model = (st.claude.get("models") or {}).get("reporter")
-    rr = runner.run("reporter", prompt, schema("role-report"), max_usd=REPORT_RUN_CAP_USD, cwd=work_dir, model=str(model) if model else None,
-                    allowed_tools=[], run_dir=work_dir, run_id=run_id, max_turns=REPORT_MAX_TURNS)
-    if book_store is not None:
-        cost = rr.cost_usd if rr.cost_usd is not None else float(st.budget.get("unknown_cost_reserve_usd", 0.5))
-        book_store.book_spend(run_id, "reporter", cost, rr.cost_usd is not None)
-    if not (rr.ok and rr.structured):
-        log.warning("reporter run failed: %s", rr.error)
-        return None
-    return rr.structured
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
+    for attempt in (1, 2):
+        run_id = f"report-{stamp}" + ("" if attempt == 1 else "-retry")
+        rd = work_dir if attempt == 1 else work_dir / "retry"
+        rd.mkdir(parents=True, exist_ok=True)
+        rr = runner.run("reporter", prompt, schema("role-report"), max_usd=REPORT_RUN_CAP_USD, cwd=rd, model=str(model) if model else None,
+                        allowed_tools=[], run_dir=rd, run_id=run_id, max_turns=REPORT_MAX_TURNS)
+        if book_store is not None:
+            cost = rr.cost_usd if rr.cost_usd is not None else float(st.budget.get("unknown_cost_reserve_usd", 0.5))
+            book_store.book_spend(run_id, "reporter", cost, rr.cost_usd is not None)
+        if not (rr.ok and rr.structured):
+            log.warning("reporter run failed (attempt %d): %s", attempt, rr.error)
+            problems = ["run failed"]
+        else:
+            problems = narrative_problems(rr.structured)
+            if not problems:
+                return rr.structured
+        log.warning("reporter output rejected (attempt %d): %s", attempt, "; ".join(problems))
+        (rd / "rejected.json").write_text(json.dumps({"problems": problems, "structured": rr.structured}, ensure_ascii=False, indent=1), encoding="utf-8")
+        prompt = reporter_prompt(led, style) + ("\n\n## ПОВТОР\nПредыдущая попытка вернула заглушки вместо текста (" + "; ".join(problems) +
+                                                "). Сначала напиши весь отчёт обычным текстом в ответе, затем передай те же абзацы в "
+                                                "структурированный вывод — каждое поле полным текстом, без «x» и сокращений.\n")
+    return None
 
 
 def narrative_text(n: dict[str, Any], led: dict[str, Any]) -> str:
