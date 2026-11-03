@@ -16,6 +16,8 @@ class R:
 def run(monkeypatch, body, args):
     monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: R(body))
     monkeypatch.setenv("TEAM_PAUSE", "0")
+    monkeypatch.delenv("TEAM_ALLOWED_HOSTS", raising=False)
+    monkeypatch.delenv("TEAM_TRACE_FILE", raising=False)
     buf = io.StringIO()
     with contextlib.redirect_stdout(buf):
         assert fetch.main(["http://x.test/"] + args) == 0
