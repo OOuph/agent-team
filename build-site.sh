@@ -17,7 +17,15 @@ SLUG="${1:?slug}"; shift
 BUILD_ARGS=("$@")
 BUILDS_DIR="${BUILDS_DIR:-$ROOT/builds}"
 TIMEOUT_S="${TIMEOUT_S:-3000}"            # hard cap on one build.py run
-ATTEMPTS="${ATTEMPTS:-2}"                 # build → push; on a lost race: rebuild on the new main once more
+ATTEMPTS="${ATTEMPTS:-3}"                 # push attempts; a lost race never repeats the scan (see RENDER_ONLY)
+# After a lost push race the scan is kept: data/ (the scan cache — the truth) is saved, the clone is reset to the new
+# main, data/ is put back and the site is re-rendered WITHOUT network with the product's render-only flag (seconds), then
+# pushed again. Before 03.11 the whole build was repeated from scratch and 40 min of scanning were thrown away.
+case "$SLUG" in
+  agentsmd-tracker) RENDER_ONLY="${RENDER_ONLY:---no-scan}" ;;
+  release-radar|luz-amanha) RENDER_ONLY="${RENDER_ONLY:---offline}" ;;
+  *) RENDER_ONLY="${RENDER_ONLY:-}" ;;
+esac
 PY="${PY:-python3}"
 LOG="$ROOT/data/builds.log"
 mkdir -p "$BUILDS_DIR" "$ROOT/data"
@@ -60,29 +68,43 @@ if [ ! -d "$DIR/.git" ]; then
 fi
 cd "$DIR" || fail "no dir"
 
-for attempt in $(seq 1 "$ATTEMPTS"); do
-  "${GIT[@]}" fetch -q origin "$BRANCH" || fail "fetch failed"
-  git reset -q --hard "origin/$BRANCH" && git clean -qfd || fail "reset failed"
-  base=$(git rev-parse --short HEAD)
-  log "attempt $attempt: build on $base: $PY build.py ${BUILD_ARGS[*]:-}"
-  t0=$(date +%s)
-  timeout "$TIMEOUT_S" "$PY" build.py "${BUILD_ARGS[@]}" >> "$BUILDS_DIR/$SLUG.out" 2>&1
-  rc=$?
-  log "build.py rc=$rc in $(( $(date +%s) - t0 ))s (log: builds/$SLUG.out)"
-  [ "$rc" -eq 0 ] || fail "build.py rc=$rc (timeout ${TIMEOUT_S}s = rc 124)"
+"${GIT[@]}" fetch -q origin "$BRANCH" || fail "fetch failed"
+git reset -q --hard "origin/$BRANCH" && git clean -qfd || fail "reset failed"
+base=$(git rev-parse --short HEAD)
+log "build on $base: $PY build.py ${BUILD_ARGS[*]:-}"
+t0=$(date +%s)
+timeout "$TIMEOUT_S" "$PY" build.py "${BUILD_ARGS[@]}" >> "$BUILDS_DIR/$SLUG.out" 2>&1
+rc=$?
+log "build.py rc=$rc in $(( $(date +%s) - t0 ))s (log: builds/$SLUG.out)"
+[ "$rc" -eq 0 ] || fail "build.py rc=$rc (timeout ${TIMEOUT_S}s = rc 124)"
+
+commit_and_push() {   # $1 = label; returns 0 when pushed or nothing to push, 1 when the push lost the race
   git add -A data public 2>/dev/null
-  if git diff --cached --quiet; then log "no changes to commit"; exit 0; fi
-  n=$(git diff --cached --name-only | wc -l)
+  if git diff --cached --quiet; then log "$1: no changes to commit"; return 0; fi
+  local n; n=$(git diff --cached --name-only | wc -l)
   "${GIT[@]}" commit -q -m "build: $(date -u +%Y-%m-%d\ %H:%M) UTC (cron, $n files)" || fail "commit failed"
-  if "${GIT[@]}" push -q origin "HEAD:$BRANCH"; then
-    log "pushed $(git rev-parse --short HEAD) ($n files)"; exit 0
-  fi
-  log "push rejected (main moved); rebasing"
+  if "${GIT[@]}" push -q origin "HEAD:$BRANCH"; then log "$1: pushed $(git rev-parse --short HEAD) ($n files)"; return 0; fi
+  return 1
+}
+
+for attempt in $(seq 1 "$ATTEMPTS"); do
+  commit_and_push "attempt $attempt" && exit 0
+  log "attempt $attempt: push rejected (main moved); rebasing"
   "${GIT[@]}" fetch -q origin "$BRANCH"
   if "${GIT[@]}" rebase -q "origin/$BRANCH" && "${GIT[@]}" push -q origin "HEAD:$BRANCH"; then
-    log "pushed after rebase $(git rev-parse --short HEAD)"; exit 0
+    log "attempt $attempt: pushed after rebase $(git rev-parse --short HEAD)"; exit 0
   fi
   git rebase --abort 2>/dev/null
-  log "rebase did not apply; rebuilding on the new main"
+  # keep the scan: save data/, take the new main, put data/ back, re-render without network
+  keep=$(mktemp -d "$BUILDS_DIR/$SLUG.keep.XXXX")
+  cp -a data "$keep/" || fail "could not save data/"
+  git reset -q --hard "origin/$BRANCH" && git clean -qfd || fail "reset failed"
+  rm -rf data && cp -a "$keep/data" data && rm -rf "$keep"
+  if [ -n "$RENDER_ONLY" ]; then
+    log "attempt $attempt: re-rendering on $(git rev-parse --short HEAD) with $RENDER_ONLY (scan kept)"
+    timeout 600 "$PY" build.py $RENDER_ONLY >> "$BUILDS_DIR/$SLUG.out" 2>&1 || fail "render-only build failed"
+  else
+    log "attempt $attempt: no render-only flag for $SLUG; committing the kept data/ and public/ as built"
+  fi
 done
 fail "could not push after $ATTEMPTS attempts"
