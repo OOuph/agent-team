@@ -212,3 +212,16 @@ def test_posts_table_migration_and_text(tmp_path: Path):
 def test_metrics_md_lists_by_src():
     md = metrics_md({"host": "demo", "generated": "now", "days": {}, "totals": {"by_src": {"bluesky": {"human_sources": 3, "engaged_sources": 1, "requests": 9}}}})
     assert "Visits by ?src=" in md and "bluesky: 3/1/9" in md
+
+
+def test_po_repo_only_is_kept(tmp_path: Path):
+    schema = json.loads((Path(__file__).parent.parent / "team" / "schemas" / "po-decision.schema.json").read_text(encoding="utf-8"))
+    task = {"title": "tests", "type": "feature", "problem": "p", "scope": "mcp/", "acceptance": ["tests under mcp/ pass"],
+            "negative_cases": [], "goal": "G1", "priority": "P2", "size": "S", "role": "developer", "repo_only": True}
+    decision = {"decisions": [], "answers": [], "ready_tasks": [task], "owner_questions": [], "no_new_tasks": False, "digest_md": "ok"}
+    jsonschema.validate(decision, schema)
+    p = _product(_settings(tmp_path))
+    Cycle(_settings(tmp_path), p, FakeRunner(), "c1").apply_po(decision, [])
+    s = Store(p.dir)
+    assert s.tasks()[0]["repo_only"] is True
+    s.close()

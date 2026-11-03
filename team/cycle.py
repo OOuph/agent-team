@@ -427,10 +427,13 @@ class Cycle:
                 self.store.event("task.duplicate_skipped", dup["id"], "po", {"title": rt["title"][:140], "not_before": rt.get("not_before")})
                 skipped.append(f"{rt['title'][:80]} → already open as {dup['id']}")
                 continue
-            self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
+            new = self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
                                    not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer")
+            if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
+                new["repo_only"] = True
+                self.store.save_task(new)
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         digest = res.get("digest_md", "")

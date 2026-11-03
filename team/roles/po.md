@@ -65,6 +65,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   tests, README) require the developer to publish a readable artefact (README or source under `public/`, or a link to a
   public GitHub blob) and cite that URL in the criterion itself. A criterion that needs a checkout or a running process
   is not a valid criterion (F-0042, F-0043, F-0046, F-0047, F-0048, F-0049).
+- `repo_only: true` (F-0046, F-0048, F-0053, F-0055, F-0062): set it on a ready task whose acceptance criteria name repo
+  files the site does not serve (`mcp/`, tests, README, code). The reviewer then gets a read-only checkout of the merged
+  commit and can run the tests; without the flag it returns inconclusive. Omit it when every criterion is checkable on the
+  live site.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
