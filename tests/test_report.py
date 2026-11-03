@@ -27,10 +27,11 @@ def test_ledger_and_text(tmp_path: Path, monkeypatch) -> None:
     s = Store(p.dir)
     t = s.create_task(title="Add about page", type_="content", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po",
                       state="ready", priority="P1")
-    s.claim(t["id"], "developer", "20261103T0407-exec-T-0001")
+    run_id = report.datetime.now(report.timezone.utc).strftime("%Y%m%dT%H%M") + "-exec-T-0001"   # a stamp inside the window
+    s.claim(t["id"], "developer", run_id)
     s.transition(t["id"], "claimed", "developer")
     s.transition(t["id"], "in_progress", "developer")
-    s.add_result(t["id"], {"status": "done", "summary": "About page added with the footer.", "run_id": "20261103T0407-exec-T-0001"})
+    s.add_result(t["id"], {"status": "done", "summary": "About page added with the footer.", "run_id": run_id})
     s.transition(t["id"], "review", "developer")
     s.add_review(t["id"], {"verdict": "pass", "criteria": [{"criterion": "x", "met": True}]}, "r1")
     s.transition(t["id"], "accepted", "reviewer")
@@ -42,7 +43,7 @@ def test_ledger_and_text(tmp_path: Path, monkeypatch) -> None:
     s.ask(from_="po", to="owner", question="add channel X?")
     o = s.add_observation({"title": "no JSON-LD", "classification": "reproducible_defect", "source": "seocheck", "fingerprint": "f1"})
     s.update_observation(o["id"], status="triaged", decision={"action": "create_task", "cycle": report.datetime.now(report.timezone.utc).strftime("%Y%m%dT%H%M")})
-    s.book_spend("20261103T0407-exec-T-0001", "developer", 0.42, True)
+    s.book_spend(run_id, "developer", 0.42, True)
     s.close()
 
     led = report.ledger(st, [p], 12)

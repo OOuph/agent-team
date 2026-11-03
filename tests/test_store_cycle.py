@@ -300,3 +300,13 @@ def test_deputy_skips_in_dry_run(tmp_path: Path):
     s.close()
     cy = Cycle(st, p, FakeRunner(), "c1", dry_run=True)
     assert deputy.run_for_product(cy) == 0 and cy.runner.calls == []
+
+
+def test_duplicate_slot_distinguishes_channels():
+    from team import cycle as C
+    base = {"role": "marketer", "not_before": "2026-11-03T16:00:00Z"}
+    open_tasks = [{"id": "T-1", "title": "X trial post today: one fact", **base}]
+    assert C.duplicate_task(open_tasks, {"title": "Threads trial post today: one fact", **base}) is None
+    assert C.duplicate_task(open_tasks, {"title": "X post today, another angle", **base})["id"] == "T-1"
+    assert C.duplicate_task(open_tasks, {"title": "Daily post today", **base})["id"] == "T-1"      # no channel named → same slot
+    assert C._channels_in("Mastodon trial post 1") == frozenset({"mastodon"}) and C._channels_in("Threads post") == frozenset({"threads"})

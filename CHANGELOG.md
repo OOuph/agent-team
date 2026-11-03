@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Task dedup: two posts for different channels at the same `not_before` are two slots (a Threads trial was dropped as a duplicate of an X trial, 16:13). Framework VISION: merge wording aligned with decision 24a (critic FW-02, Q-0005).
 - SCHEME §10 «Внешний критик»: contract, place in the loop, role as the independent verifier of 'done', the measure of its value and its limits; the 12-hour role report counts critic cards per product (PO decisions, tasks created) and critic reports by finding status.
 - Critic: JSON twin (`<report>.json`, REPORT_FORMAT.md §2) is the machine source when present; `fixed`/`unverified` findings make no card; `agent-team-responses.json` is written to the critic's context dir after every `cycle --product all` with the PO decision and task per finding id.
 - Droplet metrics: the external critic's user agent `FormachinesExternalCritic/` counts as own traffic (with `agent-team/`), not as an agent.

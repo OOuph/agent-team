@@ -967,19 +967,35 @@ def _norm_ts(s: Any) -> str:
     return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M") if d else ""
 
 
+CHANNEL_WORDS = ("telegram", "bluesky", "mastodon", "threads", "devto", "dev.to", "x post", "x trial", " x ", "x:", "twitter")
+
+
+def _channels_in(title: str) -> frozenset[str]:
+    low = " " + str(title or "").lower() + " "
+    out = set()
+    for w in CHANNEL_WORDS:
+        if w in low:
+            out.add("x" if w.startswith("x") or w == " x " or w == "twitter" else ("devto" if w in ("devto", "dev.to") else w))
+    return frozenset(out)
+
+
 def duplicate_task(open_tasks: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, Any] | None:
     """The open task a proposed ready task duplicates, or None.
 
-    Same normalized title → duplicate. Same role and the same `not_before` moment → duplicate too: a scheduled post is one
-    slot, and the PO wrote the same slot under a slightly different title in every cycle (luz-amanha T-0006/T-0011,
-    release-radar T-0009/T-0012/T-0015 on 03.11)."""
+    Same normalized title → duplicate. Same role, the same `not_before` moment and the same channel(s) named in the
+    title → duplicate too: a scheduled post is one slot, and the PO wrote the same slot under a slightly different title in
+    every cycle (luz-amanha T-0006/T-0011, release-radar T-0009/T-0012/T-0015 on 03.11). Two posts for DIFFERENT channels
+    at one moment are two slots (16:13: a Threads trial was dropped as a duplicate of an X trial at the same minute)."""
     title = _norm_title(rt.get("title"))
     nb = _norm_ts(rt.get("not_before"))
+    ch = _channels_in(rt.get("title", ""))
     for t in open_tasks:
         if title and _norm_title(t.get("title")) == title:
             return t
         if nb and t.get("role") == rt.get("role") and _norm_ts(t.get("not_before")) == nb:
-            return t
+            tch = _channels_in(t.get("title", ""))
+            if not ch or not tch or ch & tch:
+                return t
     return None
 
 
