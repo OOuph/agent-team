@@ -134,3 +134,16 @@ def test_po_prompt_has_answers_and_framework_context(tmp_path: Path) -> None:
     assert "ALREADY ANSWERED" in txt and "decision 18" in txt
     assert "FRAMEWORK CONTEXT" in txt and "tool_denied" in txt and "do not ask the owner whether it does" in txt
     s.close()
+
+
+def test_answer_with_not_before_reschedules(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    q = s.ask(from_="marketer", to="po", question="data not published yet", task_id=t["id"])
+    assert s.task(t["id"])["state"] == "blocked"
+    s.answer(q["id"], "wait for the scan", "po", not_before="2099-01-01T04:15:00+00:00")
+    t2 = s.task(t["id"])
+    assert t2["state"] == "ready" and t2["not_before"] == "2099-01-01T04:15:00+00:00"
+    s.close()

@@ -142,8 +142,8 @@ def cmd_ask(st: C.Settings, a: argparse.Namespace) -> int:
 def cmd_answer(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
-    q = s.answer(a.id, a.text, a.by)
-    print(f"{q['id']} answered; unblocked: {q.get('blocks')}")
+    q = s.answer(a.id, a.text, a.by, not_before=getattr(a, "not_before", None))
+    print(f"{q['id']} answered; unblocked: {q.get('blocks')}" + (f" (not before {a.not_before})" if getattr(a, "not_before", None) else ""))
     s.close()
     return 0
 
@@ -235,7 +235,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("ask"); s.add_argument("product"); s.add_argument("--from", dest="frm", default="owner"); s.add_argument("--to", default="po")
     s.add_argument("--text", required=True); s.add_argument("--task"); s.set_defaults(fn=cmd_ask)
     s = sub.add_parser("answer"); s.add_argument("product"); s.add_argument("id"); s.add_argument("--text", required=True)
-    s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_answer)
+    s.add_argument("--by", default="owner"); s.add_argument("--not-before", dest="not_before"); s.set_defaults(fn=cmd_answer)
     s = sub.add_parser("obs"); s.add_argument("product"); s.add_argument("--title", required=True); s.add_argument("--text", required=True)
     s.add_argument("--class", dest="cls", default="need_hypothesis"); s.add_argument("--url"); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_obs)
     for name in ("stop", "resume"):

@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- PO answers carry `not_before`: a "wait until X" answer reschedules the unblocked task instead of restarting it next
+  cycle (ops finding: agentsmd T-0004 blocked every hour after being answered).
 - `team-fetch`: `--grep TEXT --around N` (window of N chars around each of up to 40 matches), `--count` (number of
   matches/lines), `--offset K` (body from char K within max_body); reviewer card and usage line list them. Eases
   single-line pages (F-0007, F-0010, F-0014, F-0015, F-0018).

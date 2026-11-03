@@ -65,6 +65,11 @@
      "answer": {
       "type": "string",
       "maxLength": 1500
+     },
+     "not_before": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "ISO 8601 UTC: when the answer is 'wait until X' for a dated task, set this and the task will not start before X (otherwise it restarts next cycle and blocks again)"
      }
     }
    }

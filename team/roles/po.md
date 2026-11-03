@@ -36,6 +36,8 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Explain each decision through the user outcome and VISION: "chosen X over Y because …; expected result …; we will
   check …".
 
+- When your answer to a blocked task is "wait until X" (data not published yet, a post for a later hour), put X into the
+  answer's `not_before`; otherwise the task restarts in the next cycle and blocks again with the same question.
 - A task that must not start before a moment (a daily post at a fixed hour, data that appears at a known time) gets
   `not_before` (ISO 8601 UTC); without it the dispatcher starts a ready task in the next cycle, whatever its title says.
 - MUST: a task whose title or text names a future date or hour (e.g. "Daily post 03.11 ~14:00 UTC") has `not_before`

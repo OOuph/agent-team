@@ -268,16 +268,21 @@ class Store:
                 pass
         return q
 
-    def answer(self, qid: str, answer: str, by: str) -> dict[str, Any]:
+    def answer(self, qid: str, answer: str, by: str, not_before: str | None = None) -> dict[str, Any]:
+        """Answer a question; blocked tasks return to ready. `not_before` (ISO UTC) keeps them from restarting before
+        that moment — the fix for 'dated post → blocked → answered → restarted an hour later → blocked again'."""
         p = self._path("Q", qid)
         q = yaml.safe_load(p.read_text(encoding="utf-8"))
         q.update({"state": "answered", "answer": answer[:3000], "answered_by": by, "answered": utcnow()})
         _write(p, q)
-        self.event("question.answer", qid, by, {"answer": answer[:200]})
+        self.event("question.answer", qid, by, {"answer": answer[:200], "not_before": not_before})
         for tid in q.get("blocks") or []:
             t = self.task(tid)
             if t and t.get("state") in ("blocked", "waiting_owner"):
-                self.transition(tid, "ready", by, f"answered {qid}", blocked_by=None)
+                fields = {"blocked_by": None}
+                if not_before:
+                    fields["not_before"] = not_before
+                self.transition(tid, "ready", by, f"answered {qid}" + (f"; not before {not_before}" if not_before else ""), **fields)
         return q
 
     # ------------------------------------------------------------ observations and reviews

@@ -362,7 +362,7 @@ class Cycle:
                 self.store.update_observation(oid, status="triaged", decision={**d, "cycle": self.cycle_id})
         for a in res.get("answers") or []:
             try:
-                self.store.answer(str(a["question_id"]), str(a["answer"]), "po")
+                self.store.answer(str(a["question_id"]), str(a["answer"]), "po", not_before=a.get("not_before"))
             except FileNotFoundError:
                 pass
         for rp in res.get("reprioritize") or []:
