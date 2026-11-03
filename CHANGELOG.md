@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Protected paths reduced to the rollback pair (`run-cycle.sh`, `watchdog.sh`) — owner 03.11: maximum automation during
+  the pilot; `store.py`, `team.yaml`, `build-site.sh`, `deploy/`, `bin/` and the rest now merge by themselves after tests + canary.
 - Daily site builds: `build-site.sh` + cron on the server at the hours each VISION promises (agentsmd 04:00, release-radar
   06:00, luz 13:15/13:45 UTC) — before this no scan or rebuild ran on schedule, sites refreshed only with developer
   merges (found by the ops session 03.11 04:30). Separate clone per site, rebase on a lost push, friction + Telegram on failure.
