@@ -82,12 +82,10 @@ def readonly_checkout(repo_dir: Path, sha: str, dest: Path) -> Path:
     import shutil
     import stat
     if dest.exists():
+        os.chmod(dest, 0o700)
         for r, ds, fs in os.walk(dest):
-            for n in ds + fs:
-                try:
-                    os.chmod(os.path.join(r, n), 0o700 if n in ds else 0o600)
-                except OSError:
-                    pass
+            for n in ds:
+                os.chmod(os.path.join(r, n), 0o700)
         shutil.rmtree(dest, ignore_errors=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
     git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
