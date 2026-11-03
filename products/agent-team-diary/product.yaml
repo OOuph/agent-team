@@ -8,6 +8,7 @@ repo:
   public_dir: public
 channels:
   mastodon: '@formachines@mastodon.social'
+  x: '@formachines_ai'
   telegram: '@formachines_team'
   bluesky: formachines.bsky.social
   devto: formachines
