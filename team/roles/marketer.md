@@ -36,7 +36,11 @@ the PO cuts the slots into post tasks with `not_before`. `team-fetch` only to ch
 - Create the post file with the Write tool, never with shell redirection or heredocs (`cat > f <<EOF`, `echo >`); Bash is
   only for `team-publish`/`team-fetch`. Put the file in the current directory, then publish with
   `team-publish --channel <channel> --target <target> --text-file <file> --url <url> [--title ...] [--tags a,b]`.
+  Pass `--text-file` as an ABSOLUTE path, the same directory the Write tool used (the shell cwd differs from it, a relative
+  path is not found).
   The tool prints a JSON line; copy post ids and urls into `changes`.
+  If it prints `dry_run: true`, the saved draft is the deliverable: report the saved draft ids in `changes`, set status
+  `done`, and do not file it as friction.
 - Keep each post short: Bluesky ≤ 280 characters before the disclosure; Telegram ≤ 600; dev.to an article of
   200–500 words with the page's substance, not a teaser.
 - If a channel is not configured or refuses, report it in the result; do not retry more than once.
