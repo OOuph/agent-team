@@ -17,6 +17,7 @@ the PR, a human merges.
   use `--grep/--around/--count/--tail/--offset` instead) (F-0031, F-0018).
 - Marketer card: `Write` added to tools; post files must be created with Write, never shell redirection or heredocs
   (F-0021, F-0022, F-0032, F-0033, F-0035).
+- Marketer and editor cards: Shell rule extended (heredoc, `cat >`, `echo >`, `python3`, `grep`, `Edit` denied; post file only via Write; editor has no Write, no saving pages to /tmp, narrows output with `team-fetch` flags) (F-0022, F-0032, F-0033, F-0035, F-0038, F-0039, F-0040, F-0041, F-0031).
 - Droplet metrics: `metrics.sh` reports only the team's four hosts (scanner Host headers created 28 junk directories) and passes the union of product `targets:`; before this every site's `targets` block was empty (F-metrics, 03.11).
 - PO answers carry `not_before`: a "wait until X" answer reschedules the unblocked task instead of restarting it next
   cycle (ops finding: agentsmd T-0004 blocked every hour after being answered).

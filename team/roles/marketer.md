@@ -44,4 +44,4 @@ The task-result schema: status, summary, changes (channel: post id, url), how_to
 acceptance criterion, proposals (ideas for the next posts, ≤ 3). English.
 
 ## Shell rule
-The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. `cd`, `;`, `&&`, `for` loops and pipes are denied, so issue one call per URL.
+The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Heredocs, `cat >`, `echo >` and any other shell redirection, `python3` and `Edit` are denied too. The post file is made only with the Write tool (in the current directory), then published with `team-publish`. Issue one call per URL and narrow `team-fetch` output with `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
