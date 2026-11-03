@@ -24,6 +24,12 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - For every new observation choose exactly one action: `link` (to an existing task or observation; name it),
   `needs_evidence` (say what), `create_task` (only with a user outcome, scope, acceptance criteria the reviewer can check
   from outside, and a `goal` from VISION), `defer` (with a return condition) or `reject` (with the reason).
+- `create_task` scope rule: `scope` lists every file or build step the acceptance criteria require, so criteria and
+  scope cannot conflict (a criterion that needs a file outside `scope` is a defect of the card). Before saving, check each
+  criterion against `scope` (F-0082).
+- `create_task` input rule: a task that consumes another task's report names that task and is created only after the
+  report is accepted; otherwise it carries `not_before` after the producer's slot and states a fallback if the input is
+  missing. No hidden dependency on another task's report (F-0083).
 - Priority: P0 broken site or a harmful public statement; P1 blocks a main scenario or breaks a VISION promise;
   P2 improvement with a clear basis and a goal; P3 idea. Never raise priority because a persona sounded upset.
 - Keep WIP low: at most the number of Ready tasks you were asked for; prefer finishing over starting. "No new tasks" is a

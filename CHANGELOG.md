@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0021: PO card `create_task` rules: `scope` must list every file or build step the criteria need; a task that consumes another task's report names it, is created after acceptance or carries `not_before` plus a fallback (F-0082, F-0083).
 - T-0020: a denied Bash call gets the allowed form — `denial_hint()` in `runner.py` (Write tool for files, bare `team-fetch`, `--json-path`/`--count`/`--grep` instead of pipes) is written to the run transcript under «Denied calls»; marketer and editor cards open with the same three-line shell rule (F-0022, F-0031, F-0032, F-0033, F-0038, F-0039, F-0040, F-0041).
 - Task dedup: two posts for different channels at the same `not_before` are two slots (a Threads trial was dropped as a duplicate of an X trial, 16:13). Framework VISION: merge wording aligned with decision 24a (critic FW-02, Q-0005).
 - SCHEME §10 «Внешний критик»: contract, place in the loop, role as the independent verifier of 'done', the measure of its value and its limits; the 12-hour role report counts critic cards per product (PO decisions, tasks created) and critic reports by finding status.
