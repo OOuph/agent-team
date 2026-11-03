@@ -18,7 +18,8 @@ PYTHON="${PYTHON:-python3}"
 # counts 0). Both can be overridden from /etc/agent-team/metrics.env (HOSTS=..., TARGETS=...).
 HOSTS="${HOSTS:-releases.formachines.ai,agentsmd.formachines.ai,luz.bymachines.ai,agentteam.formachines.ai}"
 TARGETS="${TARGETS:-/go/ /go/telegram/ /go/github/ /go/vote/ /go/vote/*/up/ /go/vote/*/down/ /try/ /today.json /tomorrow.json /stats.json /feed.xml /day/ /d/ /repo/ /pkg/ /llms.txt}"
-OWN_IPS="${OWN_IPS:-95.179.139.151}"   # reservememes: the dispatcher's and the ops session's manual curl checks count as 'own'
+OWN_IPS="${OWN_IPS:-95.179.139.151}"
+OWN_UA="${OWN_UA:-agent-team/ FormachinesExternalCritic/}"   # roles and the external critic are the team, not demand   # reservememes: the dispatcher's and the ops session's manual curl checks count as 'own'
 [ -r /etc/agent-team/metrics.env ] && . /etc/agent-team/metrics.env
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -50,6 +51,7 @@ fi
 target_args=()
 for t in $TARGETS; do target_args+=(--target "$t"); done
 for ip in $OWN_IPS; do target_args+=(--own-ip "$ip"); done
+for ua in $OWN_UA; do target_args+=(--own-ua "$ua"); done
 echo "running: $PYTHON $SITEMETRICS --all-hosts --hosts $HOSTS ${target_args[*]} ${log_args[*]} --out $METRICS_DIR/"
 start=$(date +%s)
 "$PYTHON" "$SITEMETRICS" --all-hosts --hosts "$HOSTS" "${target_args[@]}" "${log_args[@]}" --out "$METRICS_DIR/"

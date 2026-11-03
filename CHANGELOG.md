@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Droplet metrics: the external critic's user agent `FormachinesExternalCritic/` counts as own traffic (with `agent-team/`), not as an agent.
 - External critic (`team/critic.py`, `external_critic` in team.yaml): Markdown reports of an outside Codex critic are read every cycle; each `**ID · Pn · title**` finding becomes a `feedback` observation of the product it names, the PO answers with a task or a reasoned reject (owner 03.11).
 - T-0018: `team-fetch` gets `--json-path a.b[0].c` (prints the value, or its length with `--count`) and `--json-keys`, so roles read counts from JSON without pipes; flags listed in the editor and marketer cards (F-0038, F-0039, F-0040, F-0041, F-0072).
 - PO rule: a new tool (channel, flag, data file) is tried the day it becomes available — first real use in the next cycle, not in the weekly plan days later (owner 03.11: Mastodon/X/Threads were live since the morning but the first posts were planned for 04–06.11).
