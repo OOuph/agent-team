@@ -201,3 +201,13 @@ def test_po_duplicate_tasks_skipped_and_close_tasks(tmp_path: Path):
     assert s.task(first["id"])["state"] == "rejected"
     assert C.duplicate_task(s.tasks(C.OPEN_TASK_STATES), {**base, "title": first["title"]}) is None
     s.close()
+
+
+def test_allowed_hosts_by_role(tmp_path: Path):
+    st = _settings(tmp_path)
+    st.raw["fetch"] = {"extra_hosts_by_role": {"reviewer": ["github.com", "raw.githubusercontent.com"]}}
+    p = _product(st)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    assert "raw.githubusercontent.com" in cy._allowed_hosts("reviewer").split(",")
+    assert "raw.githubusercontent.com" not in cy._allowed_hosts("developer").split(",")
+    assert cy._allowed_hosts(None).split(",")[-1] == "dev.to"

@@ -129,6 +129,12 @@ def test_classify_names_and_markers():
     # own prefix list given explicitly replaces the default
     assert sm.classify("agent-team/0.1", "9.9.9.9", "/", own_ua_prefixes=("mybot/",))[0] == "unknown"
     assert sm.classify("mybot/1", "9.9.9.9", "/", own_ua_prefixes=("mybot/",))[0] == "own"
+    sm.OWN_IPS.add("95.179.139.151")
+    try:
+        assert sm.classify("curl/8.5.0", "95.179.139.151", "/", own_ua_prefixes=("mybot/",))[0] == "own"
+        assert sm.classify("curl/8.5.0", "9.9.9.9", "/", own_ua_prefixes=("mybot/",))[0] != "own"
+    finally:
+        sm.OWN_IPS.discard("95.179.139.151")
 
 
 def test_external_referer_and_targets():

@@ -64,6 +64,7 @@ CLASSES: tuple[str, ...] = ("own", "crawler", "scanner", "agent", "human", "unkn
 
 DEFAULT_OWN_UA_PREFIXES: tuple[str, ...] = ("agent-team/",)
 LOOPBACK_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
+OWN_IPS: set[str] = set()      # addresses counted as 'own' whatever the UA (`--own-ip`): the team's servers doing manual checks
 
 # Known crawlers: canonical name -> substring of the UA (matched case-insensitively). Order matters for overlaps.
 CRAWLERS: tuple[tuple[str, str], ...] = (
@@ -305,7 +306,7 @@ def classify(ua: str, ip: str, path: str, own_ua_prefixes: Iterable[str] = DEFAU
     """Return (class, name). ``name`` is the bot for crawlers, the family for agents, '' otherwise."""
     ua = ua or ""
     low = ua.lower()
-    if ip in LOOPBACK_IPS or any(ua.startswith(p) for p in own_ua_prefixes):
+    if ip in LOOPBACK_IPS or ip in OWN_IPS or any(ua.startswith(p) for p in own_ua_prefixes):
         return "own", ""
     for name, needle in CRAWLERS:
         if needle in low:
@@ -715,6 +716,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="target path: '/feed.xml' exact, '/api/' prefix, 'index.json' substring; repeatable")
     p.add_argument("--own-ua", action="append", default=[], metavar="PREFIX",
                    help=f"UA prefix counted as 'own' (default: {', '.join(DEFAULT_OWN_UA_PREFIXES)}); repeatable")
+    p.add_argument("--own-ip", action="append", default=[], metavar="IP",
+                   help="client address counted as 'own' whatever the UA (the team's own servers); repeatable")
     p.add_argument("--out", default="-", metavar="DIR",
                    help="output directory for metrics.json + metrics.md; '-' prints JSON to stdout (default)")
     p.add_argument("--min-requests", type=int, default=1,
@@ -739,6 +742,7 @@ def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     logging.basicConfig(stream=sys.stderr, level=getattr(logging, args.log_level),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    OWN_IPS.update(ip.strip() for ip in args.own_ip if ip.strip())
     try:
         if args.all_hosts:
             only_hosts = _parse_hosts(args.hosts)

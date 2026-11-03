@@ -93,7 +93,7 @@ class Cycle:
         rd = self.run_dir / label
         rd.mkdir(parents=True, exist_ok=True)
         (rd / "prompt.md").write_text(prompt, encoding="utf-8")
-        env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(),
+        env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(role),
                "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
                "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
         model = (self.p.raw.get("models") or {}).get(role)      # product.yaml may pick a cheaper model per role
@@ -108,11 +108,17 @@ class Cycle:
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
         return rr
 
-    def _allowed_hosts(self) -> str:
+    def _allowed_hosts(self, role: str | None = None) -> str:
+        """Hosts team-fetch may open for a run: the product site, product extra_hosts, the publishing channels, and the
+        per-role list from team.yaml `fetch.extra_hosts_by_role` (03.11: the reviewer reads repo-only deliverables on
+        raw.githubusercontent.com; without this every such review was denied_permission and stayed inconclusive)."""
         hosts = [self.p.host] if self.p.host else []
         hosts += [str(h) for h in self.p.raw.get("extra_hosts") or []]
         hosts += ["bsky.app", "t.me", "dev.to"]
-        return ",".join(h for h in hosts if h)
+        by_role = (self.st.raw.get("fetch") or {}).get("extra_hosts_by_role") or {}
+        if role:
+            hosts += [str(h) for h in by_role.get(role) or []]
+        return ",".join(dict.fromkeys(h for h in hosts if h))
 
     def _bin_dir(self) -> Path:
         return self.st.root / "bin"

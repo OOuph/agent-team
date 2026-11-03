@@ -60,6 +60,11 @@ framework:                        # self-improvement: friction register → retr
     - watchdog.sh
   max_usd_per_run: 2.0
 
+fetch:                            # what team-fetch may open, beyond the product site and the publishing channels
+  extra_hosts_by_role:            # per role; the reviewer reads repo-only deliverables (code, tests, README) on GitHub
+    reviewer: [github.com, raw.githubusercontent.com, api.github.com]
+    support: [github.com, api.github.com]
+
 support:                          # answers to people within VISION (role support), see team/support.py
   enabled: true
   max_replies_per_day: 10
