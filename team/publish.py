@@ -59,6 +59,9 @@ X_API = "https://api.x.com/2/tweets"
 X_MAX_WEIGHT = 280                    # X counts in weighted units: most CJK/emoji count 2, every link counts 23
 X_URL_WEIGHT = 23
 X_LIGHT_RANGES = ((0, 4351), (8192, 8205), (8208, 8223), (8242, 8247))   # twitter-text v3: weight 1, the rest 2
+X_TOKEN_URL = "https://api.x.com/2/oauth2/token"
+X_OAUTH2_STATE_DEFAULT = Path(__file__).resolve().parents[1] / "data" / "x_oauth2.json"   # gitignored dispatcher data
+X_OAUTH2_SKEW_S = 120                 # refresh this long before the 2-hour access token expires
 ELLIPSIS = "…"
 
 CHANNELS = ("telegram", "bluesky", "devto", "mastodon", "threads", "x", "github")
@@ -66,6 +69,7 @@ SECRET_KEYS = {"telegram": ("TELEGRAM_BOT_TOKEN",), "bluesky": ("BLUESKY_HANDLE"
                "devto": ("DEVTO_API_KEY",), "mastodon": ("MASTODON_INSTANCE", "MASTODON_TOKEN"),
                "threads": ("THREADS_USER_ID", "THREADS_ACCESS_TOKEN"),
                "x": ("X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"), "github": ("GITHUB_TOKEN",)}
+X_OAUTH2_KEYS = ("X_CLIENT_ID", "X_CLIENT_SECRET", "X_REFRESH_TOKEN")   # OAuth 2.0 user context: wins when X_CLIENT_ID is set
 BLUESKY_PUBLIC_API = "https://public.api.bsky.app"
 GITHUB_API = "https://api.github.com"
 GITHUB_COMMENT_MAX = 4000
@@ -485,6 +489,51 @@ def oauth1_header(method: str, url: str, consumer_key: str, consumer_secret: str
     return "OAuth " + ", ".join(f'{_pct(k)}="{_pct(v)}"' for k, v in sorted(oauth.items()))
 
 
+
+
+def _x_state_path(env: dict[str, str]) -> Path:
+    return Path(env.get("X_OAUTH2_STATE") or X_OAUTH2_STATE_DEFAULT)
+
+
+def x_oauth2_access_token(env: dict[str, str], http: HttpFn, now: float | None = None) -> tuple[str, list[str]]:
+    """A valid OAuth 2.0 user access token for X: from the state file while it is fresh, else refreshed with the
+    refresh token (state file first, ``X_REFRESH_TOKEN`` from .env only as the seed). X rotates the refresh token on
+    every refresh, so the new pair is written to the state file at once, under an exclusive lock, before use.
+    Returns (access_token, secrets to redact)."""
+    import fcntl
+    sec = _require(env, X_OAUTH2_KEYS)
+    cid, csec = sec["X_CLIENT_ID"], sec["X_CLIENT_SECRET"]
+    path = _x_state_path(env)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    now = time.time() if now is None else now
+    with open(path.with_suffix(".lock"), "w") as lk:
+        fcntl.flock(lk, fcntl.LOCK_EX)
+        state: dict[str, Any] = {}
+        if path.exists():
+            try:
+                state = json.loads(path.read_text(encoding="utf-8")) or {}
+            except (OSError, ValueError):
+                state = {}
+        if state.get("access_token") and float(state.get("expires_at") or 0) - X_OAUTH2_SKEW_S > now:
+            return str(state["access_token"]), [cid, csec, str(state["access_token"]), str(state.get("refresh_token") or "")]
+        rt = str(state.get("refresh_token") or sec["X_REFRESH_TOKEN"])
+        basic = base64.b64encode(f"{cid}:{csec}".encode()).decode()
+        red = [cid, csec, rt, basic]
+        data = _call_json(http, "POST", X_TOKEN_URL, None, {"Authorization": f"Basic {basic}"}, red, "x.oauth2.refresh",
+                          form={"grant_type": "refresh_token", "refresh_token": rt, "client_id": cid})
+        at, new_rt = str(data.get("access_token") or ""), str(data.get("refresh_token") or rt)
+        if not at:
+            raise PublishError("x.oauth2.refresh: response without access_token")
+        state = {"access_token": at, "refresh_token": new_rt, "expires_at": now + int(data.get("expires_in") or 7200),
+                 "refreshed_at": datetime.fromtimestamp(now, timezone.utc).isoformat(timespec="seconds"), "scope": data.get("scope")}
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(state), encoding="utf-8")
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+        log.info("x.oauth2: access token refreshed, valid until %s", datetime.fromtimestamp(state["expires_at"], timezone.utc).isoformat(timespec="minutes"))
+        return at, red + [at, new_rt]
+
+
 def _x(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn,
        reply_to: str | None = None) -> PostResult:
     body = x_compose(text, disclosure, url)
@@ -494,13 +543,18 @@ def _x(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run
     if dry_run:
         _print_dry_run("x", {**payload, "weight": x_weight(body)})
         return PostResult(True, "x", None, None, None, True)
-    sec = _require(env, SECRET_KEYS["x"])
-    auth = oauth1_header("POST", X_API, sec["X_API_KEY"], sec["X_API_SECRET"], sec["X_ACCESS_TOKEN"], sec["X_ACCESS_SECRET"])
-    data = _call_json(http, "POST", X_API, payload, {"Authorization": auth}, list(sec.values()), "x")
+    if env.get("X_CLIENT_ID"):          # OAuth 2.0 user context (the 2026 developer console issues these)
+        at, red = x_oauth2_access_token(env, http)
+        auth = f"Bearer {at}"
+    else:                               # OAuth 1.0a user context
+        sec = _require(env, SECRET_KEYS["x"])
+        auth = oauth1_header("POST", X_API, sec["X_API_KEY"], sec["X_API_SECRET"], sec["X_ACCESS_TOKEN"], sec["X_ACCESS_SECRET"])
+        red = list(sec.values())
+    data = _call_json(http, "POST", X_API, payload, {"Authorization": auth}, red, "x")
     d = data.get("data") or {}
     tid = d.get("id")
     if not tid:
-        raise PublishError(f"x: response without data.id: {_redact(json.dumps(data)[:ERROR_BODY_CHARS], list(sec.values()))}")
+        raise PublishError(f"x: response without data.id: {_redact(json.dumps(data)[:ERROR_BODY_CHARS], red)}")
     user = (env.get("X_HANDLE") or "i/web").lstrip("@")
     return PostResult(True, "x", str(tid), f"https://x.com/{user}/status/{tid}", None, False)
 

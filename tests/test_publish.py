@@ -247,6 +247,41 @@ def test_x_error_redacts_secrets():
     assert not r.ok and "HTTP 403" in r.error and "SECRETTOKEN" not in r.error
 
 
+def test_x_oauth2_refreshes_rotates_and_reuses(tmp_path):
+    state = tmp_path / "x_oauth2.json"
+    env = {"X_CLIENT_ID": "CID", "X_CLIENT_SECRET": "CSEC", "X_REFRESH_TOKEN": "RT0", "X_OAUTH2_STATE": str(state), "X_HANDLE": "formachines_ai"}
+    http = FakeHttp({"/2/oauth2/token": (200, {"access_token": "AT1", "refresh_token": "RT1", "expires_in": 7200, "scope": "tweet.write"}),
+                     "/2/tweets": (201, {"data": {"id": "5"}})})
+    r = post("x", "hello", disclosure=DISC, env=env, http=http)
+    assert r.ok and r.url == "https://x.com/formachines_ai/status/5"
+    tok, tw = http.calls
+    assert tok["headers"]["Authorization"].startswith("Basic ")
+    assert dict(publish.urllib.parse.parse_qsl(tok["raw"].decode())) == {"grant_type": "refresh_token", "refresh_token": "RT0", "client_id": "CID"}
+    assert tw["headers"]["Authorization"] == "Bearer AT1"
+    saved = json.loads(state.read_text())
+    assert saved["access_token"] == "AT1" and saved["refresh_token"] == "RT1"
+    post("x", "again", disclosure=DISC, env=env, http=http)          # fresh token reused, no second refresh
+    assert [c["url"].rsplit("/", 1)[-1] for c in http.calls] == ["token", "tweets", "tweets"]
+
+
+def test_x_oauth2_expired_uses_rotated_refresh_token_from_state(tmp_path):
+    state = tmp_path / "x.json"
+    state.write_text(json.dumps({"access_token": "OLD", "refresh_token": "RT5", "expires_at": 0}))
+    env = {"X_CLIENT_ID": "CID", "X_CLIENT_SECRET": "CSEC", "X_REFRESH_TOKEN": "RT0-stale", "X_OAUTH2_STATE": str(state)}
+    http = FakeHttp({"/2/oauth2/token": (200, {"access_token": "AT6", "refresh_token": "RT6", "expires_in": 7200}),
+                     "/2/tweets": (201, {"data": {"id": "6"}})})
+    assert post("x", "x", disclosure=DISC, env=env, http=http).ok
+    assert dict(publish.urllib.parse.parse_qsl(http.calls[0]["raw"].decode()))["refresh_token"] == "RT5"
+    assert json.loads(state.read_text())["refresh_token"] == "RT6"
+
+
+def test_x_oauth2_refresh_failure_redacts(tmp_path):
+    env = {"X_CLIENT_ID": "CID", "X_CLIENT_SECRET": "CSECRET", "X_REFRESH_TOKEN": "RTSECRET", "X_OAUTH2_STATE": str(tmp_path / "s.json")}
+    http = FakeHttp({"/2/oauth2/token": (400, {"error": "invalid_request", "error_description": "bad RTSECRET CSECRET"})})
+    r = post("x", "x", disclosure=DISC, env=env, http=http)
+    assert not r.ok and "x.oauth2.refresh" in r.error and "RTSECRET" not in r.error and "CSECRET" not in r.error
+
+
 # ---- secrets, disclosure -------------------------------------------------------------------------
 
 
