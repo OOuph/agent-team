@@ -287,3 +287,16 @@ def test_canary_runs_dry_on_a_state_copy(tmp_path: Path):
     assert len(s.events()) == n_events                          # nothing written to the live store
     assert not (st.data_dir / "canary").exists() or not any((st.data_dir / "canary").iterdir())
     s.close()
+
+
+def test_deputy_skips_in_dry_run(tmp_path: Path):
+    from team import deputy
+    st = _settings(tmp_path)
+    st.raw["deputy"] = {"enabled": True, "after_h": 0}
+    (st.root / "DEPUTY.md").write_text("# mandate\n", encoding="utf-8")
+    p = _product(st)
+    s = Store(p.dir)
+    s.ask(from_="po", to="owner", question="anything?")
+    s.close()
+    cy = Cycle(st, p, FakeRunner(), "c1", dry_run=True)
+    assert deputy.run_for_product(cy) == 0 and cy.runner.calls == []

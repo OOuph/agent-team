@@ -652,7 +652,9 @@ class Cycle:
         missing = [ph for ph in PHASES if ph not in phases]
         if missing:
             return False, f"phases missing: {missing}; " + out[-500:]
-        if "phase.error" in out or "phase %s failed" in out or " failed: " in out and "phase" in out:
+        # only a real phase failure counts: the event the cycle writes, or the log line of a phase that raised.
+        # (12:07: a dry-run warning "deputy run failed: no run" matched the old substring check and failed PR #32 falsely)
+        if "phase.error" in out or re.search(r"phase \w+ failed", out):
             return False, "phase error: " + out[-800:]
         return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases"
 

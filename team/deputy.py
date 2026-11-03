@@ -99,8 +99,8 @@ def apply(store: Store, res: dict[str, Any], questions: list[dict[str, Any]]) ->
 def run_for_product(cycle: Any) -> int:
     """Called from phase_triage. Returns the number of answers written."""
     st, store, p = cycle.st, cycle.store, cycle.p
-    if not enabled(st):
-        return 0
+    if not enabled(st) or getattr(cycle, "dry_run", False):
+        return 0                              # dry-run (canary): no model run, and no "run failed" line to trip the canary check
     qs = due_questions(st, store)
     if not qs:
         return 0
