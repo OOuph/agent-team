@@ -13,6 +13,12 @@ METRICS_DIR="${METRICS_DIR:-/var/lib/agent-team/metrics}"
 LOG_FILE="${LOG_FILE:-/var/log/agent-team/metrics.log}"
 ACCESS_LOGS="${ACCESS_LOGS:-/var/log/nginx/access.log /var/log/nginx/access.log.1}"
 PYTHON="${PYTHON:-python3}"
+# Only the team's own hosts get a report: scanners send random Host headers and --all-hosts would create a
+# directory per probe. Targets are the union of products/*/product.yaml `targets:` (a target absent on a host just
+# counts 0). Both can be overridden from /etc/agent-team/metrics.env (HOSTS=..., TARGETS=...).
+HOSTS="${HOSTS:-releases.formachines.ai,agentsmd.formachines.ai,luz.bymachines.ai,agentteam.formachines.ai}"
+TARGETS="${TARGETS:-/go/ /go/telegram/ /try/ /today.json /tomorrow.json /stats.json /feed.xml /day/ /d/ /repo/ /pkg/}"
+[ -r /etc/agent-team/metrics.env ] && . /etc/agent-team/metrics.env
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }
 
@@ -40,9 +46,11 @@ if [ "${#log_args[@]}" -eq 0 ]; then
   exit 1
 fi
 
-echo "running: $PYTHON $SITEMETRICS --all-hosts ${log_args[*]} --out $METRICS_DIR/"
+target_args=()
+for t in $TARGETS; do target_args+=(--target "$t"); done
+echo "running: $PYTHON $SITEMETRICS --all-hosts --hosts $HOSTS ${target_args[*]} ${log_args[*]} --out $METRICS_DIR/"
 start=$(date +%s)
-"$PYTHON" "$SITEMETRICS" --all-hosts "${log_args[@]}" --out "$METRICS_DIR/"
+"$PYTHON" "$SITEMETRICS" --all-hosts --hosts "$HOSTS" "${target_args[@]}" "${log_args[@]}" --out "$METRICS_DIR/"
 dur=$(( $(date +%s) - start ))
 
 # nginx (www-data) must be able to read what root just wrote

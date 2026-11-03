@@ -14,6 +14,7 @@ the PR, a human merges.
   use `--grep/--around/--count/--tail/--offset` instead) (F-0031, F-0018).
 - Marketer card: `Write` added to tools; post files must be created with Write, never shell redirection or heredocs
   (F-0021, F-0022, F-0032, F-0033, F-0035).
+- Droplet metrics: `metrics.sh` reports only the team's four hosts (scanner Host headers created 28 junk directories) and passes the union of product `targets:`; before this every site's `targets` block was empty (F-metrics, 03.11).
 - PO answers carry `not_before`: a "wait until X" answer reschedules the unblocked task instead of restarting it next
   cycle (ops finding: agentsmd T-0004 blocked every hour after being answered).
 - `team-fetch`: `--grep TEXT --around N` (window of N chars around each of up to 40 matches), `--count` (number of
