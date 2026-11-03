@@ -5,6 +5,12 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-03
+
+- `team-fetch`: `--grep TEXT --around N` (window of N chars around each of up to 40 matches), `--count` (number of
+  matches/lines), `--offset K` (body from char K within max_body); reviewer card and usage line list them. Eases
+  single-line pages (F-0007, F-0010, F-0014, F-0015, F-0018).
+
 ## 2026-11-02
 
 - Editorial loop (owner, late evening: "вычитывание и критика постов, чтобы тексты не деградировали"): `team-publish`
