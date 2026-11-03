@@ -267,3 +267,23 @@ def test_deputy_due_and_apply(tmp_path: Path):
     assert s.task(t["id"])["state"] == "ready"          # the waiting task is released
     assert deputy.due_questions(st, s) == []
     s.close()
+
+
+def test_canary_runs_dry_on_a_state_copy(tmp_path: Path):
+    """The canary must not touch the live store: it copies the product dir, runs --dry-run, and leaves no trace."""
+    st = _settings(tmp_path)
+    (st.root / "team.yaml").write_text("paths:\n  products_dir: products\n  data_dir: data\n  repos_dir: data/repos\n", encoding="utf-8")
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="live task", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    n_events = len(s.events())
+    s.close()
+    cy = Cycle(st, p, FakeRunner(), "c9")
+    ok, note = cy.canary(Path(__file__).resolve().parent.parent, p.slug)
+    assert ok, note
+    assert "dry-run" in note and "state copy" in note
+    s = Store(p.dir)
+    assert s.task(t["id"])["state"] == "ready"                 # the live task was not claimed
+    assert len(s.events()) == n_events                          # nothing written to the live store
+    assert not (st.data_dir / "canary").exists() or not any((st.data_dir / "canary").iterdir())
+    s.close()

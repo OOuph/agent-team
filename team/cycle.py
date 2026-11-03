@@ -606,17 +606,39 @@ class Cycle:
         return True
 
     def canary(self, repo: Path, product: str) -> tuple[bool, str]:
-        """One real cycle of one product on the candidate code (PYTHONPATH=candidate, TEAM_ROOT=this root): all phases
-        must finish and no phase may error. Returns (passed, note)."""
+        """A dry-run cycle of one product on the candidate code, on a COPY of the product's state: every phase must
+        finish and none may error. Returns (passed, note).
+
+        03.11: the first version ran a REAL cycle on the live state — it claimed and executed real tasks on the candidate
+        code (release-radar T-0009 was published by the 08:07 canary, T-0019 merged), doubling the product's work and
+        letting untested code touch live state. Now the canary gets its own root (copied team.yaml, DEPUTY.md and the
+        product directory with its store), no .env, publishing forced to dry-run, `--dry-run` for the roles: it proves
+        the candidate's phases run end to end on real data without doing anything to the world."""
         if not product:
             return True, "no canary product configured"
-        env = {**os.environ, "PYTHONPATH": str(repo), "TEAM_ROOT": str(self.st.root)}
         cyc = f"{self.cycle_id}-canary"
+        root = self.st.data_dir / "canary" / cyc
         try:
-            cp = subprocess.run([sys.executable, "-m", "team.cli", "cycle", "--product", product, "--cycle", cyc], cwd=str(repo),
-                                env=env, capture_output=True, text=True, timeout=int(self.st.claude.get("timeout_s", 1500)) + 300)
+            src = next(p for p in self.st.product_dirs() if p.name == product)
+        except StopIteration:
+            return False, f"canary product {product!r} not found"
+        if root.exists():
+            shutil.rmtree(root)
+        (root / "products").mkdir(parents=True)
+        (root / "data").mkdir()
+        shutil.copytree(src, root / "products" / product, ignore=shutil.ignore_patterns("*.lock", "work", "runs"))
+        for name in ("team.yaml", "DEPUTY.md"):
+            if (self.st.root / name).exists():
+                shutil.copy2(self.st.root / name, root / name)
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_"))}
+        env.update({"PYTHONPATH": str(repo), "TEAM_ROOT": str(root), "TEAM_CONFIG": str(root / "team.yaml"), "TEAM_PUBLISH_DRY_RUN": "1"})
+        try:
+            cp = subprocess.run([sys.executable, "-m", "team.cli", "cycle", "--product", product, "--cycle", cyc, "--dry-run"], cwd=str(repo),
+                                env=env, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
             return False, "canary timed out"
+        finally:
+            shutil.rmtree(root, ignore_errors=True)
         out = (cp.stdout + cp.stderr)
         if cp.returncode != 0 or "Traceback" in out:
             return False, f"rc={cp.returncode} " + out[-800:]
@@ -627,7 +649,7 @@ class Cycle:
             return False, f"phases missing: {missing}; " + out[-500:]
         if "phase.error" in out or "phase %s failed" in out or " failed: " in out and "phase" in out:
             return False, "phase error: " + out[-800:]
-        return True, f"cycle {cyc} of {product}: all phases"
+        return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases"
 
     def check_pull_requests(self) -> None:
         for t in self.store.tasks(["waiting_owner"]):

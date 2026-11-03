@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Canary runs a `--dry-run` cycle on a COPY of the product state with publishing forced to dry-run and no channel secrets — the first version ran a real cycle on live state and executed real tasks on the candidate code (release-radar T-0009 published and T-0019 merged by the 08:07 canary).
 - T-0013: reviewer — a negative case that cannot be produced on the live site goes into `limits` as `not observable`, not into an inconclusive verdict, when every other criterion passed; inconclusive is only for unchecked main criteria (F-0060, F-0066, F-0064, F-0056).
 - Deputy owner (`team/deputy.py`, role `deputy`, mandate `DEPUTY.md`, protected): open questions to the owner older than `deputy.after_h` are answered by mandate — decided (conservative), unavailable (secrets, money, accounts, channels, VISION) or info — so no task waits on an unreachable owner (owner 03.11: a week away, no access).
 - Execute seats per role (`cycle.execute_slots`: developer 1, marketer 1, analyst 1) — the daily post no longer starves behind developer tasks; a marketing task without a recorded publication is never `accepted` by the reviewer (blocked + question to the PO); the developer prompt names the product's `test_cmd` (framework checkout has no venv, F-0067).
