@@ -9,6 +9,7 @@ repo:
 channels:
   mastodon: '@formachines@mastodon.social'
   x: '@formachines_ai'
+  threads: '@formachines'
   telegram: '@relesae_radar'
   bluesky: formachines.bsky.social
   devto: formachines
