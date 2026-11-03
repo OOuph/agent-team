@@ -4,12 +4,38 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
 from urllib.parse import urlsplit
+
+
+def _json_out(body: str, path: str, keys: bool, count: bool) -> int:
+    """--json-path a.b[0].c: print the value (or its length with --count); --json-keys: keys of the value at the path."""
+    try:
+        val = json.loads(body)
+    except ValueError as e:
+        print(f"team-fetch: body is not JSON ({e})", file=sys.stderr)
+        return 4
+    for name, idx in re.findall(r"([^.\[\]]+)|\[(-?\d+)\]", path):
+        try:
+            val = val[int(idx)] if idx else val[name]
+        except (KeyError, IndexError, TypeError):
+            print(f"team-fetch: json path {path!r} not found at {(name or idx)!r}", file=sys.stderr)
+            return 4
+    if keys:
+        if not isinstance(val, dict):
+            print(f"team-fetch: value at {path!r} is not an object", file=sys.stderr)
+            return 4
+        print(json.dumps(list(val), ensure_ascii=False))
+    elif count:
+        print(len(val) if isinstance(val, (list, dict, str)) else val)
+    else:
+        print(val if isinstance(val, str) else json.dumps(val, ensure_ascii=False))
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -19,6 +45,8 @@ def main(argv: list[str] | None = None) -> int:
     around: int | None = None
     offset = 0
     count = False
+    json_path: str | None = None
+    json_keys = False
     rest: list[str] = []
     i = 0
     while i < len(argv):                       # team-fetch <url> [--grep TEXT] [--tail N]: a big page without the whole body
@@ -30,11 +58,15 @@ def main(argv: list[str] | None = None) -> int:
             around = int(argv[i + 1]); i += 2; continue
         if argv[i] == "--offset" and i + 1 < len(argv):
             offset = int(argv[i + 1]); i += 2; continue
+        if argv[i] == "--json-path" and i + 1 < len(argv):
+            json_path = argv[i + 1]; i += 2; continue
+        if argv[i] == "--json-keys":
+            json_keys = True; i += 1; continue
         if argv[i] == "--count":
             count = True; i += 1; continue
         rest.append(argv[i]); i += 1
     if len(rest) != 1 or not rest[0].startswith("http"):
-        print("usage: team-fetch <url> [--grep TEXT [--around N] [--count]] [--tail N] [--offset K]", file=sys.stderr)
+        print("usage: team-fetch <url> [--grep TEXT [--around N] [--count]] [--tail N] [--offset K] [--json-path a.b[0].c [--count]] [--json-keys]", file=sys.stderr)
         return 2
     url = rest[0]
     allowed = [h.strip().lower() for h in os.environ.get("TEAM_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -66,6 +98,8 @@ def main(argv: list[str] | None = None) -> int:
         if k in headers:
             print(f"{k}: {headers[k]}")
     print()
+    if json_path is not None or json_keys:
+        return _json_out(body, json_path or "", json_keys, count)
     if grep and (around is not None or count):
         low, needle = body.lower(), grep.lower()
         pos, start = [], low.find(needle)

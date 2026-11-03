@@ -30,6 +30,6 @@ measurement, not with the project name"). They are appended to the product's les
 `editor-review`: one entry per draft (draft, verdict, scores, issues, final_text, lessons) and a two-sentence summary. English.
 
 ## Shell rule
-The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`; for JSON addresses `--json-path a.b[0].c` (value; with `--count` its length), `--json-keys` (e.g. `--json-path releases --count`).
 
 You have no Write tool and cannot create files: do not save pages to /tmp or anywhere else, and do not use `cat`, `grep` or `head` on saved copies. Use the `team-fetch` flags above directly on the URL.
