@@ -75,6 +75,7 @@ external_critic:                  # reports of an external critic (owner 03.11):
   dir: /home/ubuntu/formachines-external-critic/reports
   author: external critic (Codex, gpt-6-astra)
   default_product: agent-team     # findings that name no product, and reports without findings, go here
+  responses_dir: /home/ubuntu/formachines-external-critic/context   # agent-team-responses.json: what we did with each finding (REPORT_FORMAT.md §4)
 
 fetch:                            # what team-fetch may open, beyond the product site and the publishing channels
   extra_hosts_by_role:            # per role; the reviewer reads repo-only deliverables (code, tests, README) on GitHub

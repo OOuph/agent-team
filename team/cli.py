@@ -87,6 +87,12 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
                 print(f"retro: {retro.run_retro(st, runner)}")
         except Exception as exc:  # noqa: BLE001 — the framework's own loop must never break the products' one
             log.exception("friction/retro failed: %s", exc)
+        if not a.dry_run:
+            try:
+                from . import critic
+                critic.write_responses(st, _products(st, "all"))     # what we did with the external critic's findings
+            except Exception as exc:  # noqa: BLE001
+                log.warning("critic responses failed: %s", exc)
     return rc
 
 

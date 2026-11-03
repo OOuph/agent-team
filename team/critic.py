@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import Product, Settings
-from .store import Store
+from .store import Store, utcnow
 
 log = logging.getLogger("team.critic")
 
@@ -162,6 +162,91 @@ def fallback_card(text: str, report_name: str, author: str) -> dict[str, Any]:
             "note": "Отчёт внешнего критика без распознанных находок — прочитать целиком и разнести по продуктам."}
 
 
+VALID_SLUGS = ("release-radar", "agentsmd-tracker", "luz-amanha", "agent-team-diary", "agent-team")
+ACTIVE_STATUSES = ("new", "confirmed", "")          # fixed / unverified findings make no card
+
+
+def parse_json_report(data: dict[str, Any]) -> tuple[list[Finding], list[dict[str, Any]]]:
+    """The JSON twin (REPORT_FORMAT.md §2): findings and channel rows, already attributed to products."""
+    finds: list[Finding] = []
+    for x in data.get("findings") or []:
+        fid = str(x.get("id") or "").strip()
+        if not fid:
+            continue
+        status = str(x.get("status") or "new").lower()
+        slug = str(x.get("product") or "").strip() or None
+        if slug not in VALID_SLUGS:
+            slug = ID_TO_SLUG.get(fid.split("-")[0]) if "-" in fid else None
+        body = "\n".join(f"{k}: {x.get(v)}" for k, v in (("Статус", "status"), ("Факт", "fact"), ("Предложение", "proposal"),
+                                                            ("Критерий", "criterion")) if x.get(v))
+        urls = [str(u) for u in (x.get("urls") or []) if str(u).startswith("http")]
+        f = Finding(id=fid, priority=str(x.get("priority") or "P2"), title=" ".join(str(x.get("title") or "").split())[:120],
+                    body=body[:MAX_DETAIL], heading="", slug=slug, url=urls[0] if urls else None, links=urls[:5])
+        f.status = status  # type: ignore[attr-defined]
+        finds.append(f)
+    rows = []
+    for c in data.get("channels") or []:
+        slug = str(c.get("product") or "").strip()
+        rows.append({"channel": str(c.get("channel") or "?"), "url": str(c.get("url") or ""),
+                     "text": " — ".join(str(c.get(k)) for k in ("observation", "feedback") if c.get(k))[:MAX_DETAIL],
+                     "slug": slug if slug in VALID_SLUGS else None})
+    return finds, rows
+
+
+def finding_status(f: Finding, body: str) -> str:
+    s = getattr(f, "status", None)
+    if s:
+        return str(s)
+    m = re.search(r"^Статус:\s*(\w+)", body, re.M | re.I)
+    return m.group(1).lower() if m else ""
+
+
+def write_responses(st: Settings, products: list[Product]) -> Path | None:
+    """REPORT_FORMAT.md §4: what the team did with each critic finding, for the critic to read before its next run."""
+    cfg = settings(st)
+    out_dir = cfg.get("responses_dir")
+    if not cfg.get("enabled") or not out_dir:
+        return None
+    out: dict[str, Any] = {"generated_at": utcnow(), "findings": {}}
+    for p in products:
+        s = Store(p.dir)
+        try:
+            tasks = {t["id"]: t for t in s.tasks()}
+            for o in s.observations():
+                fp = str(o.get("fingerprint") or "")
+                if not fp.startswith("critic:") or fp.startswith("critic:report:"):
+                    continue
+                d = o.get("decision") or {}
+                tid = d.get("linked_to") if d.get("action") == "link" else None
+                task = None
+                for t in tasks.values():
+                    if o["id"] in (t.get("observations") or []):
+                        task = t
+                        break
+                if task is None and tid in tasks:
+                    task = tasks[tid]
+                out["findings"][fp.split(":", 1)[1]] = {
+                    "product": p.slug, "observation": o["id"], "status": o.get("status"), "repeats": o.get("repeat_count", 0),
+                    "po_action": d.get("action"), "po_reason": _short(d.get("reason"), 300) if d.get("reason") else None,
+                    "task": ({"id": task["id"], "state": task.get("state"), "title": _short(task.get("title"), 120), "pr": task.get("pr_url"),
+                              "accepted_at": task.get("accepted_at")} if task else None)}
+        finally:
+            s.close()
+    path = Path(str(out_dir)) / "agent-team-responses.json"
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(out, ensure_ascii=False, indent=1), encoding="utf-8")
+    except OSError as exc:
+        log.warning("critic responses not written: %s", exc)
+        return None
+    return path
+
+
+def _short(s: Any, n: int) -> str:
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
 def ingest(st: Settings, product: Product, store: Store, all_products: list[Product] | None = None) -> int:
     """Add observation cards for this product from every report not yet ingested for it. Returns the number of cards."""
     cfg = settings(st)
@@ -173,22 +258,33 @@ def ingest(st: Settings, product: Product, store: Store, all_products: list[Prod
     hosts = {p.host.lower(): p.slug for p in (all_products or [product]) if p.host}
     seen = load_seen(st)
     n = 0
-    for f in sorted(d.glob("*.md")):
+    names = sorted({x.with_suffix("").name for x in d.iterdir() if x.suffix in (".md", ".json")})
+    for name in names:
+        f = d / (name + ".md")
         if product.slug in seen.get(f.name, []):
             continue
         try:
-            text = f.read_text(encoding="utf-8", errors="replace")
+            text = f.read_text(encoding="utf-8", errors="replace") if f.exists() else ""
         except OSError as exc:
             log.warning("critic report %s unreadable: %s", f.name, exc)
             continue
-        findings = parse_report(text, hosts)
-        rows = parse_channel_rows(text)
+        twin = f.with_suffix(".json")
+        if twin.exists():                       # REPORT_FORMAT.md: the JSON twin is the machine source
+            try:
+                findings, rows = parse_json_report(json.loads(twin.read_text(encoding="utf-8")))
+            except (OSError, json.JSONDecodeError, AttributeError) as exc:
+                log.warning("critic twin %s unreadable (%s); falling back to markdown", twin.name, exc)
+                findings, rows = parse_report(text, hosts), parse_channel_rows(text)
+        else:
+            findings, rows = parse_report(text, hosts), parse_channel_rows(text)
         mine = [x for x in findings if (x.slug or default_slug) == product.slug]
         my_rows = [r for r in rows if (r["slug"] or default_slug) == product.slug]
         if not findings and not rows and product.slug == default_slug:
             store.add_observation(fallback_card(text, f.name, author))
             n += 1
         for x in mine:
+            if finding_status(x, x.body) not in ACTIVE_STATUSES:
+                continue                        # fixed / unverified: nothing to act on
             store.add_observation(card(x, f.name, author))
             n += 1
         for r in my_rows:

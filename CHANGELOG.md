@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Critic: JSON twin (`<report>.json`, REPORT_FORMAT.md §2) is the machine source when present; `fixed`/`unverified` findings make no card; `agent-team-responses.json` is written to the critic's context dir after every `cycle --product all` with the PO decision and task per finding id.
 - Droplet metrics: the external critic's user agent `FormachinesExternalCritic/` counts as own traffic (with `agent-team/`), not as an agent.
 - External critic (`team/critic.py`, `external_critic` in team.yaml): Markdown reports of an outside Codex critic are read every cycle; each `**ID · Pn · title**` finding becomes a `feedback` observation of the product it names, the PO answers with a task or a reasoned reject (owner 03.11).
 - T-0018: `team-fetch` gets `--json-path a.b[0].c` (prints the value, or its length with `--count`) and `--json-keys`, so roles read counts from JSON without pipes; flags listed in the editor and marketer cards (F-0038, F-0039, F-0040, F-0041, F-0072).

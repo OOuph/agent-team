@@ -110,3 +110,33 @@ def test_parse_technical_format_and_channel_rows() -> None:
     assert rows[0]["slug"] == "release-radar" and rows[1]["slug"] is None and rows[0]["text"] == "2 подписчика — Отбирать пример по пользе"
     c = critic.channel_card(rows[0], "r.md", "critic")
     assert c["fingerprint"] == "critic:channel:telegram-radar" and c["url"].startswith("https://t.me")
+
+
+def test_json_twin_status_and_responses(tmp_path: Path) -> None:
+    import json
+    st = _settings(tmp_path)
+    st.raw["external_critic"]["responses_dir"] = str(tmp_path / "context")
+    rr = _product(st, "release-radar", "releases.formachines.ai")
+    fw = _product(st, "agent-team", "")
+    data = {"findings": [
+        {"id": "RR-01", "product": "release-radar", "priority": "P1", "status": "confirmed", "title": "Флаги не про риск", "fact": "f", "proposal": "p", "criterion": "c", "urls": ["https://releases.formachines.ai/"]},
+        {"id": "RR-02", "product": "release-radar", "priority": "P2", "status": "fixed", "title": "Индекс", "fact": "ok"},
+        {"id": "FW-03", "product": "", "priority": "P2", "status": "new", "title": "Без продукта в JSON", "criterion": "c"}],
+        "channels": [{"channel": "Bluesky", "product": "shared", "url": "https://bsky.app/x", "observation": "7 постов", "feedback": "обрезан"}]}
+    (tmp_path / "reports" / "r1.md").write_text("# md ignored when the twin exists\n\n**RR-09 · P0 · would be wrong**\n", encoding="utf-8")
+    (tmp_path / "reports" / "r1.json").write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    s_rr, s_fw = Store(rr.dir), Store(fw.dir)
+    assert critic.ingest(st, rr, s_rr, [rr, fw]) == 1                  # RR-01 only: RR-02 is fixed, RR-09 is markdown-only
+    o = s_rr.observations()[0]
+    assert o["fingerprint"] == "critic:RR-01" and "Статус: confirmed" in o["detail"] and o["url"] == "https://releases.formachines.ai/"
+    assert critic.ingest(st, fw, s_fw, [rr, fw]) == 2                  # FW-03 (slug from the id) + the shared Bluesky row
+    # responses file: the PO linked RR-01 to a task
+    t = s_rr.create_task(title="Rename the flag", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po",
+                         state="ready", observations=[o["id"]])
+    s_rr.update_observation(o["id"], status="triaged", decision={"action": "create_task", "reason": "valid", "cycle": "c1"})
+    path = critic.write_responses(st, [rr, fw])
+    assert path is not None and path.name == "agent-team-responses.json"
+    resp = json.loads(path.read_text(encoding="utf-8"))["findings"]
+    assert resp["RR-01"]["po_action"] == "create_task" and resp["RR-01"]["task"]["id"] == t["id"] and resp["RR-01"]["task"]["state"] == "ready"
+    assert "FW-03" in resp and resp["FW-03"]["po_action"] is None
+    s_rr.close(); s_fw.close()
