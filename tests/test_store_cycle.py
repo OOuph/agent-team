@@ -167,3 +167,37 @@ def test_task_blocked_twice_same_question_not_restarted(tmp_path: Path):
     s.answer("Q-9999", "retry", "po")
     assert s.task(t["id"])["state"] == "blocked"
     s.close()
+
+
+def test_po_duplicate_tasks_skipped_and_close_tasks(tmp_path: Path):
+    from team import cycle as C
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    base = {"type": "marketing", "problem": "p", "scope": "s", "acceptance": ["a"], "negative_cases": [], "goal": "G1",
+            "priority": "P2", "size": "S", "role": "marketer"}
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    cy.apply_po({"ready_tasks": [{**base, "title": "Daily post 03.11 14:05 UTC: prices", "not_before": "2026-11-03T14:05:00Z"}],
+                 "digest_md": "d"}, [])
+    assert len(s.tasks(["ready"])) == 1
+    first = s.tasks(["ready"])[0]
+    # same slot under another title, same title under another slot, exact title: none creates a task
+    cy.apply_po({"ready_tasks": [
+        {**base, "title": "Post 03.11 (starts 14:05 UTC): prices for 04.11", "not_before": "2026-11-03T14:05:00+00:00"},
+        {**base, "title": "daily post 03.11 14:05 UTC — prices"},
+        {**base, "title": "Daily post 03.11 14:05 UTC: prices", "not_before": "2026-11-03T14:05:00Z"},
+        {**base, "title": "Morning post 04.11", "not_before": "2026-11-04T07:00:00Z"},        # a new slot: created
+    ], "digest_md": "d"}, [])
+    ready = s.tasks(["ready"])
+    assert [t["title"] for t in ready] == [first["title"], "Morning post 04.11"]
+    assert sum(1 for e in s.events() if e["kind"] == "task.duplicate_skipped") == 3
+    assert "не создал дубли" in (p.dir / "digests" / "c1.md").read_text(encoding="utf-8")
+    # a developer task with the same not_before is a different slot
+    cy.apply_po({"ready_tasks": [{**base, "role": "developer", "type": "feature", "title": "Verify build", "not_before": "2026-11-03T14:05:00Z"}],
+                 "digest_md": "d"}, [])
+    assert len(s.tasks(["ready"])) == 3
+    # close_tasks → rejected; an in_progress task is not closable
+    cy.apply_po({"close_tasks": [{"task_id": first["id"], "reason": "duplicate"}], "digest_md": "d"}, [])
+    assert s.task(first["id"])["state"] == "rejected"
+    assert C.duplicate_task(s.tasks(C.OPEN_TASK_STATES), {**base, "title": first["title"]}) is None
+    s.close()

@@ -42,12 +42,16 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   `not_before` (ISO 8601 UTC); without it the dispatcher starts a ready task in the next cycle, whatever its title says.
 - MUST: a task whose title or text names a future date or hour (e.g. "Daily post 03.11 ~14:00 UTC") has `not_before`
   at that moment. Never leave the date only in the title.
+- The backlog shows each task's `not_before`: a scheduled task IS scheduled, do not re-create it "with a start time".
+  One post slot = one task: before proposing a dated task, look for an open task with the same slot (same role and
+  `not_before`) or the same title; the dispatcher drops such duplicates anyway. A real duplicate or a task no longer
+  needed goes into `close_tasks` (task id + reason) — not into P3.
 - A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
   available field in its text, or ask the analyst for the metric first.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
-acceptance, negative cases), optional reprioritize, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
+acceptance, negative cases), optional reprioritize and close_tasks, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
 digest in Russian for the owner (what happened, what was decided, what waits for the owner, what it cost; ≤ 250 words,
 numbers and URLs only when they change a decision).
 

@@ -39,6 +39,8 @@
 | geo | раз в 168 ч: geo-probe | geo-probe |
 | digest | в 07 и 19 UTC: сводка в `digests/` и в Telegram ops | — |
 
+Правило triage: PO видит `not_before` каждой задачи бэклога; предложенная задача с тем же названием или с той же парой «роль + `not_before`», что у открытой, не создаётся (событие `task.duplicate_skipped`, строка в дайджесте PO). PO закрывает лишние задачи через `close_tasks` → `rejected`.
+
 Правило execute: готовая задача, в названии которой есть дата `ДД.ММ` позже сегодняшней (UTC), но нет `not_before`, не запускается; диспетчер пишет наблюдение для PO (поставить `not_before`). Задача, дважды заблокированная одним и тем же вопросом, не перезапускается автоматическим (не владельческим) ответом без `not_before`; событие `task.restart_suppressed`.
 
 Состояния задачи: `proposed → ready → claimed → in_progress → review/released → accepted → measured → done`;

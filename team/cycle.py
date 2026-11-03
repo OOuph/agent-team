@@ -371,7 +371,18 @@ class Cycle:
                 t["priority"] = rp["priority"]
                 t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t["state"], "to": t["state"], "note": f"priority → {rp['priority']}: {rp.get('reason', '')[:200]}"})
                 self.store.save_task(t)
+        for c in res.get("close_tasks") or []:
+            t = self.store.task(str(c.get("task_id")))
+            if t and t.get("state") in CLOSABLE_BY_PO:
+                self.store.transition(t["id"], "rejected", "po", f"closed by PO: {c.get('reason', '')[:300]}", force=True)
+        skipped = []
         for rt in res.get("ready_tasks") or []:
+            dup = duplicate_task(self.store.tasks(OPEN_TASK_STATES), rt)
+            if dup:
+                # the PO re-proposed a task that is already open (same title, or the same role and start moment): one slot, one task
+                self.store.event("task.duplicate_skipped", dup["id"], "po", {"title": rt["title"][:140], "not_before": rt.get("not_before")})
+                skipped.append(f"{rt['title'][:80]} → already open as {dup['id']}")
+                continue
             self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
@@ -379,6 +390,8 @@ class Cycle:
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         digest = res.get("digest_md", "")
+        if skipped:
+            digest += "\n\n_Диспетчер не создал дубли (задача уже открыта): " + "; ".join(skipped) + "._"
         (self.p.dir / "digests" / f"{self.cycle_id}.md").write_text(f"# PO digest {self.cycle_id}\n\n{digest}\n", encoding="utf-8")
 
     # execute: one ready task → developer / marketer / analyst ------------------------------------
@@ -786,6 +799,35 @@ class Cycle:
 
 
 # ------------------------------------------------------------------ helpers
+
+OPEN_TASK_STATES = ("ready", "claimed", "in_progress", "review", "released", "blocked", "waiting_owner")
+CLOSABLE_BY_PO = ("proposed", "ready", "blocked", "waiting_owner", "deferred")
+
+
+def _norm_title(s: str) -> str:
+    return re.sub(r"[^\w]+", " ", str(s or "").lower()).strip()
+
+
+def _norm_ts(s: Any) -> str:
+    d = parse_ts(str(s)) if s else None
+    return d.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M") if d else ""
+
+
+def duplicate_task(open_tasks: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, Any] | None:
+    """The open task a proposed ready task duplicates, or None.
+
+    Same normalized title → duplicate. Same role and the same `not_before` moment → duplicate too: a scheduled post is one
+    slot, and the PO wrote the same slot under a slightly different title in every cycle (luz-amanha T-0006/T-0011,
+    release-radar T-0009/T-0012/T-0015 on 03.11)."""
+    title = _norm_title(rt.get("title"))
+    nb = _norm_ts(rt.get("not_before"))
+    for t in open_tasks:
+        if title and _norm_title(t.get("title")) == title:
+            return t
+        if nb and t.get("role") == rt.get("role") and _norm_ts(t.get("not_before")) == nb:
+            return t
+    return None
+
 
 DATE_IN_TITLE_RE = re.compile(r"(?<![\w.])(\d{2})\.(\d{2})(?:\.(\d{4}))?(?!\w|\.\d)")
 

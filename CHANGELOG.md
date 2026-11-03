@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- PO triage: the backlog brief now carries `not_before` (the PO re-created every scheduled post as "a task with a start
+  time": luz-amanha T-0011/T-0012/T-0014, release-radar T-0012/T-0013/T-0015/T-0016); the dispatcher drops a proposed task
+  whose title or role+`not_before` slot is already open (`task.duplicate_skipped`); PO can close tasks (`close_tasks`).
 - Dispatcher: a ready task whose title names a future DD.MM date and has no `not_before` is not started (observation
   for the PO instead); a task blocked twice on the same question is not restarted by a non-owner answer without
   `not_before` (F-0017, F-0019, F-0023, F-0025, F-0026, F-0027).

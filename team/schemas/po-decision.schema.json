@@ -244,6 +244,28 @@
    "type": "string",
    "maxLength": 3000,
    "description": "Markdown digest for the owner, Russian, ≤ 250 words"
+  },
+  "close_tasks": {
+   "type": "array",
+   "maxItems": 10,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "reason"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   },
+   "description": "open tasks to close as rejected (duplicates of another task, no longer needed); not for claimed/in_progress ones"
   }
  }
 }
