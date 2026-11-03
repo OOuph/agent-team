@@ -22,7 +22,7 @@ def _y(obj: Any) -> str:
 
 
 def _task_brief(t: dict[str, Any]) -> dict[str, Any]:
-    keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "not_before", "blocked_by", "problem", "scope",
+    keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "repo_only", "not_before", "blocked_by", "problem", "scope",
             "acceptance", "negative_cases", "observations", "links", "review_fails", "created")
     return {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
 

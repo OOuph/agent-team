@@ -183,6 +183,10 @@
      "plan": {
       "type": "boolean",
       "description": "marketing-plan task: role marketer, type marketing. The marketer writes products/<slug>/marketing-plan.md (a week of slots per channel with dates UTC, rubrics, the VISION goal of every post, what to drop) and the task is accepted by that file, without a post. Create one when there is no plan or the plan is older than 7 days; otherwise cut the plan into post tasks with not_before."
+     },
+     "repo_only": {
+      "type": "boolean",
+      "description": "true when the acceptance criteria name repo files (mcp/, tests, README, code) that the site does not serve: the reviewer then gets a read-only checkout of the merged commit. Omit for tasks checkable on the live site."
      }
     }
    }
