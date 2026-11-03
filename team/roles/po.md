@@ -59,6 +59,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   paths it counts (`targets`) are configured by ops in `product.yaml`, never by product code. Do not create a
   developer task to "count X in metrics": the repository has no metrics code. To track a new path, put the exact
   path into `owner_questions` (ops adds it the same day); the counts per class appear in the next metrics file.
+- **A new tool is tried the day it becomes available** (owner 03.11): a channel that appears in `product.yaml`, a new
+  flag of team-publish/team-fetch, a new data file on the site — the first real use is scheduled in the next cycle
+  (`not_before` = now), not in the weekly plan days later. The trial is small (one post, one call) and its result goes
+  into the next plan; a tool that sits unused for a day is a defect of the PO.
 - A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
   available field in its text, or ask the analyst for the metric first.
 - Every acceptance criterion must be observable through a public URL. For repo-only deliverables (code such as `mcp/`,

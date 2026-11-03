@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- PO rule: a new tool (channel, flag, data file) is tried the day it becomes available — first real use in the next cycle, not in the weekly plan days later (owner 03.11: Mastodon/X/Threads were live since the morning but the first posts were planned for 04–06.11).
 - T-0017: dispatcher fallback for `repo_only` — if the developer's `how_to_verify` lists only `raw.githubusercontent.com` URLs, `review_task` sets `repo_only` on the task before the review, so the reviewer gets the read-only checkout (F-0046, F-0048, F-0053, F-0055, F-0062, F-0058). The PO flag itself came with T-0015.
 - T-0016: marketer card — `dry_run: true` in draft mode and missing post URLs are the expected flow and are never reported as friction (F-0071, F-0073, F-0074). Card text only; SCHEME.md unchanged.
 - T-0015: PO card and `po-decision.schema.json` get `repo_only` — the PO sets `repo_only: true` on tasks whose criteria name repo files (mcp/, tests, README, code), `apply_po` stores it, so the reviewer gets the read-only checkout instead of inconclusive (F-0046, F-0048, F-0053, F-0055, F-0062).
