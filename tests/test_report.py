@@ -94,3 +94,17 @@ def test_narrative_problems_catch_placeholders() -> None:
     pr = report.narrative_problems(bad)
     assert len(pr) == 2 and pr[0].startswith("role developer")
     assert report.narrative_problems({**ok, "po": "короткий"}) == ["po too short"]
+
+
+def test_ledger_counts_critic_cards(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    o = s.add_observation({"title": "[критик RR-01 P1] x", "classification": "feedback", "source": "external-critic", "fingerprint": "critic:RR-01"})
+    s.update_observation(o["id"], status="triaged", decision={"action": "create_task", "cycle": "c1"})
+    s.add_observation({"title": "[критик RR-02 P2] y", "classification": "feedback", "source": "external-critic", "fingerprint": "critic:RR-02"})
+    s.close()
+    led = report.ledger(st, [p], 12)
+    c = led["products"][0]["critic"]
+    assert c == {"cards": 2, "decided": {"create_task": 1}, "tasks": 1}
+    assert "Внешний критик" in report.ledger_md(led) and "external_critic" in report.reporter_prompt(led)

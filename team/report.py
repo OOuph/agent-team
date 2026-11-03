@@ -149,18 +149,50 @@ def product_ledger(p: Product, store: Store, since: datetime) -> dict[str, Any]:
         elif k == "phase.error":
             disp["phase_errors"] += 1
 
+    # the external critic's findings for this product in the window and what the PO did with them
+    crit = {"cards": 0, "decided": {}, "tasks": 0}
+    for o in store.observations():
+        if o.get("source") != "external-critic" or not _in_window(o.get("observed_at"), since):
+            continue
+        crit["cards"] += 1
+        a = (o.get("decision") or {}).get("action")
+        if a:
+            crit["decided"][a] = crit["decided"].get(a, 0) + 1
+            if a == "create_task":
+                crit["tasks"] += 1
+
     spend: dict[str, float] = {}
     for role, usd in store.db.execute("SELECT role, SUM(usd) FROM spend WHERE ts >= ? GROUP BY role", (since_iso,)):
         spend[str(role)] = round(float(usd or 0), 2)
 
     roles = {r: v for r, v in roles.items() if v["tasks"] or v["items"]}
     return {"product": p.slug, "name": p.raw.get("name") or p.slug, "site": p.site_base, "roles": roles, "po": po,
-            "dispatcher": disp, "spend_usd": spend}
+            "dispatcher": disp, "spend_usd": spend, "critic": crit}
 
 
 def framework_items(st: Settings, since: datetime) -> dict[str, Any]:
     """Retro proposals and site builds in the window (they live outside product stores)."""
-    out: dict[str, Any] = {"retro": [], "builds": []}
+    out: dict[str, Any] = {"retro": [], "builds": [], "critic_reports": []}
+    cdir = (st.raw.get("external_critic") or {}).get("dir")
+    if cdir and Path(str(cdir)).exists():
+        from . import critic as _critic
+        for f in sorted(Path(str(cdir)).iterdir()):
+            if f.suffix not in (".md", ".json") or datetime.fromtimestamp(f.stat().st_mtime, timezone.utc) < since:
+                continue
+            if f.suffix == ".md" and f.with_suffix(".json").exists():
+                continue                                    # counted via the twin
+            try:
+                if f.suffix == ".json":
+                    finds, _ = _critic.parse_json_report(json.loads(f.read_text(encoding="utf-8")))
+                else:
+                    finds = _critic.parse_report(f.read_text(encoding="utf-8", errors="replace"), {})
+            except Exception:  # noqa: BLE001
+                continue
+            by: dict[str, int] = {}
+            for x in finds:
+                st_ = _critic.finding_status(x, x.body) or "new"
+                by[st_] = by.get(st_, 0) + 1
+            out["critic_reports"].append({"report": f.with_suffix("").name, "findings": len(finds), "by_status": by})
     rdir = st.data_dir / "framework" / "retro"
     if rdir.exists():
         for y in sorted(rdir.glob("*.yaml")):
@@ -248,16 +280,21 @@ def ledger_md(led: dict[str, Any]) -> str:
             extra.append(f"ошибок фаз {d['phase_errors']}")
         if extra:
             lines.append("**Диспетчер:** " + "; ".join(extra))
+        c = p.get("critic") or {}
+        if c.get("cards"):
+            lines.append(f"**Внешний критик:** карточек {c['cards']}, решения PO: " + (", ".join(f"{k} {v}" for k, v in sorted(c["decided"].items())) or "ещё не разобраны") + f"; задач создано {c['tasks']}")
         if p["spend_usd"]:
             lines.append("Расход: " + ", ".join(f"{r} ${u:.2f}" for r, u in sorted(p["spend_usd"].items())) + f" = ${sum(p['spend_usd'].values()):.2f}")
         lines.append("")
     fw = led["framework"]
-    if fw["retro"] or fw["builds"]:
-        lines.append("## Фреймворк и сборки")
+    if fw["retro"] or fw["builds"] or fw.get("critic_reports"):
+        lines.append("## Фреймворк, сборки, внешний критик")
         for r in fw["retro"]:
             lines.append(f"- ретро предложило [{r.get('risk')}] {r['title']}")
         for b in fw["builds"]:
             lines.append(f"- сборка {b['slug']}: {b['status']}{b['note']}")
+        for c in fw.get("critic_reports") or []:
+            lines.append(f"- отчёт критика {c['report']}: находок {c['findings']} (" + ", ".join(f"{k} {v}" for k, v in sorted(c["by_status"].items())) + ")")
         lines.append("")
     return "\n".join(lines)
 
@@ -272,7 +309,8 @@ def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
     chars and the reporter rightly wrote "the ledger is truncated")."""
     out = {"since": led["since"], "until": led["until"], "hours": led["hours"],
            "framework": {"retro_proposals": led["framework"]["retro"],
-                         "site_builds_by_cron_not_a_role": led["framework"]["builds"]},   # builds are the dispatcher's cron, not the retro's work
+                         "site_builds_by_cron_not_a_role": led["framework"]["builds"],   # builds are the dispatcher's cron, not the retro's work
+                         "external_critic_reports": led["framework"].get("critic_reports", [])},
            "products": []}
     for p in led["products"]:
         roles = {}
@@ -287,7 +325,7 @@ def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
         po["implemented"] = po["implemented"][:20]
         po["owner_questions"] = po["owner_questions"][:2]
         out["products"].append({"product": p["product"], "name": p["name"], "site": p["site"], "roles": roles, "po": po,
-                                "dispatcher": p["dispatcher"], "spend_usd": p["spend_usd"]})
+                                "dispatcher": p["dispatcher"], "spend_usd": p["spend_usd"], "external_critic": p.get("critic")})
     return out
 
 
@@ -317,8 +355,9 @@ _RULES_BONUS = (
     "- Честно: что не вышло — одной фразой с причиной, без оправданий, без «успешно/отлично». Ведомость приложена, владелец её сверит.\n"
     "- Числа — только те, что меняют оценку (сколько вышло в свет, сколько влито, расход), и только из ведомости.\n"
     "- Секция PO — голос руководителя продуктов, до 500 символов: куда направил команду и почему, что из этого уже живёт, что "
-    "отклонил — только если владельцу важно это знать. Вопросы владельцу — одной строкой, не больше двух, только если без ответа "
-    "работа стоит.\n"
+    "отклонил — только если владельцу важно это знать. Если в окне были находки внешнего критика (external_critic, "
+    "external_critic_reports) — одна фраза: сколько взято в работу, сколько отклонено, сколько он сам отметил fixed. "
+    "Вопросы владельцу — одной строкой, не больше двух, только если без ответа работа стоит.\n"
     "- Заголовок — одна фраза до 160 символов: главный результат окна и расход.\n"
     "- Сборки сайтов (site_builds_by_cron_not_a_role) и автослияния делает диспетчер по cron — это не заслуга ретро и не "
     "заслуга разработчика; упоминать их только в секции PO как факт среды, если вообще нужно.\n")

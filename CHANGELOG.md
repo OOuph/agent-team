@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- SCHEME §10 «Внешний критик»: contract, place in the loop, role as the independent verifier of 'done', the measure of its value and its limits; the 12-hour role report counts critic cards per product (PO decisions, tasks created) and critic reports by finding status.
 - Critic: JSON twin (`<report>.json`, REPORT_FORMAT.md §2) is the machine source when present; `fixed`/`unverified` findings make no card; `agent-team-responses.json` is written to the critic's context dir after every `cycle --product all` with the PO decision and task per finding id.
 - Droplet metrics: the external critic's user agent `FormachinesExternalCritic/` counts as own traffic (with `agent-team/`), not as an agent.
 - External critic (`team/critic.py`, `external_critic` in team.yaml): Markdown reports of an outside Codex critic are read every cycle; each `**ID · Pn · title**` finding becomes a `feedback` observation of the product it names, the PO answers with a task or a reasoned reject (owner 03.11).
