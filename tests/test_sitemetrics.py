@@ -408,3 +408,10 @@ def test_cli_all_hosts_filters_with_hosts_flag(tmp_path: Path):
 def test_cli_rejects_bad_date(tmp_path: Path):
     log_path = write_log(tmp_path / "access.log", [line("10.0.0.1", CHROME, "/")])
     assert sm.main(["--host", HOST, "--log", str(log_path), "--since", "03.11.2026", "--out", "-"]) == 2
+
+
+def test_scanner_probes_at_any_depth():
+    for path in ("/app/.env", "/api/.env", "/config/.env", "/old/wp-login.php", "/x/.git/config", "/foo/phpmyadmin/", "/a/.aws/credentials"):
+        assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", path)[0] == "scanner", path
+    assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", "/pkg/npm/dotenv/")[0] == "human"     # 'env' inside a name is not a probe
+    assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", "/environment/")[0] == "human"

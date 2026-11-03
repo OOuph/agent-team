@@ -111,6 +111,15 @@ SOCIAL_PREVIEW: frozenset[str] = frozenset(
 # A UA with one of these and no known name is still a crawler (name "other"); set to () to disable.
 GENERIC_CRAWLER_MARKERS: tuple[str, ...] = ("bot/", "bot;", "bot)", "crawler", "spider")
 
+# probes that appear at any depth, not only at the root (`/app/.env`, `/api/.env`, `/old/wp-login.php`, `/x/.git/config`)
+SCANNER_ANYWHERE: tuple[str, ...] = (".env", "/.git/", "/.git", "wp-login.php", "/wp-admin", "/phpmyadmin", "/.aws/", "/.ssh/",
+                                     "xmlrpc.php", "/phpinfo", "/.svn/", "/.hg/", "/etc/passwd", "/.DS_Store")
+
+
+def _scanner_anywhere(plow: str) -> bool:
+    return any(plow.endswith(m) or (m.endswith("/") and m in plow) or (m + "/" in plow) for m in SCANNER_ANYWHERE)
+
+
 SCANNER_PATHS: tuple[str, ...] = (
     "/.env", "/.git", "/.aws", "/.ssh", "/.DS_Store", "/wp-admin", "/wp-login", "/wp-content", "/wp-includes",
     "/wordpress", "/xmlrpc.php", "/phpmyadmin", "/pma/", "/vendor/", "/cgi-bin", "/admin/config", "/config.json",
@@ -314,7 +323,7 @@ def classify(ua: str, ip: str, path: str, own_ua_prefixes: Iterable[str] = DEFAU
     if any(mk in low for mk in GENERIC_CRAWLER_MARKERS):
         return "crawler", "other"
     plow = path.lower()
-    if any(plow.startswith(p.lower()) for p in SCANNER_PATHS) or any(s in low for s in SCANNER_UAS):
+    if any(plow.startswith(p.lower()) for p in SCANNER_PATHS) or any(s in low for s in SCANNER_UAS) or _scanner_anywhere(plow):
         return "scanner", ""
     for family, needle in AGENT_FAMILIES:
         if needle in low:
