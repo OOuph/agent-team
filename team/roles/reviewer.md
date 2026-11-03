@@ -29,4 +29,4 @@ The review-verdict schema: verdict, steps (url, status, note), criteria with met
 observations, a two-sentence summary. English.
 
 ## Shell rule
-The tool allowlist matches only a bare `team-fetch <url> [flags]` or `team-publish ...` call. `cd`, `;`, `&&`, `for` loops and pipes are denied, so issue one call per URL.
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
