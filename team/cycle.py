@@ -31,6 +31,9 @@ log = logging.getLogger("team.cycle")
 PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "digest")
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
+# reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
+REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
+                          "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -306,7 +309,21 @@ class Cycle:
         result = (t.get("results") or [None])[-1]
         prompt = prompts.reviewer_prompt(self.p, t, result, t.get("released_sha"))
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
-        rr = self.role_run("reviewer", prompt, "review-verdict", cwd=work, label=f"review-{t['id']}", cap=1.0, max_turns=30)
+        tools = env = None
+        sha = t.get("released_sha")
+        if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
+            try:
+                work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
+                tools = list(REPO_ONLY_REVIEW_TOOLS)
+                env = {"PYTHONDONTWRITEBYTECODE": "1"}
+                prompt += (f"\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
+                           "`python3 -m unittest`, `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
+                           "A criterion about tests or code gets pass/fail from this checkout.\n")
+            except Exception as e:               # no checkout → the old URL-only review
+                log.warning("%s: read-only checkout failed: %s", t["id"], e)
+                work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
+        rr = self.role_run("reviewer", prompt, "review-verdict", cwd=work, label=f"review-{t['id']}", cap=1.0, max_turns=30,
+                           allowed_tools=tools, env_extra=env)
         if rr is None:
             return
         if not (rr.ok and rr.structured):
