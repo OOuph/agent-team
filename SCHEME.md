@@ -38,6 +38,7 @@
 | measure | каждые 6 ч (`measure_every_h`): analyst по метрикам, эффект задач → `measured` → `done` | analyst |
 | geo | раз в 168 ч: geo-probe | geo-probe |
 | digest | в 07 и 19 UTC: сводка в `digests/` и в Telegram ops | — |
+| (вне цикла) отчёт ролей | cron 07:30 и 19:30 UTC, `team report`: ведомость за 12 ч по продуктам и ролям из хранилища → один прогон `reporter` → абзац от первого лица на каждую работавшую роль + «что выбрал и что реализовано» от PO → Telegram ops; файл `data/reports/<stamp>.md` с ведомостью для проверки | reporter |
 
 Правило triage: PO видит `not_before` каждой задачи бэклога; предложенная задача с тем же названием или с той же парой «роль + `not_before`», что у открытой, не создаётся (событие `task.duplicate_skipped`, строка в дайджесте PO). PO закрывает лишние задачи через `close_tasks` → `rejected`.
 

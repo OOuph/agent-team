@@ -7,6 +7,10 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- `team report` + `report-roles.sh` (cron 07:30 / 19:30 UTC): 12-hour role report to the owner's Telegram — a deterministic
+  ledger per product and role from the stores (tasks, results, reviews, posts, editorial, support, PO decisions, merges,
+  builds, spend) → one `reporter` run writes first-person paragraphs per role and the PO's "chosen / implemented";
+  the dry ledger is sent when the model fails (owner 03.11).
 - 2026-11-03 ops (duty session, decision 24): reviewer gets the repository URL and reads repo-only deliverables via raw.githubusercontent.com (F-0042, F-0046, F-0048, F-0053, F-0055); a newer build marker is normal with daily cron builds; developer lists raw URLs of changed files; PO never creates developer tasks for metrics counting (luz T-0013 loop, Q-0005/Q-0006) — targets are ops config in product.yaml; targets added: luz /go/vote/, release-radar /go/vote/ /llms.txt, diary /go/github/ /llms.txt.
 - Protected paths reduced to the rollback pair (`run-cycle.sh`, `watchdog.sh`) — owner 03.11: maximum automation during
   the pilot; `store.py`, `team.yaml`, `build-site.sh`, `deploy/`, `bin/` and the rest now merge by themselves after tests + canary.
