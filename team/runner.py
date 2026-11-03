@@ -220,6 +220,23 @@ def _blocks(msg: Any) -> list[dict[str, Any]]:
     return [b for b in (content or []) if isinstance(b, dict)]
 
 
+SHELL_RULE = ("Shell rule: only a bare `team-fetch <url> [flags]` (or team-publish) is allowed in Bash — no pipes, redirects, heredocs "
+              "or other commands. Write files with the Write tool. Replace pipes with `team-fetch --json-path a.b[0].c` "
+              "(add `--count` for a length), `--json-keys`, or `--grep`.")
+
+
+def denial_hint(denial: Any) -> str:
+    """The allowed form for a denied call, so a role (and a reader of the transcript) sees what to do instead."""
+    d = denial if isinstance(denial, dict) else {"tool_name": str(denial)}
+    inp = d.get("tool_input") or {}
+    cmd = str(inp.get("command") or "") if isinstance(inp, dict) else ""
+    if d.get("tool_name") == "Bash":
+        if re.search(r"<<|>|\btee\b|\bcat\b", cmd):
+            return "Use the Write tool to create files, not shell redirects or heredocs. " + SHELL_RULE
+        return SHELL_RULE
+    return ""
+
+
 def render_transcript(role: str, model: str, events: list[dict[str, Any]], result: dict[str, Any] | None,
                       max_result_chars: int = 1500) -> str:
     sid = next((e.get("session_id") for e in events if e.get("session_id")), None)
@@ -256,6 +273,11 @@ def render_transcript(role: str, model: str, events: list[dict[str, Any]], resul
                 cut = c[:max_result_chars] + (f"\n… [{len(c) - max_result_chars} more chars]" if len(c) > max_result_chars else "")
                 lines += [f"**result of {names.get(str(b.get('tool_use_id')), 'tool')}{' (error)' if b.get('is_error') else ''}:**",
                           "", "```", cut, "```", ""]
+    if result is not None and result.get("permission_denials"):
+        lines += ["## Denied calls", ""]
+        for dn in result["permission_denials"][:10]:
+            lines += [f"- {dn.get('tool_name') if isinstance(dn, dict) else dn}: {denial_hint(dn)}".rstrip(": ")]
+        lines += [""]
     if result is not None:
         lines += ["## Result", "", f"turns: {result.get('num_turns')} · cost: {result.get('total_cost_usd')} · is_error: {result.get('is_error')}", ""]
         so = result.get("structured_output")
