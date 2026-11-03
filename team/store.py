@@ -276,9 +276,16 @@ class Store:
         q.update({"state": "answered", "answer": answer[:3000], "answered_by": by, "answered": utcnow()})
         _write(p, q)
         self.event("question.answer", qid, by, {"answer": answer[:200], "not_before": not_before})
+        norm = " ".join(str(q.get("question", "")).lower().split())[:300]
         for tid in q.get("blocks") or []:
             t = self.task(tid)
             if t and t.get("state") in ("blocked", "waiting_owner"):
+                same = [o for o in self.questions() if tid in (o.get("blocks") or [])
+                        and " ".join(str(o.get("question", "")).lower().split())[:300] == norm]
+                if by != "owner" and not not_before and len(same) >= 2:
+                    # blocked twice on the same question: an automatic answer does not restart it a third time
+                    self.event("task.restart_suppressed", tid, by, {"question": qid, "times": len(same)})
+                    continue
                 fields = {"blocked_by": None}
                 if not_before:
                     fields["not_before"] = not_before

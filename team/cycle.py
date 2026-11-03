@@ -395,6 +395,13 @@ class Cycle:
             nb = parse_ts(t.get("not_before"))
             if nb and _now() < nb:
                 continue        # scheduled for later (daily posts): the PO set not_before
+            if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
+                self.store.add_observation({
+                    "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
+                    "classification": "need_hypothesis", "source": "dispatcher", "task": t["id"],
+                    "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
+                    "detail": "PO: set not_before on this task (or fix the title)."})
+                continue
             if self.execute_task(t):
                 done += 1
 
@@ -779,6 +786,15 @@ class Cycle:
 
 
 # ------------------------------------------------------------------ helpers
+
+def future_dated_title(title: str, now: datetime) -> bool:
+    """True if the title contains a DD.MM date later than today (UTC, current year)."""
+    for d, m in re.findall(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?![\d.]*\d)", title):
+        d, m = int(d), int(m)
+        if 1 <= m <= 12 and 1 <= d <= 31 and (m, d) > (now.month, now.day):
+            return True
+    return False
+
 
 def fingerprint(scope: str, cls: str, url: str, title: str) -> str:
     import hashlib
