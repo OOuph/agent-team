@@ -982,10 +982,14 @@ def is_stub_result(summary: str) -> bool:
 
 def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
     """True when the previous recorded result was also partial with the same summary (first 200 chars) or the same frictions."""
-    prev = [r for r in (t.get("results") or []) if r.get("status") == "partial"]
+    prev = [r for r in (t.get("results") or []) if r.get("status") in ("partial", "blocked")]
     if not prev:
         return False
     last = prev[-1]
+    k_old = {str(f.get("kind")) for f in (last.get("friction") or []) if isinstance(f, dict) and f.get("kind")}
+    k_new = {str(f.get("kind")) for f in (res.get("friction") or []) if isinstance(f, dict) and f.get("kind")}
+    if k_old and k_old == k_new:  # same friction category on two consecutive attempts (T-0024)
+        return True
     same_summary = _short_text(last.get("summary"), 200) == _short_text(res.get("summary"), 200)
     f_old = sorted(str(f.get("what") or f)[:120] for f in (last.get("friction") or []))
     f_new = sorted(str(f.get("what") or f)[:120] for f in (res.get("friction") or []))

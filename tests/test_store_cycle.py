@@ -326,3 +326,13 @@ def test_stub_and_repeated_partial_guards():
     progress = {"status": "partial", "summary": "Stop-list done; llms.txt link needs build.py, asking PO.", "friction": [{"what": "scope"}]}
     assert not C.repeated_partial(t, progress)
     assert not C.repeated_partial({"results": []}, same)
+
+
+def test_same_friction_kind_twice_blocks():
+    from team import cycle as C
+    prev = {"status": "partial", "summary": "a", "friction": [{"kind": "missing_data", "what": "x"}]}
+    t = {"results": [prev]}
+    assert C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": [{"kind": "missing_data", "what": "y"}]})
+    assert not C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": [{"kind": "environment", "what": "y"}]})
+    assert C.repeated_partial({"results": [{"status": "blocked", "summary": "a", "friction": [{"kind": "environment", "what": "q"}]}]},
+                              {"status": "partial", "summary": "b", "friction": [{"kind": "environment", "what": "z"}]})
