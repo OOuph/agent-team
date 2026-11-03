@@ -141,6 +141,9 @@ def test_external_referer_and_targets():
     assert sm.target_matches("/feed.xml", "/feed.xml")
     assert not sm.target_matches("/feed.xml2", "/feed.xml")
     assert sm.target_matches("/api/v1/x", "/api/") and sm.target_matches("/api", "/api/")
+    assert sm.target_matches("/go/vote/2026-11-03/up/", "/go/vote/*/up/") and not sm.target_matches("/go/vote/2026-11-03/down/", "/go/vote/*/up/")
+    assert not sm.target_matches("/go/vote/a/b/up/", "/go/vote/*/up/") and sm.target_matches("/go/vote/a/b/up/", "/go/vote/**/up/")
+    assert sm.target_matches("/d/2026-11-03/index.json", "/d/*/index.json")
     assert not sm.target_matches("/apix", "/api/")
     assert sm.target_matches("/errata/index.json", "index.json")
 

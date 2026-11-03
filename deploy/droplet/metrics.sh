@@ -17,7 +17,7 @@ PYTHON="${PYTHON:-python3}"
 # directory per probe. Targets are the union of products/*/product.yaml `targets:` (a target absent on a host just
 # counts 0). Both can be overridden from /etc/agent-team/metrics.env (HOSTS=..., TARGETS=...).
 HOSTS="${HOSTS:-releases.formachines.ai,agentsmd.formachines.ai,luz.bymachines.ai,agentteam.formachines.ai}"
-TARGETS="${TARGETS:-/go/ /go/telegram/ /try/ /today.json /tomorrow.json /stats.json /feed.xml /day/ /d/ /repo/ /pkg/}"
+TARGETS="${TARGETS:-/go/ /go/telegram/ /go/github/ /go/vote/ /go/vote/*/up/ /go/vote/*/down/ /try/ /today.json /tomorrow.json /stats.json /feed.xml /day/ /d/ /repo/ /pkg/ /llms.txt}"
 [ -r /etc/agent-team/metrics.env ] && . /etc/agent-team/metrics.env
 
 now_iso() { date -u +%Y-%m-%dT%H:%M:%SZ; }

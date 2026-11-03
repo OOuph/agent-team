@@ -350,7 +350,12 @@ def external_referer_host(referer: str, site_host: str) -> str | None:
 
 
 def target_matches(path: str, target: str) -> bool:
-    """'/feed.xml' exact · '/api/' prefix (also matches '/api') · 'index.json' substring anywhere in the path."""
+    """'/feed.xml' exact · '/api/' prefix (also matches '/api') · 'index.json' substring anywhere in the path ·
+    '/go/vote/*/up/' glob (fnmatch; '*' does not cross a '/', '**' does)."""
+    if "*" in target or "?" in target or "[" in target:
+        rx = "^" + "".join(".*" if tok == "**" else ("[^/]*" if tok == "*" else re.escape(tok))
+                           for tok in re.split(r"(\*\*|\*)", target) if tok) + "$"
+        return re.match(rx, path) is not None
     if target.startswith("/"):
         if target.endswith("/") and len(target) > 1:
             return path.startswith(target) or path == target[:-1]
