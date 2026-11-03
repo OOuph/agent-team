@@ -52,6 +52,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   path into `owner_questions` (ops adds it the same day); the counts per class appear in the next metrics file.
 - A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
   available field in its text, or ask the analyst for the metric first.
+- Every acceptance criterion must be observable through a public URL. For repo-only deliverables (code such as `mcp/`,
+  tests, README) require the developer to publish a readable artefact (README or source under `public/`, or a link to a
+  public GitHub blob) and cite that URL in the criterion itself. A criterion that needs a checkout or a running process
+  is not a valid criterion (F-0042, F-0043, F-0046, F-0047, F-0048, F-0049).
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
