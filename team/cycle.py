@@ -787,11 +787,22 @@ class Cycle:
 
 # ------------------------------------------------------------------ helpers
 
+DATE_IN_TITLE_RE = re.compile(r"(?<![\w.])(\d{2})\.(\d{2})(?:\.(\d{4}))?(?!\w|\.\d)")
+
+
 def future_dated_title(title: str, now: datetime) -> bool:
-    """True if the title contains a DD.MM date later than today (UTC, current year)."""
-    for d, m in re.findall(r"(?<![\d.])(\d{1,2})\.(\d{1,2})(?![\d.]*\d)", title):
+    """True if the title contains a standalone DD.MM or DD.MM.YYYY date later than today (UTC).
+
+    Only two-digit day and month count (``03.11``), so version numbers (``3.12``, ``v1.12``, ``2.1.4``) and decimals
+    are not dates. Without a year, December → January is read as the next year."""
+    for d, m, y in DATE_IN_TITLE_RE.findall(title):
         d, m = int(d), int(m)
-        if 1 <= m <= 12 and 1 <= d <= 31 and (m, d) > (now.month, now.day):
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            continue
+        if y:
+            if (int(y), m, d) > (now.year, now.month, now.day):
+                return True
+        elif (m, d) > (now.month, now.day) or (now.month == 12 and m == 1):
             return True
     return False
 
