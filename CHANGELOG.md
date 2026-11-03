@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0013: reviewer — a negative case that cannot be produced on the live site goes into `limits` as `not observable`, not into an inconclusive verdict, when every other criterion passed; inconclusive is only for unchecked main criteria (F-0060, F-0066, F-0064, F-0056).
 - Execute seats per role (`cycle.execute_slots`: developer 1, marketer 1, analyst 1) — the daily post no longer starves behind developer tasks; a marketing task without a recorded publication is never `accepted` by the reviewer (blocked + question to the PO); the developer prompt names the product's `test_cmd` (framework checkout has no venv, F-0067).
 - T-0011: tasks with `repo_only: true` get a reviewer run in a read-only checkout of the released commit (`Read`/`Glob`/`Grep`, `python3 -m unittest`, `python3 -m pytest -q`, `git log -1`, `team-fetch`), so tests give pass/fail instead of inconclusive (F-0046, F-0047, F-0049, F-0054, F-0042, F-0053, F-0055, F-0050, F-0051). New `team/schemas/task.schema.json` documents the task fields.
 - T-0010: reviewer — a build-marker mismatch alone never makes a verdict inconclusive; note it in limits and check every criterion on the live site (F-0044, F-0042, F-0037, F-0048).
