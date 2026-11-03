@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0022: a retry of a developer task continues `task/<id>` (local, else origin) with base merged in; on a merge conflict it starts fresh from base (F-0087, F-0090).
 - sitemetrics: scanner probes at any depth (`/app/.env`, `/api/.env`, `wp-login.php`, `/.git/`, phpmyadmin…) are class scanner, not human (they showed up in release-radar human top pages).
 - T-0021: PO card `create_task` rules: `scope` must list every file or build step the criteria need; a task that consumes another task's report names it, is created after acceptance or carries `not_before` plus a fallback (F-0082, F-0083).
 - T-0020: a denied Bash call gets the allowed form — `denial_hint()` in `runner.py` (Write tool for files, bare `team-fetch`, `--json-path`/`--count`/`--grep` instead of pipes) is written to the run transcript under «Denied calls»; marketer and editor cards open with the same three-line shell rule (F-0022, F-0031, F-0032, F-0033, F-0038, F-0039, F-0040, F-0041).
