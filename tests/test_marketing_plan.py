@@ -225,3 +225,35 @@ def test_po_repo_only_is_kept(tmp_path: Path):
     s = Store(p.dir)
     assert s.tasks()[0]["repo_only"] is True
     s.close()
+
+
+def test_raw_github_only_how_to_verify_sets_repo_only_and_uses_checkout(tmp_path: Path, monkeypatch):
+    from team import gitops
+    from team.cycle import only_raw_github_urls
+    assert only_raw_github_urls(["https://raw.githubusercontent.com/o/r/abc/mcp/a.py"])
+    assert not only_raw_github_urls(["https://raw.githubusercontent.com/o/r/abc/a.py", "https://demo.example/"])
+    assert not only_raw_github_urls([])
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="mcp tests", type_="feature", problem="p", scope="mcp/", acceptance=["tests pass"], goal="G1",
+                      created_by="po", state="ready", role="developer")
+    s.add_result(t["id"], {"status": "done", "how_to_verify": ["https://raw.githubusercontent.com/o/r/abc/mcp/a.py"]})
+    t = s.task(t["id"])
+    assert not t.get("repo_only")
+    seen = {}
+
+    class R(FakeRunner):
+        def run(self, role, prompt, schema, *, cwd, allowed_tools=None, **kw):
+            seen.update(cwd=cwd, tools=allowed_tools, prompt=prompt)
+            return RunResult(ok=False, structured=None, error="stop", raw="", cost_usd=0.0, num_turns=0)
+
+    def fake_checkout(repo, sha, dest):
+        Path(dest).mkdir(parents=True, exist_ok=True)
+        return Path(dest)
+    monkeypatch.setattr(gitops, "readonly_checkout", fake_checkout)
+    t["released_sha"] = "abc123"
+    Cycle(st, p, R(), "c1").review_task(t)
+    assert s.task(t["id"])["repo_only"] is True
+    assert str(seen["cwd"]).endswith("checkout") and seen["tools"] and "READ-ONLY CHECKOUT" in seen["prompt"]
+    s.close()

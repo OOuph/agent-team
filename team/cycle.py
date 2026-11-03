@@ -44,6 +44,12 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def only_raw_github_urls(urls: Any) -> bool:
+    """True when how_to_verify lists URLs and every one is raw.githubusercontent.com (a repo-only deliverable)."""
+    urls = [u for u in (urls or []) if isinstance(u, str) and u.strip()]
+    return bool(urls) and all(re.match(r"https://raw\.githubusercontent\.com/", u.strip()) for u in urls)
+
+
 class Cycle:
     def __init__(self, st: Settings, product: Product, runner: Runner | None, cycle_id: str, *, dry_run: bool = False):
         self.st, self.p, self.runner, self.cycle_id, self.dry_run = st, product, runner, cycle_id, dry_run
@@ -311,6 +317,9 @@ class Cycle:
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         tools = env = None
         sha = t.get("released_sha")
+        if not t.get("repo_only") and only_raw_github_urls((result or {}).get("how_to_verify")):
+            t["repo_only"] = True                    # T-0017: nothing on the live site to check → read-only checkout
+            self.store.save_task(t)
         if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
             try:
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
