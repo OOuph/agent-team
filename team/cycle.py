@@ -166,6 +166,7 @@ class Cycle:
                 self.store.transition(t["id"], "ready", "dispatcher", f"lease of {c['run_id']} expired", force=True)
         self.fetch_metrics()
         self.collect_feedback()
+        self.collect_critic()
         self.support_replies()
         self.seo_check()
         n = len(self.store.cycles())
@@ -189,6 +190,18 @@ class Cycle:
             self.store.event("feedback.error", self.p.slug, "dispatcher", str(exc)[:300])
         if n:
             self.store.event("feedback.collected", self.p.slug, "dispatcher", {"items": n})
+        return n
+
+    def collect_critic(self) -> int:
+        """Reports of the external critic (owner 03.11) → observation cards for this product, like another reviewer."""
+        from . import critic
+        from .config import load_products
+        try:
+            n = critic.ingest(self.st, self.p, self.store, load_products(self.st))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: critic ingest failed: %s", self.p.slug, exc)
+            self.store.event("critic.error", self.p.slug, "dispatcher", str(exc)[:300])
+            return 0
         return n
 
     def support_replies(self) -> int:

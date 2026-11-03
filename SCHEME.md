@@ -37,6 +37,7 @@
 | execute | одна задача: developer → коммит → **merge в main + push** → droplet публикует ≤ 5 мин → `released`; marketer → черновики (`team-publish` в режиме черновика) → editor → при revise одна доработка маркетолога → editor → диспетчер публикует одобренное (текст поста — в таблицу `posts`) → `accepted`; marketer с `plan: true` → пишет `marketing-plan.md` в рабочей папке → диспетчер копирует в `products/<slug>/` → `accepted` без поста (файла нет или < 200 символов → вопрос PO); analyst-задача → `done` | developer / marketer / analyst |
 | measure | каждые 6 ч (`measure_every_h`): analyst по метрикам, эффект задач → `measured` → `done` | analyst |
 | geo | раз в 168 ч: geo-probe | geo-probe |
+| collect (внешний критик) | каждый цикл: новые отчёты `external_critic.dir` (сторонняя система, Codex, раз в 2 ч) → находки `**ID · Pn · заголовок**` разносятся по продуктам (токен id, заголовок секции, хост) → наблюдения `feedback`/`external-critic`, повтор id — к живой карточке; отчёт без находок — одной карточкой фреймворку. PO отвечает задачей или обоснованным reject (владелец 03.11: «критика ещё одного ревьюера») | — |
 | digest | в 07 и 19 UTC: сводка в `digests/` и в Telegram ops | — |
 | (вне цикла) отчёт ролей | cron 07:30 и 19:30 UTC, `team report`: ведомость за 12 ч по продуктам и ролям из хранилища → один прогон `reporter` → абзац от первого лица на каждую работавшую роль + «что выбрал и что реализовано» от PO → Telegram ops; файл `data/reports/<stamp>.md` с ведомостью для проверки | reporter |
 

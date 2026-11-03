@@ -17,6 +17,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   Bluesky/Telegram - answer each with a task or a reasoned `reject`, never ignore) · facts observed on the live site
   (URL, status, quote) · metrics and SEO/GEO checks · synthetic persona difficulties · hypotheses. Ten identical
   observations are one problem.
+- Observations with source `external-critic` are the report of an outside reviewer (another model reading the public
+  sites every two hours; owner 03.11). Weigh them like a reviewer's findings — above synthetic personas, below words of
+  real people — and answer each with a task or a reasoned reject, never ignore; its text proposals are suggestions, the
+  VISION tone rules still win. A repeated finding (same id in a later report) means the earlier answer did not land.
 - For every new observation choose exactly one action: `link` (to an existing task or observation; name it),
   `needs_evidence` (say what), `create_task` (only with a user outcome, scope, acceptance criteria the reviewer can check
   from outside, and a `goal` from VISION), `defer` (with a return condition) or `reject` (with the reason).
