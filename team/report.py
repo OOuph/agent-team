@@ -270,7 +270,10 @@ PROMPT_LEDGER_CHARS = 150_000
 def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
     """The ledger with long tails trimmed, so the whole window fits the prompt (the first live run cut the JSON at 60K
     chars and the reporter rightly wrote "the ledger is truncated")."""
-    out = {"since": led["since"], "until": led["until"], "hours": led["hours"], "framework": led["framework"], "products": []}
+    out = {"since": led["since"], "until": led["until"], "hours": led["hours"],
+           "framework": {"retro_proposals": led["framework"]["retro"],
+                         "site_builds_by_cron_not_a_role": led["framework"]["builds"]},   # builds are the dispatcher's cron, not the retro's work
+           "products": []}
     for p in led["products"]:
         roles = {}
         for r, v in p["roles"].items():
@@ -314,7 +317,9 @@ _RULES_BONUS = (
     "сколько стоило), и только из ведомости.\n"
     "- Секция PO — голос руководителя продуктов: что выбрали за окно и почему (куда направили команду, что отклонили и зачем), "
     "что реализовано и что это даёт продуктам, что ждёт решения владельца — отдельной строкой. До 1000 символов.\n"
-    "- Заголовок — одна фраза, как первая строка письма владельцу: главный результат окна и общий расход.\n")
+    "- Заголовок — одна фраза, как первая строка письма владельцу: главный результат окна и общий расход.\n"
+    "- Сборки сайтов (site_builds_by_cron_not_a_role) и автослияния делает диспетчер по cron — это не заслуга ретро и не "
+    "заслуга разработчика; упоминать их только в секции PO как факт среды.\n")
 
 
 def reporter_prompt(led: dict[str, Any], style: str = DEFAULT_STYLE) -> str:
