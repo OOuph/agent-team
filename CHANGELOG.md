@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0011: tasks with `repo_only: true` get a reviewer run in a read-only checkout of the released commit (`Read`/`Glob`/`Grep`, `python3 -m unittest`, `python3 -m pytest -q`, `git log -1`, `team-fetch`), so tests give pass/fail instead of inconclusive (F-0046, F-0047, F-0049, F-0054, F-0042, F-0053, F-0055, F-0050, F-0051). New `team/schemas/task.schema.json` documents the task fields.
 - T-0010: reviewer — a build-marker mismatch alone never makes a verdict inconclusive; note it in limits and check every criterion on the live site (F-0044, F-0042, F-0037, F-0048).
 - team-fetch hosts per role (`fetch.extra_hosts_by_role` in team.yaml): the reviewer and support may open github.com / raw.githubusercontent.com / api.github.com — repo-only reviews were denied_permission and inconclusive (F-0059…F-0065). sitemetrics `--own-ip`: manual checks from reservememes count as own traffic, not agents.
 - build-site.sh: a lost push race no longer repeats the scan — data/ is kept, the clone is reset to the new main and the site is re-rendered offline (`--no-scan` / `--offline`), then pushed (ops session caught agentsmd losing 40 min of scan to the 05:07 merges). agentsmd cron 04:20 with `--max-seconds 5400` for the full daily scan of 1922 repos.

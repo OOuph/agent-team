@@ -76,6 +76,32 @@ def start_task_branch(repo_dir: Path, task_id: str, base: str = "main") -> str:
     return br
 
 
+def readonly_checkout(repo_dir: Path, sha: str, dest: Path) -> Path:
+    """A detached copy of `sha` in `dest` with every file made read-only (reviewer of repo_only tasks). No remote, no .git
+    write access, so the role can neither change the checkout nor fetch anything."""
+    import shutil
+    import stat
+    if dest.exists():
+        os.chmod(dest, 0o700)
+        for r, ds, fs in os.walk(dest):
+            for n in ds:
+                os.chmod(os.path.join(r, n), 0o700)
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
+    git(dest, "checkout", "--quiet", "--detach", sha)
+    git(dest, "remote", "remove", "origin", check=False)
+    for r, ds, fs in os.walk(dest):
+        for n in fs:
+            fp = os.path.join(r, n)
+            if not os.path.islink(fp):
+                os.chmod(fp, stat.S_IMODE(os.lstat(fp).st_mode) & ~0o222)
+        for n in ds:
+            os.chmod(os.path.join(r, n), 0o555)
+    os.chmod(dest, 0o555)
+    return dest
+
+
 def head(repo_dir: Path) -> str:
     return git(repo_dir, "rev-parse", "HEAD")
 

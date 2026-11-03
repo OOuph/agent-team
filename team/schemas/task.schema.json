@@ -1,0 +1,21 @@
+{
+ "title": "task",
+ "description": "A backlog task file (products/<slug>/backlog/T-xxxx.yaml). Only fields the dispatcher reads are listed; others are allowed.",
+ "type": "object",
+ "required": ["id", "title", "state", "problem", "acceptance"],
+ "properties": {
+  "id": {"type": "string", "pattern": "^T-[0-9]+$"},
+  "title": {"type": "string"},
+  "state": {"type": "string"},
+  "problem": {"type": "string"},
+  "scope": {"type": "string"},
+  "acceptance": {"type": "array", "items": {"type": "string"}},
+  "negative_cases": {"type": "array", "items": {"type": "string"}},
+  "repo_only": {
+   "type": "boolean",
+   "default": false,
+   "description": "The deliverable is not served publicly (code, tests, docs). The reviewer runs in a read-only checkout of released_sha with Read/Glob/Grep, python3 -m unittest, python3 -m pytest -q, git log -1 and team-fetch."
+  }
+ },
+ "additionalProperties": true
+}
