@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- 2026-11-03 ops (duty session, decision 24): reviewer gets the repository URL and reads repo-only deliverables via raw.githubusercontent.com (F-0042, F-0046, F-0048, F-0053, F-0055); a newer build marker is normal with daily cron builds; developer lists raw URLs of changed files; PO never creates developer tasks for metrics counting (luz T-0013 loop, Q-0005/Q-0006) — targets are ops config in product.yaml; targets added: luz /go/vote/, release-radar /go/vote/ /llms.txt, diary /go/github/ /llms.txt.
 - Protected paths reduced to the rollback pair (`run-cycle.sh`, `watchdog.sh`) — owner 03.11: maximum automation during
   the pilot; `store.py`, `team.yaml`, `build-site.sh`, `deploy/`, `bin/` and the rest now merge by themselves after tests + canary.
 - Daily site builds: `build-site.sh` + cron on the server at the hours each VISION promises (agentsmd 04:00, release-radar

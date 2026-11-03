@@ -31,5 +31,6 @@ repository checkout you were started in (the task branch is already checked out)
 
 ## Output
 The task-result schema: status (done / partial / blocked), a summary, the list of changes, how_to_verify (public URLs
-after deployment and what should be visible), self_check per acceptance criterion with evidence, proposals, the branch
+after deployment and what should be visible; for repo-only deliverables — code, tests, README — the
+`https://raw.githubusercontent.com/<org>/<repo>/<commit>/<path>` URL of each changed file), self_check per acceptance criterion with evidence, proposals, the branch
 and the commit hash (`git rev-parse HEAD`). English.

@@ -14,6 +14,7 @@ targets:
 - /go/telegram/
 - /d/
 - /feed.xml
+- /go/vote/
 budget_usd_per_day: 20
 paused: false
 geo_queries:

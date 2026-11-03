@@ -16,6 +16,8 @@ targets:
 - /today.json
 - /feed.xml
 - /day/
+- /go/github/
+- /llms.txt
 budget_usd_per_day: 20
 paused: false
 geo_queries:

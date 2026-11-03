@@ -92,8 +92,16 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
 
 
 def reviewer_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None) -> str:
+    repo = (product.repo_url or "").removesuffix(".git")
+    raw = ""
+    if repo.startswith("https://github.com/"):
+        raw = (f"Repository: {repo} (branch {product.repo_branch}). Repo-only deliverables (code, tests, README, scripts) are "
+               f"public: read a file with team-fetch at https://raw.githubusercontent.com/{repo.removeprefix('https://github.com/')}/"
+               f"{sha or product.repo_branch}/<path> and the commit at {repo}/commit/{sha or product.repo_branch}.\n")
     return (f"# REVIEW of task {task['id']} — product `{product.slug}`\n\nPublic base URL: {product.site_base}\n"
-            f"Expected release: commit {sha or 'unknown'} (the site may show a build marker in its footer or /build.json).\n\n"
+            f"Expected release: commit {sha or 'unknown'} (the site may show a build marker in its footer or /build.json; "
+            f"a daily cron rebuilds the site, so a NEWER marker than this commit is normal — only an older one means "
+            f"'not deployed yet').\n" + raw + "\n"
             "# TASK\n" + _y(_task_brief(task))
             + "\n\n# IMPLEMENTER'S REPORT (a claim, not evidence)\n" + (_y(result) if result else "(none)")
             + "\n\nUse only `team-fetch <url>`. Check every acceptance criterion and negative case on the live site.\n")

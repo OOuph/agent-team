@@ -46,6 +46,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   One post slot = one task: before proposing a dated task, look for an open task with the same slot (same role and
   `not_before`) or the same title; the dispatcher drops such duplicates anyway. A real duplicate or a task no longer
   needed goes into `close_tasks` (task id + reason) — not into P3.
+- Metrics (`/_team/metrics.json`, `metrics.md`) are produced by the FRAMEWORK from the server's access log; the
+  paths it counts (`targets`) are configured by ops in `product.yaml`, never by product code. Do not create a
+  developer task to "count X in metrics": the repository has no metrics code. To track a new path, put the exact
+  path into `owner_questions` (ops adds it the same day); the counts per class appear in the next metrics file.
 - A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
   available field in its text, or ask the analyst for the metric first.
 
