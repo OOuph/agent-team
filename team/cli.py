@@ -9,7 +9,7 @@
   team obs SLUG --title T --text X [--class need_hypothesis]  add an observation by hand (owner's input)
   team stop SLUG|all / team resume SLUG|all   STOP file
   team digest SLUG              print today's digest text
-  team report [--hours 12] [--send] [--no-llm]   12-hour role report (ledger + reporter run) → Telegram ops chat
+  team report [--hours 12] [--send] [--no-llm] [--style bonus|plain]   12-hour role report (ledger + reporter run) → Telegram ops chat
 """
 from __future__ import annotations
 
@@ -214,7 +214,7 @@ def cmd_report(st: C.Settings, a: argparse.Namespace) -> int:
     roles = load_roles(ROLES_DIR)
     runner = Runner(st.claude, roles) if roles and not a.no_llm else None
     res = report.run_report(st, _products(st, a.product), a.hours, runner=runner, send=a.send, dry_run=a.dry_run,
-                            out=Path(a.out) if a.out else None)
+                            out=Path(a.out) if a.out else None, style=a.style)
     print(res["text"])
     print(f"\n[report {res['stamp']}: narrative={res['narrative']} sent={res['sent']} file={res['path']}]", file=sys.stderr)
     return 0 if (not a.send or all(x.get("ok") for x in res["sent"])) else 1
@@ -261,7 +261,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     s = sub.add_parser("report"); s.add_argument("--product", default="all"); s.add_argument("--hours", type=float, default=12.0)
     s.add_argument("--send", action="store_true"); s.add_argument("--no-llm", action="store_true"); s.add_argument("--dry-run", action="store_true")
-    s.add_argument("--out"); s.set_defaults(fn=cmd_report)
+    s.add_argument("--out"); s.add_argument("--style", choices=["bonus", "plain"], default=os.environ.get("REPORT_STYLE", "bonus"))
+    s.set_defaults(fn=cmd_report)
     a = ap.parse_args(argv)
     logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     st = C.load()

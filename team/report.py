@@ -288,30 +288,53 @@ def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def reporter_prompt(led: dict[str, Any]) -> str:
-    active = sorted({r for p in led["products"] for r in p["roles"]})
+STYLES = ("bonus", "plain")
+DEFAULT_STYLE = "bonus"
+
+_RULES_PLAIN = (
+    "- Русский язык, от первого лица каждой роли («Я взял…», «Опубликовал…»). Одна секция на роль из списка активных: {active}. "
+    "Роль без записей в ведомости — не упоминать.\n"
+    "- Внутри секции роли — по продуктам, коротко: что взял, что вышло, что застряло и почему. 2–6 предложений на роль, "
+    "до 700 символов. Ссылки на посты и PR приводить как есть.\n"
+    "- Секция PO: «что выбрали» (решения по наблюдениям, созданные задачи с приоритетом, закрытые) и «что реализовано» "
+    "(принятые задачи) — по продуктам, до 900 символов; вопросы владельцу — отдельной строкой, если есть.\n"
+    "- Заголовок — одна строка: главное событие окна и общий расход.\n")
+
+_RULES_BONUS = (
+    "- Это отчёт сотрудников владельцу бизнеса на подведении итогов, где решается премия. Каждая активная роль ({active}) "
+    "говорит от первого лица, человеческим деловым языком, как живой специалист, который хочет, чтобы его результат заметили: "
+    "сначала результат и что он даёт продукту и читателю (что теперь живёт на сайте, что вышло в каналы, что команда узнала), "
+    "потом — через что пришлось пройти, потом — что не доделал и почему, и чего просит у владельца (решение, доступ, данные). "
+    "Роль без записей в ведомости — не упоминать.\n"
+    "- Говорить о вещах, а не о номерах: «страница архива цен получила разметку для поисковиков», а не «T-0004 принята». "
+    "Номера задач и ссылки — только там, где владелец захочет кликнуть (пост, PR, страница), не больше трёх на роль.\n"
+    "- Уверенно, но честно: провалы и незавершённое называть прямо, без оправданий и без «успешно/отлично». Премию дают за "
+    "результат, который можно проверить, — ведомость приложена, и владелец её сверит.\n"
+    "- 3–7 предложений на роль, до 800 символов. Числа — только те, что меняют оценку (сколько вышло в свет, сколько влито, "
+    "сколько стоило), и только из ведомости.\n"
+    "- Секция PO — голос руководителя продуктов: что выбрали за окно и почему (куда направили команду, что отклонили и зачем), "
+    "что реализовано и что это даёт продуктам, что ждёт решения владельца — отдельной строкой. До 1000 символов.\n"
+    "- Заголовок — одна фраза, как первая строка письма владельцу: главный результат окна и общий расход.\n")
+
+
+def reporter_prompt(led: dict[str, Any], style: str = DEFAULT_STYLE) -> str:
+    active = ", ".join(ROLE_RU.get(r, r) for r in sorted({r for p in led["products"] for r in p["roles"]}))
     body = json.dumps(compact_for_prompt(led), ensure_ascii=False, indent=1)
     if len(body) > PROMPT_LEDGER_CHARS:
         body = body[:PROMPT_LEDGER_CHARS] + "\n… [ведомость обрезана; скажи об этом в заголовке]"
+    rules = (_RULES_BONUS if style == "bonus" else _RULES_PLAIN).format(active=active)
     return ("# ОТЧЁТ РОЛЕЙ ВЛАДЕЛЬЦУ — окно " + f"{led['since'][:16]} → {led['until'][:16]} UTC\n\n"
             "Ниже ведомость (JSON) — всё, что команда ролей сделала за окно, по продуктам. Напиши отчёт владельцу в Telegram.\n\n"
-            "## ПРАВИЛА\n"
-            "- Русский язык, от первого лица каждой роли («Я взял…», «Опубликовал…»). Одна секция на роль из списка активных: "
-            + ", ".join(ROLE_RU.get(r, r) for r in active) + ". Роль без записей в ведомости — не упоминать.\n"
-            "- Внутри секции роли — по продуктам, коротко: что взял, что вышло, что застряло и почему. 2–6 предложений на роль, "
-            "до 700 символов. Ссылки на посты и PR приводить как есть.\n"
-            "- Секция PO: «что выбрали» (решения по наблюдениям, созданные задачи с приоритетом, закрытые) и «что реализовано» "
-            "(принятые задачи) — по продуктам, до 900 символов; вопросы владельцу — отдельной строкой, если есть.\n"
-            "- Заголовок — одна строка: главное событие окна и общий расход.\n"
+            "## ПРАВИЛА\n" + rules +
             "- Только факты из ведомости. Ни одного числа, названия, ссылки или причины, которых в ней нет. Если роль ничего не "
-            "завершила — так и написать. Без оценок «отлично/успешно», без обещаний.\n\n"
+            "завершила — так и написать. Без обещаний на будущее.\n\n"
             "## ВЕДОМОСТЬ\n```json\n" + body + "\n```\n")
 
 
-def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, book_store: Store | None) -> dict[str, Any] | None:
+def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, book_store: Store | None, style: str = DEFAULT_STYLE) -> dict[str, Any] | None:
     from .cycle import schema
     work_dir.mkdir(parents=True, exist_ok=True)
-    prompt = reporter_prompt(led)
+    prompt = reporter_prompt(led, style)
     (work_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     run_id = "report-" + datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
     model = (st.claude.get("models") or {}).get("reporter")
@@ -361,14 +384,14 @@ def send_telegram(text: str, dry_run: bool) -> list[dict[str, Any]]:
 
 
 def run_report(st: Settings, products: list[Product], hours: float, *, runner: Any = None, send: bool = False, dry_run: bool = False,
-               out: Path | None = None) -> dict[str, Any]:
+               out: Path | None = None, style: str = DEFAULT_STYLE) -> dict[str, Any]:
     led = ledger(st, products, hours)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
     rdir = st.data_dir / "reports"
     rdir.mkdir(parents=True, exist_ok=True)
     md = ledger_md(led)
     (rdir / f"{stamp}.json").write_text(json.dumps(led, ensure_ascii=False, indent=1), encoding="utf-8")
-    nar = narrative(st, runner, led, rdir / f"{stamp}-run", _book_store(products)) if runner is not None else None
+    nar = narrative(st, runner, led, rdir / f"{stamp}-run", _book_store(products), style) if runner is not None else None
     text = narrative_text(nar, led) if nar else ("🗂 Ведомость ролей (модель недоступна, сухой вариант)\n\n" + md)
     (rdir / f"{stamp}.md").write_text(text + "\n\n---\n\n" + md, encoding="utf-8")
     if out:

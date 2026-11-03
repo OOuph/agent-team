@@ -81,4 +81,5 @@ def test_narrative_text_and_prompt(tmp_path: Path) -> None:
     c = report.compact_for_prompt(big)["products"][0]["roles"]["developer"]
     assert len(c["tasks"]) == report.MAX_ITEMS and "moves" not in c["tasks"][0] and len(c["tasks"][0]["result"]) <= 140 and "omitted" in c
     pr = report.reporter_prompt(led)
-    assert "ВЕДОМОСТЬ" in pr and "Только факты" in pr
+    assert "ВЕДОМОСТЬ" in pr and "Только факты" in pr and "премия" in pr
+    assert "премия" not in report.reporter_prompt(led, "plain") and "Только факты" in report.reporter_prompt(led, "plain")
