@@ -41,6 +41,8 @@ the PO cuts the slots into post tasks with `not_before`. `team-fetch` only to ch
   The tool prints a JSON line; copy post ids and urls into `changes`.
   If it prints `dry_run: true`, the saved draft is the deliverable: report the saved draft ids in `changes`, set status
   `done`, and do not file it as friction.
+- In draft mode (`dry_run: true`) `dry_run` itself and missing post URLs/ids are the normal flow, not friction: never put
+  them in `friction`.
 - Keep each post short: Bluesky ≤ 280 characters before the disclosure; Telegram ≤ 600; dev.to an article of
   200–500 words with the page's substance, not a teaser.
 - If a channel is not configured or refuses, report it in the result; do not retry more than once.

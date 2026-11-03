@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0016: marketer card — `dry_run: true` in draft mode and missing post URLs are the expected flow and are never reported as friction (F-0071, F-0073, F-0074). Card text only; SCHEME.md unchanged.
 - T-0015: PO card and `po-decision.schema.json` get `repo_only` — the PO sets `repo_only: true` on tasks whose criteria name repo files (mcp/, tests, README, code), `apply_po` stores it, so the reviewer gets the read-only checkout instead of inconclusive (F-0046, F-0048, F-0053, F-0055, F-0062).
 - Canary false positive fixed: the deputy is skipped in dry-run (its 'run failed: no run' warning matched the old ' failed: ' substring check and failed PR #32); the canary now fails only on `phase.error` or a 'phase X failed' line.
 - T-0014: marketer card — `--text-file` is an absolute path (the Write tool's directory; the shell cwd differs), and a `team-publish` result with `dry_run: true` counts as the deliverable: draft ids in `changes`, status done, not friction (F-0071, F-0073, F-0074, F-0076). Card text only; SCHEME.md unchanged.
