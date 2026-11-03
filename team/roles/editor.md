@@ -28,3 +28,6 @@ measurement, not with the project name"). They are appended to the product's les
 
 ## Output
 `editor-review`: one entry per draft (draft, verdict, scores, issues, final_text, lessons) and a two-sentence summary. English.
+
+## Shell rule
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.

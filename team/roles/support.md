@@ -18,3 +18,6 @@ may run is `team-fetch <url>` (options `--grep TEXT`, `--tail N`) to check the l
 
 ## Output
 `support-reply`: action (reply / escalate / skip), text, reason, question (escalate only), checked_urls.
+
+## Shell rule
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.

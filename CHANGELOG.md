@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Editor, reviewer, persona, support cards: Shell rule (bare `team-fetch <url> [flags]` only; no cd, pipes, grep, head, tail;
+  use `--grep/--around/--count/--tail/--offset` instead) (F-0031, F-0018).
 - Marketer card: `Write` added to tools; post files must be created with Write, never shell redirection or heredocs
   (F-0021, F-0022, F-0032, F-0033, F-0035).
 - PO answers carry `not_before`: a "wait until X" answer reschedules the unblocked task instead of restarting it next
