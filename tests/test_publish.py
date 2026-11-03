@@ -20,8 +20,11 @@ class FakeHttp:
         self.calls: list[dict] = []
 
     def __call__(self, method, url, headers, body, timeout):
-        self.calls.append({"method": method, "url": url, "headers": headers,
-                           "json": json.loads(body) if body else None, "timeout": timeout})
+        try:
+            parsed = json.loads(body) if body else None
+        except ValueError:
+            parsed = None
+        self.calls.append({"method": method, "url": url, "headers": headers, "json": parsed, "raw": body, "timeout": timeout})
         for key, (status, data) in self.routes.items():
             if key in url:
                 return status, (data if isinstance(data, bytes) else json.dumps(data).encode())
@@ -152,10 +155,99 @@ def test_mastodon_payload_and_limit():
     assert len(status) == 500 and status.endswith("\n\n" + DISC) and "…" in status
 
 
-# ---- x stub, secrets, disclosure -----------------------------------------------------------------
-def test_x_not_configured():
-    r = post("x", "x", disclosure=DISC, env={}, http=FakeHttp())
-    assert r == PostResult(False, "x", None, None, "x: not configured", False)
+# ---- threads ----------------------------------------------------------------------------------
+TH_ENV = {"THREADS_USER_ID": "1789", "THREADS_ACCESS_TOKEN": "THTOK/+="}
+
+
+def test_threads_container_publish_permalink(monkeypatch):
+    monkeypatch.setattr(publish.time, "sleep", lambda s: None)
+    http = FakeHttp({"/1789/threads_publish": (200, {"id": "M55"}), "/1789/threads": (200, {"id": "C1"}),
+                     "/M55?fields=permalink": (200, {"permalink": "https://www.threads.com/@formachines/post/AbC"})})
+    r = post("threads", "Hello threads", url="https://s.io/p", disclosure=DISC, env=TH_ENV, http=http)
+    assert r.ok and r.post_id == "M55" and r.url == "https://www.threads.com/@formachines/post/AbC"
+    create, pub, meta = http.calls
+    assert create["url"] == "https://graph.threads.net/v1.0/1789/threads" and create["method"] == "POST"
+    assert create["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+    form = dict(publish.urllib.parse.parse_qsl(create["raw"].decode()))
+    assert form == {"media_type": "TEXT", "text": f"Hello threads\nhttps://s.io/p\n\n{DISC}", "access_token": "THTOK/+="}
+    assert dict(publish.urllib.parse.parse_qsl(pub["raw"].decode())) == {"creation_id": "C1", "access_token": "THTOK/+="}
+    assert "THTOK" not in create["url"] and "THTOK" not in pub["url"]
+
+
+def test_threads_publish_retries_then_fails_without_token_in_error(monkeypatch):
+    slept = []
+    monkeypatch.setattr(publish.time, "sleep", lambda s: slept.append(s))
+    http = FakeHttp({"/threads_publish": (400, {"error": {"message": "Media not ready THTOK/+="}}), "/threads": (200, {"id": "C1"})})
+    r = post("threads", "x", disclosure=DISC, env=TH_ENV, http=http)
+    assert not r.ok and "threads.publish" in r.error and "HTTP 400" in r.error and "THTOK" not in r.error
+    assert len(slept) == publish.THREADS_PUBLISH_RETRIES and len(http.calls) == 1 + publish.THREADS_PUBLISH_RETRIES
+
+
+def test_threads_limit_500_chars():
+    http = FakeHttp({"/threads_publish": (200, {"id": "M"}), "/threads": (200, {"id": "C"}), "fields=permalink": (500, b"x")})
+    r = post("threads", "b" * 900, disclosure=DISC, env=TH_ENV, http=http)
+    assert r.ok and r.url is None                      # permalink failure does not fail a published post
+    text = dict(publish.urllib.parse.parse_qsl(http.calls[0]["raw"].decode()))["text"]
+    assert len(text) == 500 and text.endswith(DISC) and "…" in text
+
+
+def test_threads_refresh_token():
+    http = FakeHttp({"refresh_access_token": (200, {"access_token": "NEW", "token_type": "bearer", "expires_in": 5183944})})
+    assert publish.threads_refresh_token("OLD", http=http) == ("NEW", 5183944)
+    assert "grant_type=th_refresh_token" in http.calls[0]["url"]
+
+
+# ---- x ----------------------------------------------------------------------------------------
+X_ENV = {"X_API_KEY": "ck", "X_API_SECRET": "cs", "X_ACCESS_TOKEN": "at", "X_ACCESS_SECRET": "as", "X_HANDLE": "@formachines"}
+
+
+def test_oauth1_signature_matches_documented_example():
+    h = publish.oauth1_header("POST", "https://api.twitter.com/1.1/statuses/update.json", "xvz1evFS4wEEPTGEFPHBog",
+                              "kAcSOqF21Fu85e7zjz7ZN2U4ZRhfV3WpwPAoE3Z7kBw", "370773112-GmHxMAgYyLbNEtIKZeRNFsMKPR9EyMZeS9weJAEb",
+                              "LswwdoUaIvS8ltyTt5jkRh4J50vUPVVHtR2YPi5kE", nonce="kYjzVBB8Y0ZFabxSWbWovY3uYSQ2pTgmZeNu2VS4cg",
+                              timestamp="1318622958",
+                              params={"include_entities": "true", "status": "Hello Ladies + Gentlemen, a signed OAuth request!"})
+    assert 'oauth_signature="hCtSmYh%2BiHYCEqBWrE7C7hYmtUk%3D"' in h and h.startswith("OAuth ")
+
+
+def test_x_post_payload_header_and_link():
+    http = FakeHttp({"api.x.com/2/tweets": (201, {"data": {"id": "1850", "text": "..."}})})
+    r = post("x", "Release radar day", url="https://releases.formachines.ai/today/?src=x", disclosure="🤖 AI agent · formachines.ai",
+             env=X_ENV, http=http, reply_to="https://x.com/someone/status/77")
+    assert r.ok and r.post_id == "1850" and r.url == "https://x.com/formachines/status/1850"
+    call = http.calls[0]
+    assert call["url"] == "https://api.x.com/2/tweets" and call["headers"]["Content-Type"] == "application/json"
+    auth = call["headers"]["Authorization"]
+    assert auth.startswith("OAuth ") and 'oauth_consumer_key="ck"' in auth and 'oauth_token="at"' in auth
+    assert call["json"]["text"].endswith("\n\n🤖 AI agent · formachines.ai")
+    assert call["json"]["reply"] == {"in_reply_to_tweet_id": "77"}
+
+
+def test_x_weight_counts_links_as_23_and_emoji_as_2():
+    assert publish.x_weight("abc") == 3
+    assert publish.x_weight("https://example.com/" + "a" * 100) == 23
+    assert publish.x_weight("🤖") == 2 and publish.x_weight("👨‍👩‍👧") == 2 and publish.x_weight("日本") == 4
+    assert publish.x_weight("see formachines.ai") == 4 + 23
+    assert publish.x_weight("see agentteam.formachines.ai") == 4 + len("agentteam.formachines.ai")
+
+
+def test_x_truncates_to_280_weighted_keeping_url_and_disclosure():
+    http = FakeHttp({"/2/tweets": (201, {"data": {"id": "9"}})})
+    url = "https://agentteam.formachines.ai/day/2026-11-03/?src=x"
+    r = post("x", "日本 " + "word " * 200, url=url, disclosure="🤖 AI agent · formachines.ai", env=X_ENV, http=http)
+    assert r.ok
+    text = http.calls[0]["json"]["text"]
+    assert publish.x_weight(text) <= 280 and publish.x_weight(text) >= 270
+    assert text.endswith(f"…\n{url}\n\n🤖 AI agent · formachines.ai")
+
+
+def test_x_error_redacts_secrets():
+    http = FakeHttp({"/2/tweets": (403, {"title": "Forbidden", "detail": "token at not allowed"})})
+    r = post("x", "x", disclosure=DISC, env={**X_ENV, "X_ACCESS_TOKEN": "SECRETTOKEN"}, http=http)
+    assert not r.ok and "HTTP 403" in r.error and "SECRETTOKEN" not in r.error
+
+
+# ---- secrets, disclosure -------------------------------------------------------------------------
 
 
 def test_unknown_channel():
@@ -163,11 +255,20 @@ def test_unknown_channel():
     assert not r.ok and "unknown channel" in r.error
 
 
-@pytest.mark.parametrize("channel,target", [("telegram", "@c"), ("bluesky", None), ("devto", None), ("mastodon", None)])
+@pytest.mark.parametrize("channel,target", [("telegram", "@c"), ("bluesky", None), ("devto", None), ("mastodon", None), ("threads", None), ("x", None)])
 def test_missing_secret_is_result_not_exception(channel, target):
     http = FakeHttp()
     r = post(channel, "x", title="t", disclosure=DISC, target=target, env={}, http=http)
     assert not r.ok and "missing secret" in r.error and http.calls == []
+
+
+def test_threads_refresh_env_rewrites_only_token_line(tmp_path):
+    from team import threads_token
+    env = tmp_path / ".env"
+    env.write_text("A=1\nTHREADS_ACCESS_TOKEN=OLD\nTHREADS_USER_ID=9\n", encoding="utf-8")
+    http = FakeHttp({"refresh_access_token": (200, {"access_token": "NEW", "expires_in": 86400})})
+    threads_token.refresh_env(env, http=http)
+    assert env.read_text(encoding="utf-8") == "A=1\nTHREADS_ACCESS_TOKEN=NEW\nTHREADS_USER_ID=9\n"
 
 
 def test_empty_disclosure_falls_back_to_default():
@@ -182,7 +283,7 @@ def test_compose_rejects_limit_smaller_than_disclosure():
 
 
 # ---- dry run ----------------------------------------------------------------------------------
-@pytest.mark.parametrize("channel,target", [("telegram", "123"), ("bluesky", None), ("devto", None), ("mastodon", None)])
+@pytest.mark.parametrize("channel,target", [("telegram", "123"), ("bluesky", None), ("devto", None), ("mastodon", None), ("threads", None), ("x", None)])
 def test_dry_run_no_http_no_secrets_needed(channel, target, capsys):
     http = FakeHttp()
     r = post(channel, "text", title="t", disclosure=DISC, target=target, env={}, http=http, dry_run=True)

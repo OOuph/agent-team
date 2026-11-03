@@ -4,20 +4,25 @@ The marketer role has no network libraries of its own: every outgoing post goes 
 which appends the mandatory "written and posted by an AI agent" disclosure (EU AI Act, art. 50).
 The role cannot switch the disclosure off: an empty disclosure falls back to ``DEFAULT_DISCLOSURE``.
 
-Channels: telegram (Bot API), bluesky (AT Protocol), devto (Forem API), mastodon, x (stub).
+Channels: telegram (Bot API), bluesky (AT Protocol), devto (Forem API), mastodon, threads (Threads API, two steps:
+container then publish), x (API v2 ``POST /2/tweets``, OAuth 1.0a user context signed with HMAC-SHA1 on stdlib).
 stdlib only. Network calls go through an injectable ``http(method, url, headers, body, timeout)``
 callable returning ``(status, body_bytes)``; tests pass a fake, production uses urllib.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
+import hmac
 import html
 import json
 import logging
 import os
 import re
+import secrets as _secrets
 import sys
+import time
 import unicodedata
 import urllib.error
 import urllib.parse
@@ -45,11 +50,22 @@ BLUESKY_POST_COLLECTION = "app.bsky.feed.post"
 DEVTO_API = "https://dev.to/api/articles"
 DEVTO_MAX_TAGS = 4
 MASTODON_MAX_CHARS = 500
+THREADS_API = "https://graph.threads.net/v1.0"
+THREADS_MAX_CHARS = 500
+THREADS_PUBLISH_RETRIES = 4           # a fresh container may answer "not ready" for a few seconds
+THREADS_RETRY_SLEEP_S = 3
+THREADS_REFRESH_URL = "https://graph.threads.net/refresh_access_token"
+X_API = "https://api.x.com/2/tweets"
+X_MAX_WEIGHT = 280                    # X counts in weighted units: most CJK/emoji count 2, every link counts 23
+X_URL_WEIGHT = 23
+X_LIGHT_RANGES = ((0, 4351), (8192, 8205), (8208, 8223), (8242, 8247))   # twitter-text v3: weight 1, the rest 2
 ELLIPSIS = "…"
 
-CHANNELS = ("telegram", "bluesky", "devto", "mastodon", "x", "github")
+CHANNELS = ("telegram", "bluesky", "devto", "mastodon", "threads", "x", "github")
 SECRET_KEYS = {"telegram": ("TELEGRAM_BOT_TOKEN",), "bluesky": ("BLUESKY_HANDLE", "BLUESKY_APP_PASSWORD"),
-               "devto": ("DEVTO_API_KEY",), "mastodon": ("MASTODON_INSTANCE", "MASTODON_TOKEN"), "x": (), "github": ("GITHUB_TOKEN",)}
+               "devto": ("DEVTO_API_KEY",), "mastodon": ("MASTODON_INSTANCE", "MASTODON_TOKEN"),
+               "threads": ("THREADS_USER_ID", "THREADS_ACCESS_TOKEN"),
+               "x": ("X_API_KEY", "X_API_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"), "github": ("GITHUB_TOKEN",)}
 BLUESKY_PUBLIC_API = "https://public.api.bsky.app"
 GITHUB_API = "https://api.github.com"
 GITHUB_COMMENT_MAX = 4000
@@ -196,11 +212,15 @@ def urllib_http(method: str, url: str, headers: dict[str, str], body: bytes | No
 
 
 def _call_json(http: HttpFn, method: str, url: str, payload: dict[str, Any] | None, headers: dict[str, str],
-               secrets: list[str], label: str) -> dict[str, Any]:
-    """POST/GET JSON, raising PublishError with status and the first 200 chars of the body on any failure."""
+               secrets: list[str], label: str, *, form: dict[str, str] | None = None) -> dict[str, Any]:
+    """POST/GET JSON (or a form body when ``form`` is given), raising PublishError with status and the first 200 chars
+    of the body on any failure."""
     hdrs = {"User-Agent": USER_AGENT, "Accept": "application/json", **headers}
     body = None
-    if payload is not None:
+    if form is not None:
+        hdrs["Content-Type"] = "application/x-www-form-urlencoded"
+        body = urllib.parse.urlencode(form).encode("utf-8")
+    elif payload is not None:
         hdrs["Content-Type"] = "application/json"
         body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     log.debug("%s %s %s", label, method, _redact(url, secrets))
@@ -339,6 +359,152 @@ def _mastodon(text: str, url: str | None, disclosure: str, env: dict[str, str], 
     return PostResult(True, "mastodon", str(pid) if pid is not None else None, data.get("url"), None, False)
 
 
+def _threads(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn,
+             reply_to: str | None = None) -> PostResult:
+    """Threads API: POST /{user-id}/threads (media_type=TEXT) creates a container, POST /{user-id}/threads_publish
+    publishes it; the permalink is read back from the media object. The token goes in the form body, never in a URL
+    that is logged (the permalink GET is redacted)."""
+    body = compose(text, disclosure, url, limit=THREADS_MAX_CHARS, counter="chars")
+    form = {"media_type": "TEXT", "text": body}
+    if reply_to:
+        form["reply_to_id"] = reply_to
+    if dry_run:
+        _print_dry_run("threads", form)
+        return PostResult(True, "threads", None, None, None, True)
+    sec = _require(env, SECRET_KEYS["threads"])
+    uid, tok = sec["THREADS_USER_ID"].strip(), sec["THREADS_ACCESS_TOKEN"].strip()
+    created = _call_json(http, "POST", f"{THREADS_API}/{uid}/threads", None, {}, [tok], "threads.create",
+                         form={**form, "access_token": tok})
+    cid = created.get("id")
+    if not cid:
+        raise PublishError("threads.create: response without id")
+    last: PublishError | None = None
+    for attempt in range(THREADS_PUBLISH_RETRIES):
+        try:
+            pub = _call_json(http, "POST", f"{THREADS_API}/{uid}/threads_publish", None, {}, [tok], "threads.publish",
+                             form={"creation_id": str(cid), "access_token": tok})
+            break
+        except PublishError as e:  # container not ready yet: wait and retry
+            last = e
+            log.info("threads.publish attempt %d failed: %s", attempt + 1, e)
+            time.sleep(THREADS_RETRY_SLEEP_S)
+    else:
+        raise last or PublishError("threads.publish: failed")
+    mid = pub.get("id")
+    link = None
+    if mid:
+        try:
+            meta = _call_json(http, "GET", f"{THREADS_API}/{mid}?fields=permalink&access_token={urllib.parse.quote(tok, safe='')}",
+                              None, {}, [tok, urllib.parse.quote(tok, safe="")], "threads.permalink")
+            link = meta.get("permalink")
+        except PublishError as e:  # the post is out; a missing link is not a failure
+            log.warning("threads: published %s but permalink failed: %s", mid, e)
+    return PostResult(True, "threads", str(mid) if mid else None, link, None, False)
+
+
+def threads_refresh_token(token: str, http: HttpFn | None = None) -> tuple[str, int]:
+    """Exchange a long-lived Threads token (older than 24 h, not expired) for a fresh 60-day one: (token, expires_in_s)."""
+    http = http or urllib_http
+    q = urllib.parse.urlencode({"grant_type": "th_refresh_token", "access_token": token})
+    data = _call_json(http, "GET", f"{THREADS_REFRESH_URL}?{q}", None, {}, [token, urllib.parse.quote(token, safe="")],
+                      "threads.refresh")
+    new = str(data.get("access_token") or "")
+    if not new:
+        raise PublishError("threads.refresh: response without access_token")
+    return new, int(data.get("expires_in") or 0)
+
+
+# ---- x ---------------------------------------------------------------------------------------
+_X_DOMAIN_RE = re.compile(r"(?<![@\w./])(?:[a-z0-9-]+\.)+[a-z]{2,}(?:/[^\s]*)?", re.IGNORECASE)
+
+
+def _x_char_weight(ch: str) -> int:
+    cp = ord(ch)
+    return 1 if any(lo <= cp <= hi for lo, hi in X_LIGHT_RANGES) else 2
+
+
+def x_weight(text: str) -> int:
+    """Conservative X length: an http(s) link counts 23 (t.co), a bare domain max(len, 23) (X may or may not link it),
+    a grapheme whose first code point is outside the light ranges counts 2 (emoji, CJK), other characters 1 each."""
+    n, pos = 0, 0
+    spans = [(s, e, X_URL_WEIGHT) for s, e, _ in find_urls(text)]
+    covered = [(s, e) for s, e, _ in spans]
+    for m in _X_DOMAIN_RE.finditer(text):
+        if not any(s <= m.start() < e for s, e in covered):
+            spans.append((m.start(), m.end(), max(len(m.group(0)), X_URL_WEIGHT)))
+    for s, e, w in sorted(spans):
+        if s < pos:
+            continue
+        n += _x_plain_weight(text[pos:s]) + w
+        pos = e
+    return n + _x_plain_weight(text[pos:])
+
+
+def _x_plain_weight(text: str) -> int:
+    n = 0
+    for g in graphemes(text):
+        n += 2 if _x_char_weight(g[0]) == 2 else sum(_x_char_weight(c) for c in g)
+    return n
+
+
+def x_compose(text: str, disclosure: str, url: str | None) -> str:
+    """body + optional url + disclosure within X_MAX_WEIGHT, cutting only the body (grapheme by grapheme)."""
+    body = text.strip()
+    fixed = ("\n" + url if url and url not in body else "") + "\n\n" + disclosure
+    if x_weight(fixed) >= X_MAX_WEIGHT:
+        raise PublishError(f"x: disclosure and url do not fit the {X_MAX_WEIGHT} limit")
+    if x_weight(body + fixed) <= X_MAX_WEIGHT:
+        return body + fixed
+    g = graphemes(body)
+    lo, hi = 0, len(g)                     # largest prefix that fits with the ellipsis
+    while lo < hi:
+        mid = (lo + hi + 1) // 2
+        if x_weight("".join(g[:mid]).rstrip() + ELLIPSIS + fixed) <= X_MAX_WEIGHT:
+            lo = mid
+        else:
+            hi = mid - 1
+    return "".join(g[:lo]).rstrip() + ELLIPSIS + fixed
+
+
+def _pct(s: str) -> str:
+    return urllib.parse.quote(str(s), safe="~-._")
+
+
+def oauth1_header(method: str, url: str, consumer_key: str, consumer_secret: str, token: str, token_secret: str,
+                  *, nonce: str | None = None, timestamp: str | None = None, params: dict[str, str] | None = None) -> str:
+    """RFC 5849 Authorization header, HMAC-SHA1. A JSON body is not part of the signature (X API v2); query
+    ``params`` are. ``url`` must be without a query string."""
+    oauth = {"oauth_consumer_key": consumer_key, "oauth_nonce": nonce or _secrets.token_hex(16),
+             "oauth_signature_method": "HMAC-SHA1", "oauth_timestamp": timestamp or str(int(time.time())),
+             "oauth_token": token, "oauth_version": "1.0"}
+    allp = {**(params or {}), **oauth}
+    norm = "&".join(f"{k}={v}" for k, v in sorted((_pct(k), _pct(v)) for k, v in allp.items()))
+    base = "&".join((method.upper(), _pct(url), _pct(norm)))
+    key = f"{_pct(consumer_secret)}&{_pct(token_secret)}".encode()
+    oauth["oauth_signature"] = base64.b64encode(hmac.new(key, base.encode(), hashlib.sha1).digest()).decode()
+    return "OAuth " + ", ".join(f'{_pct(k)}="{_pct(v)}"' for k, v in sorted(oauth.items()))
+
+
+def _x(text: str, url: str | None, disclosure: str, env: dict[str, str], dry_run: bool, http: HttpFn,
+       reply_to: str | None = None) -> PostResult:
+    body = x_compose(text, disclosure, url)
+    payload: dict[str, Any] = {"text": body}
+    if reply_to:
+        payload["reply"] = {"in_reply_to_tweet_id": str(reply_to).rstrip("/").rsplit("/", 1)[-1]}
+    if dry_run:
+        _print_dry_run("x", {**payload, "weight": x_weight(body)})
+        return PostResult(True, "x", None, None, None, True)
+    sec = _require(env, SECRET_KEYS["x"])
+    auth = oauth1_header("POST", X_API, sec["X_API_KEY"], sec["X_API_SECRET"], sec["X_ACCESS_TOKEN"], sec["X_ACCESS_SECRET"])
+    data = _call_json(http, "POST", X_API, payload, {"Authorization": auth}, list(sec.values()), "x")
+    d = data.get("data") or {}
+    tid = d.get("id")
+    if not tid:
+        raise PublishError(f"x: response without data.id: {_redact(json.dumps(data)[:ERROR_BODY_CHARS], list(sec.values()))}")
+    user = (env.get("X_HANDLE") or "i/web").lstrip("@")
+    return PostResult(True, "x", str(tid), f"https://x.com/{user}/status/{tid}", None, False)
+
+
 # ---- public API -------------------------------------------------------------------------------
 def post(channel: str, text: str, *, url: str | None = None, title: str | None = None, tags: list[str] | None = None,
          disclosure: str, dry_run: bool = False, env: dict[str, str] | None = None, http: HttpFn | None = None,
@@ -368,6 +534,10 @@ def post(channel: str, text: str, *, url: str | None = None, title: str | None =
             res = _devto(text, title, url, tags, disclosure, env, dry_run, http)
         elif channel == "mastodon":
             res = _mastodon(text, url, disclosure, env, dry_run, http)
+        elif channel == "threads":
+            res = _threads(text, url, disclosure, env, dry_run, http, reply_to=reply_to)
+        elif channel == "x":
+            res = _x(text, url, disclosure, env, dry_run, http, reply_to=reply_to)
         else:
             raise PublishError(f"{channel}: not configured")
     except PublishError as e:
@@ -478,7 +648,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="team-publish", description=__doc__.splitlines()[0])
     p.add_argument("--channel", required=True, choices=CHANNELS)
     p.add_argument("--target", help="telegram: chat id or @channel; github: issue url")
-    p.add_argument("--reply-to", help="bluesky: at:// uri of the post to reply to")
+    p.add_argument("--reply-to", help="bluesky: at:// uri; threads: media id; x: post id or url — of the post to reply to")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--text-file", type=Path)
     src.add_argument("--text")
