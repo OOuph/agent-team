@@ -39,6 +39,8 @@
 | geo | раз в 168 ч: geo-probe | geo-probe |
 | digest | в 07 и 19 UTC: сводка в `digests/` и в Telegram ops | — |
 
+Правило execute: готовая задача, в названии которой есть дата `ДД.ММ` позже сегодняшней (UTC), но нет `not_before`, не запускается; диспетчер пишет наблюдение для PO (поставить `not_before`). Задача, дважды заблокированная одним и тем же вопросом, не перезапускается автоматическим (не владельческим) ответом без `not_before`; событие `task.restart_suppressed`.
+
 Состояния задачи: `proposed → ready → claimed → in_progress → review/released → accepted → measured → done`;
 боковые `blocked`, `waiting_owner`, `rejected`, `deferred`. Каждый переход — в `history[]` задачи.
 

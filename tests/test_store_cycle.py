@@ -122,3 +122,48 @@ def test_stop_file_and_budget(tmp_path: Path):
     Cycle(st, p, r, "c2").run()
     assert r.calls == []                        # no model run above the cap
     assert any(e["kind"] == "budget.stop" for e in s.events())
+
+
+def test_future_dated_title_not_claimed(tmp_path: Path, monkeypatch):
+    from datetime import datetime, timezone
+    from team import cycle as C
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="Daily post 03.11", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    monkeypatch.setattr(C, "_now", lambda: datetime(2026, 11, 2, 10, 0, tzinfo=timezone.utc))
+    assert C.future_dated_title("Daily post 03.11", C._now())
+    assert C.future_dated_title("Daily post 03.11.2026", C._now())
+    assert C.future_dated_title("Пост 04.11: что видно", C._now())
+    assert not C.future_dated_title("Daily post 02.11", C._now())
+    assert C.future_dated_title("Post 02.11.2027 planning", C._now())              # explicit later year counts
+    assert not C.future_dated_title("Python 3.12 release post", C._now())       # version, not a date
+    assert not C.future_dated_title("v1.12 and 2.1.4 shipped", C._now())
+    assert not C.future_dated_title("Daily post 01.11.2026", C._now())
+    assert C.future_dated_title("Post 02.01", datetime(2026, 12, 20, tzinfo=timezone.utc))      # year rollover
+    assert not C.future_dated_title("Post 02.01.2026", datetime(2026, 12, 20, tzinfo=timezone.utc))
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    called = []
+    monkeypatch.setattr(cy, "execute_task", lambda t: called.append(t) or True)
+    cy.phase_execute()
+    assert not called and s.task(t["id"])["state"] == "ready"
+    assert any(o.get("task") == t["id"] for o in s.observations())
+    s.close()
+
+
+def test_task_blocked_twice_same_question_not_restarted(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    q1 = s.ask(from_="marketer", to="po", question="data not ready?", task_id=t["id"], blocks=[t["id"]])
+    s.answer(q1["id"], "retry", "po")
+    assert s.task(t["id"])["state"] == "ready"
+    q2 = {**q1, "id": "Q-9999"}
+    s.transition(t["id"], "blocked", "marketer", "again", force=True)
+    from team.store import _write
+    q2.update(state="open", answer=None)
+    _write(s._path("Q", "Q-9999"), q2)
+    s.answer("Q-9999", "retry", "po")
+    assert s.task(t["id"])["state"] == "blocked"
+    s.close()

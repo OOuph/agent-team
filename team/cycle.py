@@ -395,6 +395,13 @@ class Cycle:
             nb = parse_ts(t.get("not_before"))
             if nb and _now() < nb:
                 continue        # scheduled for later (daily posts): the PO set not_before
+            if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
+                self.store.add_observation({
+                    "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
+                    "classification": "need_hypothesis", "source": "dispatcher", "task": t["id"],
+                    "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
+                    "detail": "PO: set not_before on this task (or fix the title)."})
+                continue
             if self.execute_task(t):
                 done += 1
 
@@ -779,6 +786,26 @@ class Cycle:
 
 
 # ------------------------------------------------------------------ helpers
+
+DATE_IN_TITLE_RE = re.compile(r"(?<![\w.])(\d{2})\.(\d{2})(?:\.(\d{4}))?(?!\w|\.\d)")
+
+
+def future_dated_title(title: str, now: datetime) -> bool:
+    """True if the title contains a standalone DD.MM or DD.MM.YYYY date later than today (UTC).
+
+    Only two-digit day and month count (``03.11``), so version numbers (``3.12``, ``v1.12``, ``2.1.4``) and decimals
+    are not dates. Without a year, December → January is read as the next year."""
+    for d, m, y in DATE_IN_TITLE_RE.findall(title):
+        d, m = int(d), int(m)
+        if not (1 <= m <= 12 and 1 <= d <= 31):
+            continue
+        if y:
+            if (int(y), m, d) > (now.year, now.month, now.day):
+                return True
+        elif (m, d) > (now.month, now.day) or (now.month == 12 and m == 1):
+            return True
+    return False
+
 
 def fingerprint(scope: str, cls: str, url: str, title: str) -> str:
     import hashlib

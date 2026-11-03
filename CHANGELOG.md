@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Dispatcher: a ready task whose title names a future DD.MM date and has no `not_before` is not started (observation
+  for the PO instead); a task blocked twice on the same question is not restarted by a non-owner answer without
+  `not_before` (F-0017, F-0019, F-0023, F-0025, F-0026, F-0027).
 - Editor, reviewer, persona, support cards: Shell rule (bare `team-fetch <url> [flags]` only; no cd, pipes, grep, head, tail;
   use `--grep/--around/--count/--tail/--offset` instead) (F-0031, F-0018).
 - Marketer card: `Write` added to tools; post files must be created with Write, never shell redirection or heredocs
