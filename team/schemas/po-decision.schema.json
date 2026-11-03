@@ -179,6 +179,10 @@
       "type": "string",
       "maxLength": 40,
       "description": "ISO 8601 UTC; the dispatcher does not start the task before this moment (daily posts, data that appears at a known hour). Omit when the task can start now."
+     },
+     "plan": {
+      "type": "boolean",
+      "description": "marketing-plan task: role marketer, type marketing. The marketer writes products/<slug>/marketing-plan.md (a week of slots per channel with dates UTC, rubrics, the VISION goal of every post, what to drop) and the task is accepted by that file, without a post. Create one when there is no plan or the plan is older than 7 days; otherwise cut the plan into post tasks with not_before."
      }
     }
    }

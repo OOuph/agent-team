@@ -11,6 +11,7 @@
   "scope": {"type": "string"},
   "acceptance": {"type": "array", "items": {"type": "string"}},
   "negative_cases": {"type": "array", "items": {"type": "string"}},
+  "plan": {"type": "boolean", "default": false, "description": "Marketer: the deliverable is products/<slug>/marketing-plan.md (a week of slots per channel), not a post; the task is accepted by that file."},
   "repo_only": {
    "type": "boolean",
    "default": false,

@@ -94,6 +94,9 @@ class Store:
             CREATE TABLE IF NOT EXISTS cycles(cycle_id TEXT PRIMARY KEY, started TEXT, finished TEXT, phases TEXT, spent_usd REAL);
             CREATE TABLE IF NOT EXISTS posts(day TEXT, channel TEXT, post_id TEXT, url TEXT, task_id TEXT, ts TEXT);
         """)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(posts)")}
+        if "text" not in cols:          # 03.11: the marketer's memory ("published in the last 7 days") needs the text that went out
+            self.db.execute("ALTER TABLE posts ADD COLUMN text TEXT")
         self.db.commit()
 
     # ------------------------------------------------------------ ids and files
@@ -171,10 +174,12 @@ class Store:
     def create_task(self, *, title: str, type_: str, problem: str, scope: str, acceptance: list[str], goal: str,
                     created_by: str, priority: str = "P2", size: str = "S", negative_cases: list[str] | None = None,
                     observations: list[str] | None = None, role: str = "developer", state: str = "proposed",
-                    budget_usd: float | None = None, links: list[str] | None = None, note: str = "", not_before: str | None = None) -> dict[str, Any]:
+                    budget_usd: float | None = None, links: list[str] | None = None, note: str = "", not_before: str | None = None,
+                    plan: bool = False) -> dict[str, Any]:
         tid = self._next_id("T", "backlog")
         t = {"id": tid, "title": title[:140], "type": type_ if type_ in TASK_TYPES else "feature", "state": state,
              "priority": priority if priority in PRIORITIES else "P2", "size": size, "goal": goal, "role": role,
+             "plan": bool(plan),            # marketer: write products/<slug>/marketing-plan.md instead of posts (accepted without a post)
              "problem": problem, "scope": scope, "acceptance": list(acceptance or []), "negative_cases": list(negative_cases or []),
              "observations": list(observations or []), "links": list(links or []), "budget_usd": budget_usd,
              "assignee_run": None, "review_fails": 0, "results": [], "created": utcnow(), "created_by": created_by, "not_before": not_before,
@@ -337,11 +342,23 @@ class Store:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return int(self.db.execute("SELECT COUNT(*) FROM posts WHERE day=? AND channel=?", (day, channel)).fetchone()[0])
 
-    def record_post(self, channel: str, post_id: str, url: str, task_id: str | None) -> None:
-        self.db.execute("INSERT INTO posts(day, channel, post_id, url, task_id, ts) VALUES(?,?,?,?,?,?)",
-                        (datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel, post_id, url, task_id, utcnow()))
+    def record_post(self, channel: str, post_id: str, url: str, task_id: str | None, text: str | None = None) -> None:
+        self.db.execute("INSERT INTO posts(day, channel, post_id, url, task_id, ts, text) VALUES(?,?,?,?,?,?,?)",
+                        (datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel, post_id, url, task_id, utcnow(), (text or "")[:4000]))
         self.db.commit()
         self.event("post", channel, "marketer", {"post_id": post_id, "url": url, "task": task_id})
+
+    def recent_posts(self, days: int = 7, text_chars: int = 120) -> list[dict[str, Any]]:
+        """What went out in the last `days` days, newest first: day, channel, url, task, the first `text_chars` of the text.
+        The marketer's memory: it reads this before writing so it does not repeat itself; the PO reads it to cut the plan."""
+        since = (datetime.now(timezone.utc) - timedelta(days=days)).strftime("%Y-%m-%d")
+        rows = self.db.execute("SELECT day, channel, url, task_id, ts, text FROM posts WHERE day>=? ORDER BY ts DESC, rowid DESC", (since,))
+        return [{"day": r[0], "channel": r[1], "url": r[2], "task": r[3], "ts": r[4], "text": " ".join(str(r[5] or "").split())[:text_chars]}
+                for r in rows]
+
+    def first_post_day(self, channel: str) -> str | None:
+        r = self.db.execute("SELECT MIN(day) FROM posts WHERE channel=?", (channel,)).fetchone()
+        return r[0] if r and r[0] else None
 
     # ------------------------------------------------------------ cycles
 

@@ -367,6 +367,8 @@ class Cycle:
     def content_without_post(self, t: dict[str, Any]) -> bool:
         if str(t.get("role") or "") != "marketer":
             return False
+        if is_plan_task(t):             # a marketing plan is accepted by its file, never by a post
+            return not prompts.plan_path(self.p).exists()
         n = self.store.db.execute("SELECT COUNT(*) FROM posts WHERE task_id=?", (t["id"],)).fetchone()[0]
         return int(n or 0) == 0
 
@@ -428,7 +430,7 @@ class Cycle:
             self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
-                                   not_before=rt.get("not_before"))
+                                   not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer")
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         digest = res.get("digest_md", "")
@@ -679,7 +681,10 @@ class Cycle:
         ledger = self.run_dir / f"mkt-{t['id']}" / "ledger.jsonl"
         from . import editorial
         lessons = editorial.read_lessons(self.p)
-        prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [], lessons=lessons)
+        memory = prompts.marketing_memory(self.p, self.store)      # posts of the week, visits by channel, feedback, the plan
+        if is_plan_task(t):
+            return self.exec_marketing_plan(t, run_id, work, channels, lessons, memory)
+        prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [], lessons=lessons, memory=memory)
         disc = self.st.publish.get("disclosure", "")
         disc_map = disc if isinstance(disc, dict) else {"default": str(disc)}
         drafts_dir = work / "drafts"
@@ -709,6 +714,38 @@ class Cycle:
             self.store.ask(from_="marketer", to="po", question=why[:1200], task_id=t["id"])
             return True
         self.store.transition(t["id"], "accepted", "dispatcher", f"posted {posted} (editor-approved)", force=True, accepted_at=utcnow())
+        return True
+
+    def exec_marketing_plan(self, t: dict[str, Any], run_id: str, work: Path, channels: dict[str, Any], lessons: list[str],
+                            memory: dict[str, Any]) -> bool:
+        """A `plan: true` marketing task (03.11: the marketer was reactive — one task, one post, no memory, no plan): the
+        marketer writes `marketing-plan.md` (7 days of slots per channel, rubrics, goals, what to drop) in its work
+        directory; the dispatcher copies it to products/<slug>/ and accepts the task by the file. No post is expected,
+        so `posted == 0` is the norm here and the PO is asked only when no plan was written."""
+        prompt = prompts.marketing_plan_prompt(self.p, t, channels, lessons=lessons, memory=memory)
+        tools = ["Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]
+        rr = self.role_run("marketer", prompt, "task-result", cwd=work, label=f"plan-{t['id']}", cap=1.0, allowed_tools=tools, max_turns=30)
+        if rr is None or not (rr.ok and rr.structured):
+            self.store.transition(t["id"], "ready", "dispatcher", f"run failed: {rr.error if rr else 'no run'}", force=True, assignee_run=None)
+            return True
+        res = rr.structured
+        res["run_id"] = run_id
+        res["posted"] = 0
+        src = work / prompts.MARKETING_PLAN
+        body = src.read_text(encoding="utf-8").strip() if src.exists() else ""
+        if res.get("status") == "blocked" or len(body) < MIN_PLAN_CHARS:
+            self.store.add_result(t["id"], res)
+            why = str(res.get("question") or f"no usable {prompts.MARKETING_PLAN} written ({len(body)} chars): {res.get('summary', '')}")
+            self.store.ask(from_="marketer", to="po", question=why[:1200], task_id=t["id"])
+            return True
+        dst = prompts.plan_path(self.p)
+        dst.write_text(f"<!-- marketing plan · task {t['id']} · written {utcnow()} by the marketer; the PO cuts it into post tasks "
+                       f"with not_before; a new plan task replaces it after {prompts.PLAN_MAX_AGE_DAYS} days -->\n{body}\n", encoding="utf-8")
+        res["plan_file"] = str(dst)
+        self.store.add_result(t["id"], res)
+        self.store.event("marketing.plan", t["id"], "marketer", {"chars": len(body), "file": dst.name})
+        self.store.transition(t["id"], "accepted", "dispatcher", f"marketing plan written ({len(body)} chars); no post expected",
+                              force=True, accepted_at=utcnow())
         return True
 
     def editorial_loop(self, t: dict[str, Any], work: Path, drafts_dir: Path, channels: dict[str, Any], env: dict[str, str],
@@ -749,7 +786,8 @@ class Cycle:
             prev_issues = [i for _, r in revise for i in (r.get("issues") or [])]
             notes = [{"draft": n, "issues": r.get("issues"), "scores": r.get("scores")} for n, r in revise]
             drafts_dir2 = work / "drafts-2"
-            prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=editorial.read_lessons(self.p), editor_notes=notes)
+            prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=editorial.read_lessons(self.p), editor_notes=notes,
+                                              memory=prompts.marketing_memory(self.p, self.store))
             rr2 = self.role_run("marketer", prompt2, "task-result", cwd=work, label=f"mkt-{t['id']}-rev", cap=1.0,
                                 env_extra={**env, "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir2)}, allowed_tools=mkt_tools)
             drafts2 = self._load_drafts(drafts_dir2) if rr2 is not None else []
@@ -765,7 +803,7 @@ class Cycle:
             text = str(r.get("final_text") or "").strip() or None
             res = publish.publish_draft(Path(d["_path"]), text=text, dry_run=bool(self.st.publish.get("dry_run")))
             if res.ok and not res.dry_run:
-                self.store.record_post(str(res.channel), str(res.post_id or ""), str(res.url or ""), t["id"])
+                self.store.record_post(str(res.channel), str(res.post_id or ""), str(res.url or ""), t["id"], text=text or str(d.get("text") or ""))
                 posted += 1
             elif not res.ok:
                 self.store.event("post.error", t["id"], "dispatcher", {"channel": d.get("channel"), "error": str(res.error)[:200]})
@@ -884,6 +922,12 @@ class Cycle:
 # ------------------------------------------------------------------ helpers
 
 OPEN_TASK_STATES = ("ready", "claimed", "in_progress", "review", "released", "blocked", "waiting_owner")
+MIN_PLAN_CHARS = 200        # a marketing-plan.md shorter than this is "no plan": the PO is asked instead of accepting it
+
+
+def is_plan_task(t: dict[str, Any]) -> bool:
+    """A marketer task whose deliverable is products/<slug>/marketing-plan.md, not a post (`plan: true` from the PO)."""
+    return str(t.get("role") or "") == "marketer" and bool(t.get("plan"))
 CLOSABLE_BY_PO = ("proposed", "ready", "blocked", "waiting_owner", "deferred")
 
 
@@ -955,6 +999,11 @@ def metrics_md(data: dict[str, Any]) -> str:
     top = (data.get("totals") or {}).get("top_pages") or (days.get(max(days), {}) if days else {}).get("top_pages") or []
     if top:
         lines += ["", "Top pages (humans): " + ", ".join(f"{p.get('path') if isinstance(p, dict) else p[0]} ({p.get('requests') if isinstance(p, dict) else p[1]})" for p in top[:8])]
+    by_src = (data.get("totals") or {}).get("by_src") or {}
+    if by_src:          # which channel brought people: team-publish adds ?src=<channel> to every linked page
+        lines += ["", "Visits by ?src= (channel: human sources / engaged / requests, whole window): "
+                  + ", ".join(f"{k}: {(v or {}).get('human_sources', 0)}/{(v or {}).get('engaged_sources', 0)}/{(v or {}).get('requests', 0)}"
+                              for k, v in by_src.items())]
     return "\n".join(lines) + "\n"
 
 

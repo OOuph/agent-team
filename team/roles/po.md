@@ -27,6 +27,15 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   else is pending, create it (type `content`).
 - Every task names its `role`: `developer` (site code and content in the repository), `marketer` (posts via the publish
   tool; only channels listed in VISION), `analyst` (a measurement with a question).
+- Marketing is run by a plan, not post by post. The prompt's `MARKETING PLAN` block shows `products/<slug>/marketing-plan.md`
+  (a week of slots per channel: date UTC, channel, rubric, angle, goal) or says there is none. When there is none, or it is
+  older than 7 days: create ONE plan task — type `marketing`, role `marketer`, `plan: true`, acceptance "marketing-plan.md
+  has Channels, Rubrics, Slots for the next 7 days, Drop, Why" — it is accepted by the file, without a post (`posted 0`
+  is the norm for it; never ask the marketer why it did not post). When there is a plan: cut its slots into post tasks —
+  one task per slot, `not_before` = the slot's date and hour, the slot's rubric and angle in `scope`, its goal in `goal`;
+  skip slots already open in the backlog; at most the Ready tasks you were asked for, nearest slots first. The channel
+  table (`visits by ?src=`) and `Published in the last 7 days` are there so you do not schedule a repeat or a channel the
+  rule says to post less in.
 - Answer every open question addressed to you in `answers`. Decide inside VISION; when the answer needs a change of
   goals, budget, promises, channels or anything VISION reserves for the owner — put it into `owner_questions` and give
   the role the safest interim answer.
