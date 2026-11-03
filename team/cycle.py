@@ -569,6 +569,13 @@ class Cycle:
                                   attempts=int(t.get("attempts") or 0) + 1, assignee_run=None)
             return True
         if res.get("status") == "partial":
+            if repeated_partial(t, res):
+                # the same partial twice in a row = the task is stuck, not progressing (release-radar T-0033 burned three cycles
+                # on a report that did not exist); the PO re-scopes or closes it
+                self.store.transition(t["id"], "blocked", "dispatcher", "partial repeated with the same summary: stuck", force=True, assignee_run=None)
+                self.store.ask(from_="developer", to="po", question=f"Task {t['id']} returned the same partial result twice: "
+                               f"{_short_text(res.get('summary'), 300)} Re-scope it, split it, or close it.", task_id=t["id"], blocks=[t["id"]])
+                return True
             self.store.transition(t["id"], "in_progress", "dispatcher", "partial — continues next cycle", force=True, last_review=None)
             return True
         if self.p.repo_mode == "pr":
@@ -858,7 +865,16 @@ class Cycle:
         if rr is None or not (rr.ok and rr.structured):
             self.store.transition(t["id"], "ready", "dispatcher", "analyst run failed", force=True, assignee_run=None)
             return True
-        self.store.add_result(t["id"], {"run_id": run_id, "status": "done", "summary": rr.structured.get("summary_md", "")[:1200]})
+        summary = str(rr.structured.get("summary_md", ""))
+        if is_stub_result(summary):
+            # a stub ("duplicate call; see the previous report") must not close the task (release-radar T-0029, 03.11)
+            self.store.add_result(t["id"], {"run_id": run_id, "status": "blocked", "summary": summary[:1200]})
+            self.store.transition(t["id"], "blocked", "dispatcher", "analyst returned a stub, not a measurement", force=True, assignee_run=None)
+            self.store.ask(from_="analyst", to="po", question=f"Task {t['id']}: the analyst returned a stub instead of a measurement "
+                           f"({_short_text(summary, 160)}). Re-state the question with the data field it needs, or close the task.",
+                           task_id=t["id"], blocks=[t["id"]])
+            return True
+        self.store.add_result(t["id"], {"run_id": run_id, "status": "done", "summary": summary[:1200]})
         self.store.transition(t["id"], "done", "dispatcher", "measurement delivered", force=True)
         return True
 
@@ -947,6 +963,35 @@ class Cycle:
 
 
 # ------------------------------------------------------------------ helpers
+
+STUB_MARKERS = ("дубликат вызова", "duplicate call", "см. предыдущий отчёт", "see the previous report", "see previous report",
+                "no new data", "нет новых данных", "placeholder", "заглушка")
+MIN_RESULT_CHARS = 120
+
+
+def _short_text(s: Any, n: int) -> str:
+    s = " ".join(str(s or "").split())
+    return s if len(s) <= n else s[: n - 1] + "…"
+
+
+def is_stub_result(summary: str) -> bool:
+    """A result that says nothing: shorter than MIN_RESULT_CHARS or a known 'duplicate / see previous' phrase."""
+    low = " ".join(str(summary or "").lower().split())
+    return len(low) < MIN_RESULT_CHARS or any(m in low for m in STUB_MARKERS)
+
+
+def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
+    """True when the previous recorded result was also partial with the same summary (first 200 chars) or the same frictions."""
+    prev = [r for r in (t.get("results") or []) if r.get("status") == "partial"]
+    if not prev:
+        return False
+    last = prev[-1]
+    same_summary = _short_text(last.get("summary"), 200) == _short_text(res.get("summary"), 200)
+    f_old = sorted(str(f.get("what") or f)[:120] for f in (last.get("friction") or []))
+    f_new = sorted(str(f.get("what") or f)[:120] for f in (res.get("friction") or []))
+    same_friction = bool(f_old) and f_old == f_new
+    return same_summary or same_friction
+
 
 OPEN_TASK_STATES = ("ready", "claimed", "in_progress", "review", "released", "blocked", "waiting_owner")
 MIN_PLAN_CHARS = 200        # a marketing-plan.md shorter than this is "no plan": the PO is asked instead of accepting it

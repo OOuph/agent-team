@@ -310,3 +310,19 @@ def test_duplicate_slot_distinguishes_channels():
     assert C.duplicate_task(open_tasks, {"title": "X post today, another angle", **base})["id"] == "T-1"
     assert C.duplicate_task(open_tasks, {"title": "Daily post today", **base})["id"] == "T-1"      # no channel named → same slot
     assert C._channels_in("Mastodon trial post 1") == frozenset({"mastodon"}) and C._channels_in("Threads post") == frozenset({"threads"})
+
+
+def test_stub_and_repeated_partial_guards():
+    from team import cycle as C
+    assert C.is_stub_result("Дубликат вызова; см. предыдущий отчёт")
+    assert C.is_stub_result("short")
+    assert not C.is_stub_result("Metrics for 02.11: 55 human sources, 11 engaged, 0 returns; /go/ 141 requests of which 123 human; " * 2)
+    t = {"results": [{"status": "partial", "summary": "Added the stop-list entry; the report T-0029 does not exist, continuing.",
+                      "friction": [{"kind": "missing_data", "what": "report T-0029 missing"}]}]}
+    same = {"status": "partial", "summary": "Added the stop-list entry; the report T-0029 does not exist, continuing.", "friction": []}
+    assert C.repeated_partial(t, same)
+    same_friction = {"status": "partial", "summary": "another wording", "friction": [{"kind": "missing_data", "what": "report T-0029 missing"}]}
+    assert C.repeated_partial(t, same_friction)
+    progress = {"status": "partial", "summary": "Stop-list done; llms.txt link needs build.py, asking PO.", "friction": [{"what": "scope"}]}
+    assert not C.repeated_partial(t, progress)
+    assert not C.repeated_partial({"results": []}, same)

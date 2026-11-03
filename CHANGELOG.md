@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Guards: a task whose partial result repeats (same summary or same frictions) is blocked with a question to the PO instead of running again (release-radar T-0033 burned three cycles); an analyst stub ('duplicate call; see the previous report', or < 120 chars) does not close the task — blocked + question (T-0029).
 - T-0022: a retry of a developer task continues `task/<id>` (local, else origin) with base merged in; on a merge conflict it starts fresh from base (F-0087, F-0090).
 - sitemetrics: scanner probes at any depth (`/app/.env`, `/api/.env`, `wp-login.php`, `/.git/`, phpmyadmin…) are class scanner, not human (they showed up in release-radar human top pages).
 - T-0021: PO card `create_task` rules: `scope` must list every file or build step the criteria need; a task that consumes another task's report names it, is created after acceptance or carries `not_before` plus a fallback (F-0082, F-0083).
