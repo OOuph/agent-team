@@ -264,8 +264,35 @@ def ledger_md(led: dict[str, Any]) -> str:
 
 # ------------------------------------------------------------------ model narrative
 
+PROMPT_LEDGER_CHARS = 150_000
+
+
+def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
+    """The ledger with long tails trimmed, so the whole window fits the prompt (the first live run cut the JSON at 60K
+    chars and the reporter rightly wrote "the ledger is truncated")."""
+    out = {"since": led["since"], "until": led["until"], "hours": led["hours"], "framework": led["framework"], "products": []}
+    for p in led["products"]:
+        roles = {}
+        for r, v in p["roles"].items():
+            roles[r] = {"tasks": [{k: (_short(x[k], 140) if k == "result" else x[k]) for k in ("id", "title", "state", "result", "result_status", "blocked_by", "pr") if x.get(k) is not None}
+                                  for x in v["tasks"][:MAX_ITEMS]],
+                        "items": v["items"][:MAX_ITEMS]}
+            if len(v["tasks"]) > MAX_ITEMS or len(v["items"]) > MAX_ITEMS:
+                roles[r]["omitted"] = f"{max(0, len(v['tasks']) - MAX_ITEMS)} tasks, {max(0, len(v['items']) - MAX_ITEMS)} items not shown"
+        po = dict(p["po"])
+        po["created"] = po["created"][:MAX_ITEMS]
+        po["implemented"] = po["implemented"][:20]
+        po["owner_questions"] = po["owner_questions"][:4]
+        out["products"].append({"product": p["product"], "name": p["name"], "site": p["site"], "roles": roles, "po": po,
+                                "dispatcher": p["dispatcher"], "spend_usd": p["spend_usd"]})
+    return out
+
+
 def reporter_prompt(led: dict[str, Any]) -> str:
     active = sorted({r for p in led["products"] for r in p["roles"]})
+    body = json.dumps(compact_for_prompt(led), ensure_ascii=False, indent=1)
+    if len(body) > PROMPT_LEDGER_CHARS:
+        body = body[:PROMPT_LEDGER_CHARS] + "\n… [ведомость обрезана; скажи об этом в заголовке]"
     return ("# ОТЧЁТ РОЛЕЙ ВЛАДЕЛЬЦУ — окно " + f"{led['since'][:16]} → {led['until'][:16]} UTC\n\n"
             "Ниже ведомость (JSON) — всё, что команда ролей сделала за окно, по продуктам. Напиши отчёт владельцу в Telegram.\n\n"
             "## ПРАВИЛА\n"
@@ -278,7 +305,7 @@ def reporter_prompt(led: dict[str, Any]) -> str:
             "- Заголовок — одна строка: главное событие окна и общий расход.\n"
             "- Только факты из ведомости. Ни одного числа, названия, ссылки или причины, которых в ней нет. Если роль ничего не "
             "завершила — так и написать. Без оценок «отлично/успешно», без обещаний.\n\n"
-            "## ВЕДОМОСТЬ\n```json\n" + json.dumps(led, ensure_ascii=False, indent=1)[:60000] + "\n```\n")
+            "## ВЕДОМОСТЬ\n```json\n" + body + "\n```\n")
 
 
 def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, book_store: Store | None) -> dict[str, Any] | None:
@@ -300,11 +327,12 @@ def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, bo
 
 
 def narrative_text(n: dict[str, Any], led: dict[str, Any]) -> str:
+    # Telegram gets html-escaped plain text from team-publish, so no markup: role names in capitals with a marker
     parts = [f"🗂 {n.get('headline', '').strip()}", ""]
     for sec in n.get("roles") or []:
-        parts.append(f"**{ROLE_RU.get(sec.get('role'), sec.get('role'))}.** {sec.get('text', '').strip()}")
+        parts.append(f"▪ {ROLE_RU.get(sec.get('role'), sec.get('role')).upper()}\n{sec.get('text', '').strip()}")
         parts.append("")
-    parts.append(f"**{ROLE_RU['po']}.** {n.get('po', '').strip()}")
+    parts.append(f"▪ {ROLE_RU['po'].upper()}\n{n.get('po', '').strip()}")
     spend = sum(sum(p["spend_usd"].values()) for p in led["products"])
     parts += ["", f"Окно {led['since'][11:16]}–{led['until'][11:16]} UTC, {led['hours']:.0f} ч · расход ${spend:.2f} · ведомость в data/reports/."]
     return "\n".join(parts)

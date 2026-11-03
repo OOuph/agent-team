@@ -74,6 +74,11 @@ def test_narrative_text_and_prompt(tmp_path: Path) -> None:
     p = _product(st)
     led = report.ledger(st, [p], 12)
     txt = report.narrative_text({"headline": "H", "roles": [{"role": "developer", "text": "Я сделал."}], "po": "Выбрали X."}, led)
-    assert txt.startswith("🗂 H") and "Разработчик" in txt and "Менеджер продукта" in txt
+    assert txt.startswith("🗂 H") and "РАЗРАБОТЧИК" in txt and "МЕНЕДЖЕР ПРОДУКТА" in txt and "**" not in txt
+    big = {**led, "products": [{"product": "x", "name": "x", "site": "", "po": {"created": [], "decisions": {}, "answers": 0, "closed": [], "implemented": [], "owner_questions": []},
+                                "dispatcher": {"merged": [], "duplicates_skipped": 0, "phase_errors": 0, "posts": []}, "spend_usd": {},
+                                "roles": {"developer": {"tasks": [{"id": f"T-{i:04d}", "title": "t", "state": "done", "result": "r" * 500, "moves": ["a→b"]} for i in range(40)], "items": []}}}]}
+    c = report.compact_for_prompt(big)["products"][0]["roles"]["developer"]
+    assert len(c["tasks"]) == report.MAX_ITEMS and "moves" not in c["tasks"][0] and len(c["tasks"][0]["result"]) <= 140 and "omitted" in c
     pr = report.reporter_prompt(led)
     assert "ВЕДОМОСТЬ" in pr and "Только факты" in pr
