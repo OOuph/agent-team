@@ -373,6 +373,11 @@ class Cycle:
     # triage: PO ------------------------------------------------------------------------------------
 
     def phase_triage(self) -> None:
+        from . import deputy
+        try:
+            deputy.run_for_product(self)          # owner away: answer owner questions by mandate before the PO reads them
+        except Exception as exc:  # noqa: BLE001
+            log.exception("%s: deputy failed: %s", self.p.slug, exc)
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])

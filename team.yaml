@@ -23,6 +23,7 @@ claude:
     support: sonnet
     editor: sonnet
     reporter: sonnet                # 12-hour role report to the owner (team report)
+    deputy: opus                    # deputy owner: answers owner questions by DEPUTY.md while the owner is away
 
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
@@ -62,7 +63,12 @@ framework:                        # self-improvement: friction register → retr
                                   # a bad self-merge, so the automation itself depends on it.
     - run-cycle.sh
     - watchdog.sh
+    - DEPUTY.md                   # the owner's mandate for the deputy role: his words, not the loop's
   max_usd_per_run: 2.0
+
+deputy:                           # owner away 04–10.11 (decision 27): questions to the owner are answered by the deputy role
+  enabled: true
+  after_h: 1                      # the owner gets this long to answer himself; then the deputy answers by DEPUTY.md
 
 fetch:                            # what team-fetch may open, beyond the product site and the publishing channels
   extra_hosts_by_role:            # per role; the reviewer reads repo-only deliverables (code, tests, README) on GitHub

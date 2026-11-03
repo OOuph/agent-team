@@ -241,3 +241,29 @@ def test_content_without_post_guard(tmp_path: Path):
     s.record_post("telegram", "1", "https://t.me/x/1", m["id"])
     assert not cy.content_without_post(m)
     s.close()
+
+
+def test_deputy_due_and_apply(tmp_path: Path):
+    from team import deputy
+    st = _settings(tmp_path)
+    st.raw["deputy"] = {"enabled": True, "after_h": 0}
+    (st.root / "DEPUTY.md").write_text("# mandate\n", encoding="utf-8")
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="marketer")
+    q = s.ask(from_="po", to="owner", question="May we add channel X?", task_id=t["id"])
+    assert s.task(t["id"])["state"] == "waiting_owner"
+    q2 = s.ask(from_="po", to="po", question="internal", task_id=None)
+    due = deputy.due_questions(st, s)
+    assert [x["id"] for x in due] == [q["id"]]
+    assert deputy.enabled(st)
+    txt = deputy.deputy_prompt(p, s, due, deputy.mandate(st))
+    assert "MANDATE" in txt and q["id"] in txt and "unavailable" in txt
+    n = deputy.apply(s, {"answers": [{"question_id": q["id"], "kind": "unavailable", "answer": "No new channels this week; proceed with the listed ones."},
+                                     {"question_id": "Q-9999", "kind": "info", "answer": "x"}]}, due)
+    assert n == 1
+    qq = s.questions(["answered"])[0]
+    assert qq["answered_by"] == "deputy" and qq["answer"].startswith("[unavailable]")
+    assert s.task(t["id"])["state"] == "ready"          # the waiting task is released
+    assert deputy.due_questions(st, s) == []
+    s.close()

@@ -1,0 +1,24 @@
+{
+ "title": "deputy-answers",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["answers"],
+ "properties": {
+  "answers": {
+   "type": "array",
+   "maxItems": 10,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["question_id", "kind", "answer"],
+    "properties": {
+     "question_id": {"type": "string"},
+     "kind": {"type": "string", "enum": ["decided", "unavailable", "info"]},
+     "answer": {"type": "string", "maxLength": 1200},
+     "not_before": {"type": "string", "maxLength": 40, "description": "ISO 8601 UTC; only for 'wait until <moment>' answers"}
+    }
+   }
+  },
+  "summary": {"type": "string", "maxLength": 400}
+ }
+}
