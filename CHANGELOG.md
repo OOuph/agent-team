@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- Daily site builds: `build-site.sh` + cron on the server at the hours each VISION promises (agentsmd 04:00, release-radar
+  06:00, luz 13:15/13:45 UTC) — before this no scan or rebuild ran on schedule, sites refreshed only with developer
+  merges (found by the ops session 03.11 04:30). Separate clone per site, rebase on a lost push, friction + Telegram on failure.
 - PO triage: the backlog brief now carries `not_before` (the PO re-created every scheduled post as "a task with a start
   time": luz-amanha T-0011/T-0012/T-0014, release-radar T-0012/T-0013/T-0015/T-0016); the dispatcher drops a proposed task
   whose title or role+`not_before` slot is already open (`task.duplicate_skipped`); PO can close tasks (`close_tasks`).

@@ -85,7 +85,7 @@
 
 ## 7. Где работает
 
-`reservememes` — диспетчер, cron `7 * * * *`, Claude Code по токену подписки, чекауты репозиториев, состояние продуктов
+`reservememes` — диспетчер, cron `7 * * * *`, ежедневные сборки сайтов `build-site.sh` (cron по часу из VISION: agentsmd 04:00 · release-radar 06:00 · luz 13:15 и 13:45 UTC; отдельный клон `builds/<slug>/`, коммит `data/` + `public/` в `main`, rebase при гонке с мержем диспетчера, провал → регистр трудностей + Telegram), Claude Code по токену подписки, чекауты репозиториев, состояние продуктов
 (`products/<slug>/`, не трогается синхронизацией кода — `sync.sh`). GitHub `formachines-ai/*` — репозитории сайтов с
 собранным `public/`. Droplet `68.183.2.193` — nginx, сертификаты, `publish.timer` раз в 5 мин, `metrics.timer` раз в час,
 IndexNow. Telegram: три публичных канала + приватный ops (дайджесты, вопросы владельцу). Bluesky и dev.to — аккаунты
@@ -119,7 +119,7 @@ IndexNow. Telegram: три публичных канала + приватный 
    `framework.canary_product` на коде кандидата (`PYTHONPATH` = ветка, `TEAM_ROOT` = рабочее состояние); прошёл все фазы
    без ошибок → диспетчер сам сливает PR через API и fast-forward'ит свой чекаут (сервер работает из git-клона);
    не прошёл → `waiting_owner`, PR открыт с логом. **Запретный список** `framework.protected_paths` (машина состояний
-   `store.py`, `runner.py`, `config.py`, `publish.py`, `team.yaml`, cron-скрипты, `watchdog.sh`, `deploy/`, `bin/`):
+   `store.py`, `runner.py`, `config.py`, `publish.py`, `team.yaml`, cron-скрипты, `watchdog.sh`, `build-site.sh`, `deploy/`, `bin/`):
    PR, трогающий их, всегда ждёт человека.
 4. **Сторож вне диспетчера** — `watchdog.sh` в cron каждые 30 минут, в запретном списке: если за 2 часа ни один цикл
    не завершился, нет STOP и нет идущего цикла → `git reset --hard` на `data/framework/last-good` (пишется `run-cycle.sh`
