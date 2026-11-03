@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-03
 
+- T-0009: PO criteria must be observable via a public URL (repo-only deliverables get a published artefact cited in the criterion); reviewer marks checkout/process-only criteria `not observable: repo-only` in limits and does not repeat an inconclusive verdict on re-review (F-0042, F-0043, F-0046, F-0047, F-0048, F-0049).
 - sitemetrics: glob targets (`/go/vote/*/up/`, `**`); droplet metrics.sh default targets extended with /go/vote/ up/down, /go/github/, /llms.txt (analyst requests on luz and release-radar).
 - `team report` + `report-roles.sh` (cron 07:30 / 19:30 UTC): 12-hour role report to the owner's Telegram — a deterministic
   ledger per product and role from the stores (tasks, results, reviews, posts, editorial, support, PO decisions, merges,
