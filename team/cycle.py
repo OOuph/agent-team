@@ -629,8 +629,17 @@ class Cycle:
             return True
         ahead = gitops.commits_ahead(repo, self.p.repo_branch) or (1 if gitops.dirty(repo) else 0)
         if ahead == 0:
-            self.store.transition(t["id"], "ready", "dispatcher", "developer reported done but committed nothing", force=True,
-                                  attempts=int(t.get("attempts") or 0) + 1, assignee_run=None)
+            attempts = int(t.get("attempts") or 0) + 1
+            checks = "; ".join(f"{'✓' if c.get('met') else '✗'} {_short_text(c.get('criterion'), 60)}: {_short_text(c.get('evidence'), 80)}"
+                               for c in (res.get("self_check") or [])[:3] if isinstance(c, dict))
+            note = f"developer reported done but committed nothing — summary: {_short_text(res.get('summary'), 300)}" + (f" | self_check: {checks}" if checks else "")
+            if previous_no_commit(t):
+                # the second no-commit in a row = the task cannot be finished as written (F-0103..F-0109): stop, ask the PO to re-scope
+                self.store.transition(t["id"], "blocked", "dispatcher", note, force=True, attempts=attempts, assignee_run=None)
+                self.store.ask(from_="developer", to="po", question=f"Task {t['id']} came back 'done' twice without a single commit. "
+                               f"Last summary: {_short_text(res.get('summary'), 300)} Re-scope it, split it, or close it.", task_id=t["id"], blocks=[t["id"]])
+                return True
+            self.store.transition(t["id"], "ready", "dispatcher", note, force=True, attempts=attempts, assignee_run=None)
             return True
         if self.p.repo_mode == "pr":
             return self.release_as_pull_request(t, repo, res)
@@ -1058,6 +1067,12 @@ def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
         if not d or d.get("state") not in DEPENDENCY_DONE or not res or is_stub_result(str(res[-1].get("summary") or "")):
             out.append(str(dep))
     return out
+
+
+def previous_no_commit(t: dict[str, Any]) -> bool:
+    """True when the last time the task went back to `ready` it was because the developer committed nothing."""
+    back = [h for h in (t.get("history") or []) if h.get("to") == "ready"]
+    return bool(back) and "committed nothing" in str(back[-1].get("note") or "")
 
 
 def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
