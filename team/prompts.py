@@ -126,9 +126,65 @@ def reviewer_prompt(product: Product, task: dict[str, Any], result: dict[str, An
             + "\n\nUse only `team-fetch <url>`. Check every acceptance criterion and negative case on the live site.\n")
 
 
+def _top(d: dict[str, Any] | None, n: int) -> str:
+    items = sorted(((k, v) for k, v in (d or {}).items() if isinstance(v, (int, float))), key=lambda kv: -kv[1])[:n]
+    return ", ".join(f"{k} {v}" for k, v in items) or "—"
+
+
+def metrics_digest(files: list[Path], max_days: int = 7) -> str:
+    """Compact per-day view of the site metrics for the analyst (ops 04.11, release-radar Q-0009): every metrics file is a
+    multi-day snapshot of ~35 KB, and cutting each file to its first 5000 chars left the analyst with only the oldest day.
+    Days are merged across files (the newest file wins), newest day first; raw top_pages lists are reduced to the top 5."""
+    days: dict[str, dict[str, Any]] = {}
+    targets: list[str] = []
+    generated = ""
+    for f in sorted(files):
+        try:
+            data = json.loads(f.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        days.update(data.get("days") or {})
+        targets = list(data.get("targets") or targets)
+        generated = str(data.get("generated") or generated)
+    if not days:
+        return "(no metrics files yet)"
+    out = [f"Snapshot generated {generated or '?'}; humans = after the strict bot filter (04.11); "
+           "'returns' = human sources seen on an earlier day too (G2); by_src = visits that came with ?src=<channel>."]
+    for day in sorted(days, reverse=True)[:max_days]:
+        d = days[day] or {}
+        h, a, c, sc = d.get("humans") or {}, d.get("agents") or {}, d.get("crawlers") or {}, d.get("scanners") or {}
+        st = d.get("status") or {}
+        lines = [f"## {day}",
+                 f"- requests {d.get('requests_raw', 0)} (2xx {st.get('2xx', 0)}, 3xx {st.get('3xx', 0)}, 4xx {st.get('4xx', 0)}, 5xx {st.get('5xx', 0)})",
+                 f"- HUMANS: requests {h.get('requests', 0)}, sources {h.get('sources', 0)}, engaged {h.get('engaged', 0)}, returns {h.get('returns', 0)}",
+                 f"- agents: requests {a.get('requests', 0)}, sources {a.get('sources', 0)}; families: {_top(a.get('by_family'), 4)}",
+                 f"- crawlers: requests {c.get('requests', 0)}, sources {c.get('sources', 0)}, social previews {c.get('social_preview', 0)}; bots: {_top(c.get('by_bot'), 6)}",
+                 f"- scanners: requests {sc.get('requests', 0)}, sources {sc.get('sources', 0)}"]
+        tg = []
+        for t in targets or list((d.get("targets") or {}).keys()):
+            v = (d.get("targets") or {}).get(t) or {}
+            if not v.get("requests"):
+                continue
+            tg.append(f"{t} req {v.get('requests', 0)} · human src {(v.get('human') or {}).get('sources', 0)} · agent src "
+                      f"{(v.get('agent') or {}).get('sources', 0)} · crawler req {(v.get('crawler') or {}).get('requests', 0)}")
+        lines.append("- targets: " + ("; ".join(tg) if tg else "no hits"))
+        src = d.get("by_src") or {}
+        if src:
+            lines.append("- by_src: " + "; ".join(f"{k} req {v.get('requests', 0)} human {v.get('human_sources', 0)} engaged {v.get('engaged_sources', 0)}"
+                                                  for k, v in sorted(src.items(), key=lambda kv: -int((kv[1] or {}).get('requests') or 0))[:8]))
+        ref = d.get("referers") or []
+        if ref:
+            lines.append("- referers: " + ", ".join(f"{r.get('host')} {r.get('requests')}" for r in ref[:5]))
+        tp = d.get("top_pages") or []
+        if tp:
+            lines.append("- top pages (all classes): " + ", ".join(f"{p.get('path')} {p.get('requests')}" for p in tp[:5]))
+        out.append("\n".join(lines))
+    return "\n\n".join(out)
+
+
 def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, str]], accepted: list[dict[str, Any]],
                    posts: list[dict[str, Any]]) -> str:
-    m = "\n\n".join(f"--- {day} ---\n{_tail(txt, 5000)}" for day, txt in metrics) or "(no metrics files yet)"
+    m = "\n\n".join(txt if day == "digest" else f"--- {day} ---\n{_tail(txt, 5000)}" for day, txt in metrics) or "(no metrics files yet)"
     return (f"# ANALYST — product `{product.slug}` ({product.site_base})\n\n# VISION (goals table)\n" + product.vision()
             + "\n\n# METRICS (latest first)\n" + m
             + "\n\n# TASKS ACCEPTED RECENTLY\n" + (_y([{**_task_brief(t), "accepted_at": t.get("accepted_at"), "released_sha": t.get("released_sha")} for t in accepted]) if accepted else "(none)")

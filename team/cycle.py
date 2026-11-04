@@ -992,7 +992,7 @@ class Cycle:
 
     def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]
-        metrics = [(f.stem, f.read_text(encoding="utf-8")) for f in files]
+        metrics = [("digest", prompts.metrics_digest(files))]     # ops 04.11: compact per-day view, not cut raw files
         since = (_now() - timedelta(hours=72)).isoformat()
         accepted = [t for t in self.store.tasks(["accepted", "measured", "done", "released"]) if (t.get("accepted_at") or t.get("released_at") or "") >= since]
         posts = [{"day": r[0], "channel": r[1], "url": r[3], "ts": r[5]} for r in self.store.db.execute("SELECT * FROM posts ORDER BY ts DESC LIMIT 20")]
