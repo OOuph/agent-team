@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0029: PO card: before Ready list the files each criterion needs, including the generator (e.g. `build.py` when `llms.txt` links a report), and put all in `scope`; no `depends_on` on a task that is not done with a non-stub report (F-0088, F-0089, F-0092, F-0094).
 - T-0028: a retry whose branch `task/<id>` conflicts with base no longer starts a fresh branch at base (the earlier attempt's commit was lost); base is merged with the earlier attempt's side winning, and as a last resort the earlier commit is kept in history (F-0090, F-0093).
 - T-0027: a developer `partial` result is checked for repetition before the «committed nothing» check (a no-commit partial used to bypass it and run a third time, T-0033); new optional task field `depends_on` — the task is not started until every listed task is accepted/measured/done with a non-stub result (F-0085, F-0088, F-0091, F-0094).
 - T-0025: the repeated-partial rule matches on overlapping friction kinds (any shared kind) and ignores `environment` when other kinds are present; before, a new `environment` kind made the sets differ and a third round ran (F-0085, F-0086, F-0088–F-0094).
