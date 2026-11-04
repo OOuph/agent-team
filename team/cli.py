@@ -10,6 +10,7 @@
   team stop SLUG|all / team resume SLUG|all   STOP file
   team digest SLUG              print today's digest text
   team report [--hours 12] [--send] [--no-llm] [--style bonus|plain]   12-hour role report (ledger + reporter run) → Telegram ops chat
+  team autonomy-check [--send] [--json] [--no-tests]   can the contour run without the owner? (docs/autonomy-check.md)
 """
 from __future__ import annotations
 
@@ -226,6 +227,22 @@ def cmd_report(st: C.Settings, a: argparse.Namespace) -> int:
     return 0 if (not a.send or all(x.get("ok") for x in res["sent"])) else 1
 
 
+def cmd_autonomy(st: C.Settings, a: argparse.Namespace) -> int:
+    """Autonomy check (owner 04.11): every component that must live a week without the owner, OK / WARN / FAIL with
+    evidence; protocol in docs/autonomy-check.md. --send puts the short version into the ops chat."""
+    from . import autonomy
+    checks = autonomy.run_all(st, tests=not a.no_tests)
+    print(autonomy.to_json(checks) if a.json else autonomy.render(checks))
+    out = st.data_dir / "autonomy"
+    out.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H%M")
+    (out / f"{stamp}.md").write_text(autonomy.render(checks) + "\n", encoding="utf-8")
+    if a.send:
+        from .report import send_telegram
+        send_telegram(autonomy.summary_for_chat(checks), a.dry_run)
+    return 1 if any(c.status == autonomy.FAIL for c in checks) else 0
+
+
 def cmd_digest(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
@@ -269,6 +286,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--send", action="store_true"); s.add_argument("--no-llm", action="store_true"); s.add_argument("--dry-run", action="store_true")
     s.add_argument("--out"); s.add_argument("--style", choices=["bonus", "plain"], default=os.environ.get("REPORT_STYLE", "bonus"))
     s.set_defaults(fn=cmd_report)
+    s = sub.add_parser("autonomy-check"); s.add_argument("--send", action="store_true"); s.add_argument("--json", action="store_true")
+    s.add_argument("--no-tests", action="store_true"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_autonomy)
     a = ap.parse_args(argv)
     logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
     st = C.load()
