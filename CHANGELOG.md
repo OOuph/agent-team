@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0034: reviewer card carries the working test form for repo_only tasks: `python3 -m unittest discover -s tests -t .` when `tests/` has no `__init__.py` (bare `unittest` finds 0 tests), and `unittest tests.test_x -v` is allowed; SCHEME reviewer row aligned (F-0095, F-0096, OBS-0063).
 - T-0033: repo_only reviewer allowlist accepts flags after the module (`unittest tests.<module> -v`), `unittest -v discover…` and `discover -s <dir> -t <dir>`; prompt tells to use `discover -s tests -t .` when tests/ has no `__init__.py`; test checks every command quoted in the prompt against the allowlist (F-0095, F-0096).
 - T-0032: repo_only reviewer may run module-targeted unittest: `python3 -m unittest [-v] tests.<module>`, `discover -s <dir>`, `discover -v -s <dir>`; card, SCHEME, task schema and prompt updated; test checks list and prompt agree (F-0095, F-0096).
 - Personas judge the reader's experience on Opus (owner 04.11): an `experience` block in every run (first impression, steps to understand, interest and usefulness 1–5, would return/share, why, wish) → `products/<slug>/ux-scores.jsonl`, rolling scores in the digest and the PO prompt; observations only for what should change (`ux_friction`, `value_gap`, defects, hypotheses), successes no longer filed; low scores become `value_gap`; twice a day per product, 2 scenarios in rotation; PO puts a task on interest/usefulness when scores stay ≤ 3.
