@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     around: int | None = None
     offset = 0
     count = False
+    tag = False
     json_path: str | None = None
     json_keys = False
     rest: list[str] = []
@@ -52,6 +53,8 @@ def main(argv: list[str] | None = None) -> int:
     while i < len(argv):                       # team-fetch <url> [--grep TEXT] [--tail N]: a big page without the whole body
         if argv[i] == "--grep" and i + 1 < len(argv):
             grep = argv[i + 1]; i += 2; continue
+        if argv[i] == "--tag" and i + 1 < len(argv):   # literal "<NAME": the role never types < or >
+            grep = "<" + argv[i + 1].strip("<>/ "); tag = True; i += 2; continue
         if argv[i] == "--tail" and i + 1 < len(argv):
             tail = int(argv[i + 1]); i += 2; continue
         if argv[i] == "--around" and i + 1 < len(argv):
@@ -66,7 +69,7 @@ def main(argv: list[str] | None = None) -> int:
             count = True; i += 1; continue
         rest.append(argv[i]); i += 1
     if len(rest) != 1 or not rest[0].startswith("http"):
-        print("usage: team-fetch <url> [--grep TEXT [--around N] [--count]] [--tail N] [--offset K] [--json-path a.b[0].c [--count]] [--json-keys]", file=sys.stderr)
+        print("usage: team-fetch <url> [--grep TEXT | --tag NAME [--around N] [--count]] [--tail N] [--offset K] [--json-path a.b[0].c [--count]] [--json-keys]", file=sys.stderr)
         return 2
     url = rest[0]
     allowed = [h.strip().lower() for h in os.environ.get("TEAM_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -100,6 +103,8 @@ def main(argv: list[str] | None = None) -> int:
     print()
     if json_path is not None or json_keys:
         return _json_out(body, json_path or "", json_keys, count)
+    if tag and around is None and not count:
+        around = 80
     if grep and (around is not None or count):
         low, needle = body.lower(), grep.lower()
         pos, start = [], low.find(needle)

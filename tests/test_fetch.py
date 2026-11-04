@@ -36,6 +36,13 @@ def test_count(monkeypatch):
     assert "2 matches" in out
 
 
+def test_tag_count(monkeypatch):
+    body = "<html><h1>A</h1><p>x</p><h1 class='b'>B</h1><h2>C</h2></html>"
+    assert "2 matches" in run(monkeypatch, body, ["--tag", "h1", "--count"])
+    assert "1 matches" in run(monkeypatch, body, ["--tag", "h2", "--count"])
+    assert "<h1>A" in run(monkeypatch, body, ["--tag", "h1"])
+
+
 def test_offset(monkeypatch):
     body = "a" * 30000 + "START" + "z" * 100
     out = run(monkeypatch, body, ["--offset", "30000"])

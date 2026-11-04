@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0037: `team-fetch --tag NAME [--count]` matches the literal `<NAME` internally; reviewer, persona and editor cards point to it instead of `--grep '<h1'` (F-0084, F-0099, F-0101).
 - T-0036: reviewer, support and persona cards: `--grep` patterns are plain text (`'h1'`, not `'<h1'`), use `--around N`; in the persona card the rule moved from the end into the first block (F-0101, F-0099, F-0084, F-0100).
 - T-0035: persona, reviewer, editor and marketer cards: shell rule says `< > | ; & $` are denied even inside quoted arguments, so `--grep` patterns are plain text (`'item'`, not `'<item'`; `'Rust'`, not `'>Rust<'`), use `--around N` (F-0084, F-0099).
 - T-0034: reviewer card carries the working test form for repo_only tasks: `python3 -m unittest discover -s tests -t .` when `tests/` has no `__init__.py` (bare `unittest` finds 0 tests), and `unittest tests.test_x -v` is allowed; SCHEME reviewer row aligned (F-0095, F-0096, OBS-0063).
