@@ -447,3 +447,25 @@ def test_two_done_without_commit_block_task_with_po_question(tmp_path: Path):
     recs = [r for r in friction.collect_product(p, s) if r["kind"] == "no_commit"]
     assert recs and "nothing to change, already fine" in recs[0]["summary"]
     s.close()
+
+
+def test_pr_push_5xx_leaves_task_ready_not_blocked(tmp_path: Path, monkeypatch):
+    """F-0100: three 502s from GitHub must not block the task: the commit is intact, so it returns to ready with an event."""
+    st = _settings(tmp_path)
+    p = _product(st)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    t = cy.store.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="test")
+    cy.store.transition(t["id"], "ready", "po")
+    monkeypatch.setattr(gitops, "push_branch", lambda repo, tid: "abc")
+    monkeypatch.setattr(gitops, "changed_files", lambda repo, base: [])
+
+    def boom(*a, **k):
+        raise gitops.GitError("github POST /pulls: HTTP Error 502: Bad Gateway")
+    monkeypatch.setattr(gitops, "open_pull_request", boom)
+    assert cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
+    assert cy.store.task(t["id"])["state"] == "ready"
+    assert any(e["kind"] == "pr.transient_failure" for e in cy.store.events())
+    # a non-5xx failure still blocks
+    monkeypatch.setattr(gitops, "open_pull_request", lambda *a, **k: (_ for _ in ()).throw(gitops.GitError("HTTP Error 422")))
+    cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
+    assert cy.store.task(t["id"])["state"] == "blocked"

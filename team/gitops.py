@@ -174,13 +174,28 @@ def log_since(repo_dir: Path, n: int = 10) -> str:
     return git(repo_dir, "log", f"-{n}", "--oneline", check=False)
 
 
+RETRIES = 3
+
+
+def is_transient(exc: BaseException) -> bool:
+    """HTTP 5xx from GitHub (API or git over https): the commit is intact, trying again later is safe (F-0100)."""
+    return bool(re.search(r"(HTTP Error|returned error:|error:|status)\s*5\d\d\b", str(exc)))
+
+
 def push_branch(repo_dir: Path, task_id: str) -> str:
     """Push task/<id> to origin (force-with-lease: a retry replaces the previous attempt). Returns the branch head."""
     br = f"task/{task_id}"
     if dirty(repo_dir):
         git(repo_dir, "add", "-A")
         git(repo_dir, "commit", "-q", "-m", f"{task_id}: leftover changes committed by the dispatcher")
-    git(repo_dir, "push", "-q", "--force-with-lease", "-u", "origin", br)
+    for attempt in range(RETRIES):
+        try:
+            git(repo_dir, "push", "-q", "--force-with-lease", "-u", "origin", br)
+            break
+        except GitError as exc:
+            if attempt == RETRIES - 1 or not is_transient(exc):
+                raise
+            time.sleep(5 * 3 ** attempt)
     return head(repo_dir)
 
 
@@ -214,17 +229,24 @@ def open_pull_request(repo_url: str, task_id: str, base: str, title: str, body: 
     existing = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
     if isinstance(existing, list) and existing:
         return str(existing[0].get("html_url"))
-    try:
-        r = _gh("POST", f"/repos/{repo}/pulls", {"title": title[:200], "head": f"task/{task_id}", "base": base, "body": body[:60000]})
-    except GitError:
-        # 04.11 T-0035: GitHub answered 502 to the POST yet opened PR #65; the task went blocked and cost a developer run.
-        # Look the branch up once more before calling it a failure.
-        time.sleep(5)
-        again = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
-        if isinstance(again, list) and again:
-            log.warning("POST /pulls failed for task/%s but the PR exists: %s", task_id, again[0].get("html_url"))
-            return str(again[0].get("html_url"))
-        raise
+    last: GitError | None = None
+    for attempt in range(RETRIES):
+        try:
+            r = _gh("POST", f"/repos/{repo}/pulls", {"title": title[:200], "head": f"task/{task_id}", "base": base, "body": body[:60000]})
+            break
+        except GitError as exc:
+            # 04.11 T-0035: GitHub answered 502 to the POST yet opened PR #65; the task went blocked (F-0100).
+            # Look the branch up, then retry on 5xx with backoff (5 s, 15 s, 45 s).
+            last = exc
+            time.sleep(5 * 3 ** attempt)
+            again = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
+            if isinstance(again, list) and again:
+                log.warning("POST /pulls failed for task/%s but the PR exists: %s", task_id, again[0].get("html_url"))
+                return str(again[0].get("html_url"))
+            if not is_transient(exc):
+                raise
+    else:
+        raise last  # type: ignore[misc]
     return str(r.get("html_url"))
 
 

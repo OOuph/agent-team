@@ -108,3 +108,37 @@ def test_open_pull_request_real_failure_raises(monkeypatch) -> None:
     monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
     with pytest.raises(gitops.GitError):
         gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b")
+
+
+def test_open_pull_request_retries_502_then_201(monkeypatch) -> None:
+    from team import gitops
+    posts = []
+
+    def fake(method, path, body=None):
+        if method == "GET":
+            return []
+        posts.append(1)
+        if len(posts) == 1:
+            raise gitops.GitError("github POST: HTTP Error 502")
+        return {"html_url": "https://github.com/o/r/pull/7"}
+    monkeypatch.setattr(gitops, "_gh", fake)
+    monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
+    assert gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b").endswith("/pull/7")
+    assert len(posts) == 2
+
+
+def test_open_pull_request_three_502s_raise_transient(monkeypatch) -> None:
+    import pytest
+    from team import gitops
+    posts = []
+
+    def fake(method, path, body=None):
+        if method == "GET":
+            return []
+        posts.append(1)
+        raise gitops.GitError("github POST: HTTP Error 502")
+    monkeypatch.setattr(gitops, "_gh", fake)
+    monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
+    with pytest.raises(gitops.GitError) as ei:
+        gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b")
+    assert len(posts) == 3 and gitops.is_transient(ei.value)
