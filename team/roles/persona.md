@@ -37,4 +37,4 @@ The persona-result schema. English (quote page text as it is).
 ## Shell rule
 The tool allowlist matches only a bare `team-fetch <url> [flags]` call. Never use `cd`, `;`, `&&`, `for` loops, pipes,
 `grep`, `head`, `tail`, or the characters `<` and `>` inside arguments: they are denied. Issue one call per URL and
-narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
+narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`. Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text (`'item'` or `'Rust'`, not `'<item'` or `'>Rust<'`); use `--around N` for context.
