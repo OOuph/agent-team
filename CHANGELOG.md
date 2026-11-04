@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0031: denial hint (transcript «Denied calls») names the allowed form for `team-fetch ... --grep '<item' --around 0` (a `<`/`>` in an argument reads as a redirect; grep without it, `--around N≥1`); persona card already carries the shell rule; tests (F-0084, F-0038, F-0040, F-0033, F-0031).
 - T-0030: reviewer card states one verdict rule: criteria visible on the live site decide pass/fail; non-public ones (build marker, scan time, code, zero-case) go to `limits` as `not observable`; `inconclusive` only if no criterion is observable (F-0064, F-0060, F-0050, F-0055, F-0046).
 - T-0029: PO card: before Ready list the files each criterion needs, including the generator (e.g. `build.py` when `llms.txt` links a report), and put all in `scope`; no `depends_on` on a task that is not done with a non-stub report (F-0088, F-0089, F-0092, F-0094).
 - T-0028: a retry whose branch `task/<id>` conflicts with base no longer starts a fresh branch at base (the earlier attempt's commit was lost); base is merged with the earlier attempt's side winning, and as a last resort the earlier commit is kept in history (F-0090, F-0093).
