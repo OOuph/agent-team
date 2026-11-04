@@ -377,3 +377,45 @@ def test_two_partials_same_friction_block_and_ask_po(tmp_path: Path):
     Cycle(st, p, r, "c3").phase_execute()
     assert r.calls.count("developer") == 2                          # no third developer run
     assert s.task(t["id"])["state"] == "blocked"
+
+
+class NoCommitPartialRunner(FakeRunner):
+    def run(self, role, prompt, schema, *, cwd, **kw):
+        if role != "developer":
+            return super().run(role, prompt, schema, cwd=cwd, **kw)
+        self.calls.append(role)
+        out = {"status": "partial", "summary": f"attempt {self.calls.count('developer')}: nothing to commit yet", "changes": [], "how_to_verify": [],
+               "self_check": [], "friction": [{"kind": "unclear_instruction", "what": "x"}, {"kind": "missing_data", "what": "y"}]}
+        return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id="s", duration_s=1.0)
+
+
+def test_partial_without_commits_still_blocks_on_second_attempt(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    r = NoCommitPartialRunner()
+    for i in (1, 2, 3):
+        Cycle(st, p, r, f"c{i}").phase_execute()
+    assert s.task(t["id"])["state"] == "blocked"
+    assert r.calls.count("developer") == 2
+
+
+def test_depends_on_gates_start(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    dep = s.create_task(title="dep", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready",
+                      role="developer", depends_on=[dep["id"]])
+    from team import cycle as C
+    assert C.unmet_dependencies(s, s.task(t["id"])) == [dep["id"]]
+    d = s.task(dep["id"]); d["state"] = "done"; d["results"] = [{"status": "done", "summary": "see previous report"}]; s.save_task(d)
+    assert C.unmet_dependencies(s, s.task(t["id"])) == [dep["id"]]          # stub result
+    d["results"] = [{"status": "done", "summary": "Implemented the stop-list and verified the build output in detail; all checks pass. " * 2}]; s.save_task(d)
+    assert C.unmet_dependencies(s, s.task(t["id"])) == []
+    assert C.unmet_dependencies(s, {"depends_on": ["T-9999"]}) == ["T-9999"]
+    d["state"] = "ready"; d["results"] = []; s.save_task(d)
+    r = FakeRunner()
+    Cycle(st, p, r, "c1").phase_execute()
+    assert s.task(t["id"])["state"] == "ready" and "developer" in r.calls    # dep itself ran (sorted first), t did not
