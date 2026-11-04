@@ -79,3 +79,32 @@ def test_remote_without_task_branch_starts_at_base(tmp_path):
     git(tmp_path, "clone", "-q", str(origin), str(clone))
     assert gitops.start_task_branch(clone, "T-1") == "task/T-1"
     assert git(clone, "rev-parse", "HEAD") == git(clone, "rev-parse", "origin/main")
+
+
+def test_open_pull_request_survives_false_502(monkeypatch) -> None:
+    """GitHub may answer 5xx to POST /pulls after creating the PR (T-0035, 04.11): the existing PR is found and returned."""
+    from team import gitops
+    calls = {"get": 0}
+
+    def fake(method, path, body=None):
+        if method == "GET":
+            calls["get"] += 1
+            return [] if calls["get"] == 1 else [{"html_url": "https://github.com/o/r/pull/65"}]
+        raise gitops.GitError("github POST: HTTP Error 502")
+    monkeypatch.setattr(gitops, "_gh", fake)
+    monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
+    assert gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b") == "https://github.com/o/r/pull/65"
+
+
+def test_open_pull_request_real_failure_raises(monkeypatch) -> None:
+    import pytest
+    from team import gitops
+
+    def fake(method, path, body=None):
+        if method == "GET":
+            return []
+        raise gitops.GitError("github POST: HTTP Error 422")
+    monkeypatch.setattr(gitops, "_gh", fake)
+    monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
+    with pytest.raises(gitops.GitError):
+        gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b")

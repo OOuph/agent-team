@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+import time
 import subprocess
 from pathlib import Path
 
@@ -213,7 +214,17 @@ def open_pull_request(repo_url: str, task_id: str, base: str, title: str, body: 
     existing = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
     if isinstance(existing, list) and existing:
         return str(existing[0].get("html_url"))
-    r = _gh("POST", f"/repos/{repo}/pulls", {"title": title[:200], "head": f"task/{task_id}", "base": base, "body": body[:60000]})
+    try:
+        r = _gh("POST", f"/repos/{repo}/pulls", {"title": title[:200], "head": f"task/{task_id}", "base": base, "body": body[:60000]})
+    except GitError:
+        # 04.11 T-0035: GitHub answered 502 to the POST yet opened PR #65; the task went blocked and cost a developer run.
+        # Look the branch up once more before calling it a failure.
+        time.sleep(5)
+        again = _gh("GET", f"/repos/{repo}/pulls?state=open&head={owner}:task/{task_id}")
+        if isinstance(again, list) and again:
+            log.warning("POST /pulls failed for task/%s but the PR exists: %s", task_id, again[0].get("html_url"))
+            return str(again[0].get("html_url"))
+        raise
     return str(r.get("html_url"))
 
 
