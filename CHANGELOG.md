@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0038: «done but committed nothing» puts the developer's summary and self_check head into the transition note (so the `no_commit` friction record shows them); the second no-commit in a row blocks the task and asks the PO to re-scope instead of returning it to `ready` (F-0103, F-0104, F-0107, F-0108, F-0109).
 - T-0037: `team-fetch --tag NAME [--count]` matches the literal `<NAME` internally; reviewer, persona and editor cards point to it instead of `--grep '<h1'` (F-0084, F-0099, F-0101).
 - T-0036: reviewer, support and persona cards: `--grep` patterns are plain text (`'h1'`, not `'<h1'`), use `--around N`; in the persona card the rule moved from the end into the first block (F-0101, F-0099, F-0084, F-0100).
 - T-0035: persona, reviewer, editor and marketer cards: shell rule says `< > | ; & $` are denied even inside quoted arguments, so `--grep` patterns are plain text (`'item'`, not `'<item'`; `'Rust'`, not `'>Rust<'`), use `--around N` (F-0084, F-0099).

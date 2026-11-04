@@ -419,3 +419,31 @@ def test_depends_on_gates_start(tmp_path: Path):
     r = FakeRunner()
     Cycle(st, p, r, "c1").phase_execute()
     assert s.task(t["id"])["state"] == "ready" and "developer" in r.calls    # dep itself ran (sorted first), t did not
+
+
+def test_two_done_without_commit_block_task_with_po_question(tmp_path: Path):
+    from team import friction
+
+    class NoCommitRunner(FakeRunner):
+        def run(self, role, prompt, schema, **kw):
+            out = {"status": "done", "summary": "nothing to change, already fine", "changes": [], "how_to_verify": [],
+                   "self_check": [{"criterion": "page ok", "met": True, "evidence": "exists"}]}
+            return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id="s", duration_s=1.0)
+
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    for n in (1, 2):
+        cy = Cycle(st, p, NoCommitRunner(), f"c{n}")
+        s.claim(t["id"], "developer", f"run-{n}")
+        s.transition(t["id"], "claimed", "d", force=True)
+        assert cy.exec_developer(s.task(t["id"]), f"run-{n}")
+        if n == 1:
+            assert s.task(t["id"])["state"] == "ready"
+    assert s.task(t["id"])["state"] == "blocked"
+    qs = [q for q in s.questions(["open"]) if q.get("task") == t["id"] or q.get("task_id") == t["id"]]
+    assert qs and "twice" in qs[0]["question"]
+    recs = [r for r in friction.collect_product(p, s) if r["kind"] == "no_commit"]
+    assert recs and "nothing to change, already fine" in recs[0]["summary"]
+    s.close()
