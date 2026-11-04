@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- T-0035: persona, reviewer, editor and marketer cards: shell rule says `< > | ; & $` are denied even inside quoted arguments, so `--grep` patterns are plain text (`'item'`, not `'<item'`; `'Rust'`, not `'>Rust<'`), use `--around N` (F-0084, F-0099).
 - T-0034: reviewer card carries the working test form for repo_only tasks: `python3 -m unittest discover -s tests -t .` when `tests/` has no `__init__.py` (bare `unittest` finds 0 tests), and `unittest tests.test_x -v` is allowed; SCHEME reviewer row aligned (F-0095, F-0096, OBS-0063).
 - T-0033: repo_only reviewer allowlist accepts flags after the module (`unittest tests.<module> -v`), `unittest -v discover…` and `discover -s <dir> -t <dir>`; prompt tells to use `discover -s tests -t .` when tests/ has no `__init__.py`; test checks every command quoted in the prompt against the allowlist (F-0095, F-0096).
 - T-0032: repo_only reviewer may run module-targeted unittest: `python3 -m unittest [-v] tests.<module>`, `discover -s <dir>`, `discover -v -s <dir>`; card, SCHEME, task schema and prompt updated; test checks list and prompt agree (F-0095, F-0096).
