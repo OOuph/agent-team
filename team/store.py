@@ -175,7 +175,7 @@ class Store:
                     created_by: str, priority: str = "P2", size: str = "S", negative_cases: list[str] | None = None,
                     observations: list[str] | None = None, role: str = "developer", state: str = "proposed",
                     budget_usd: float | None = None, links: list[str] | None = None, note: str = "", not_before: str | None = None,
-                    plan: bool = False) -> dict[str, Any]:
+                    plan: bool = False, depends_on: list[str] | None = None) -> dict[str, Any]:
         tid = self._next_id("T", "backlog")
         t = {"id": tid, "title": title[:140], "type": type_ if type_ in TASK_TYPES else "feature", "state": state,
              "priority": priority if priority in PRIORITIES else "P2", "size": size, "goal": goal, "role": role,
@@ -183,6 +183,7 @@ class Store:
              "problem": problem, "scope": scope, "acceptance": list(acceptance or []), "negative_cases": list(negative_cases or []),
              "observations": list(observations or []), "links": list(links or []), "budget_usd": budget_usd,
              "assignee_run": None, "review_fails": 0, "results": [], "created": utcnow(), "created_by": created_by, "not_before": not_before,
+             "depends_on": list(depends_on or []),
              "history": [{"ts": utcnow(), "actor": created_by, "from": None, "to": state, "note": note[:500]}]}
         self.save_task(t)
         self.event("task.create", tid, created_by, {"title": t["title"], "state": state, "priority": t["priority"]})

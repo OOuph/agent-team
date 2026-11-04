@@ -452,7 +452,8 @@ class Cycle:
             new = self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
-                                   not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer")
+                                   not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer",
+                                   depends_on=[str(x) for x in (rt.get("depends_on") or [])])
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
@@ -496,6 +497,8 @@ class Cycle:
             nb = parse_ts(t.get("not_before"))
             if nb and _now() < nb:
                 continue        # scheduled for later (daily posts): the PO set not_before
+            if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+                continue        # `depends_on`: a dependency is not done yet or its result is a stub
             if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
                 self.store.add_observation({
                     "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
@@ -563,11 +566,6 @@ class Cycle:
         if res.get("status") == "blocked":
             self.store.ask(from_="developer", to="po", question=str(res.get("question") or res.get("summary"))[:1200], task_id=t["id"])
             return True
-        ahead = gitops.commits_ahead(repo, self.p.repo_branch) or (1 if gitops.dirty(repo) else 0)
-        if ahead == 0:
-            self.store.transition(t["id"], "ready", "dispatcher", "developer reported done but committed nothing", force=True,
-                                  attempts=int(t.get("attempts") or 0) + 1, assignee_run=None)
-            return True
         if res.get("status") == "partial":
             if repeated_partial(t, res):
                 # the same partial twice in a row = the task is stuck, not progressing (release-radar T-0033 burned three cycles
@@ -577,6 +575,11 @@ class Cycle:
                                f"{_short_text(res.get('summary'), 300)} Re-scope it, split it, or close it.", task_id=t["id"], blocks=[t["id"]])
                 return True
             self.store.transition(t["id"], "in_progress", "dispatcher", "partial — continues next cycle", force=True, last_review=None)
+            return True
+        ahead = gitops.commits_ahead(repo, self.p.repo_branch) or (1 if gitops.dirty(repo) else 0)
+        if ahead == 0:
+            self.store.transition(t["id"], "ready", "dispatcher", "developer reported done but committed nothing", force=True,
+                                  attempts=int(t.get("attempts") or 0) + 1, assignee_run=None)
             return True
         if self.p.repo_mode == "pr":
             return self.release_as_pull_request(t, repo, res)
@@ -978,6 +981,20 @@ def is_stub_result(summary: str) -> bool:
     """A result that says nothing: shorter than MIN_RESULT_CHARS or a known 'duplicate / see previous' phrase."""
     low = " ".join(str(summary or "").lower().split())
     return len(low) < MIN_RESULT_CHARS or any(m in low for m in STUB_MARKERS)
+
+
+DEPENDENCY_DONE = ("accepted", "measured", "done")
+
+
+def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
+    """Ids from `depends_on` that are not finished (accepted/measured/done) with a non-stub last result; unknown ids count as unmet."""
+    out = []
+    for dep in t.get("depends_on") or []:
+        d = store.task(str(dep))
+        res = (d.get("results") or []) if d else []
+        if not d or d.get("state") not in DEPENDENCY_DONE or not res or is_stub_result(str(res[-1].get("summary") or "")):
+            out.append(str(dep))
+    return out
 
 
 def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
