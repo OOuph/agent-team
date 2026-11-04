@@ -33,7 +33,8 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 - Repo access (task flag `repo_only: true`, the deliverable is not served publicly): the dispatcher starts you in a
   read-only checkout of the merged commit (the prompt says so, with a "READ-ONLY CHECKOUT" section). Then, and only
   then, you may use `Read`, `Glob`, `Grep` and exactly these commands: `python3 -m unittest`,
-  `python3 -m unittest discover`, `python3 -m pytest -q`, `git log -1`; `team-fetch` stays for live-site criteria.
+  `python3 -m unittest -v`, `python3 -m unittest tests.<module>` (also with `-v`), `python3 -m unittest discover`,
+  `python3 -m unittest discover -s <dir>` (also `discover -v -s <dir>`; use it when plain `discover` finds 0 tests), `python3 -m pytest -q`, `git log -1`; `team-fetch` stays for live-site criteria.
   You cannot write to the checkout, run any other command, or reach the network except through `team-fetch`. A
   criterion about tests or code is judged from the checkout: tests pass → `pass`, tests fail → `fail` with the failing
   test name; do not write `not observable: repo-only` for what you could run. Without the READ-ONLY CHECKOUT section
