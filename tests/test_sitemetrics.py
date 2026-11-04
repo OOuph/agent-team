@@ -426,6 +426,8 @@ def test_not_a_person_signals(tmp_path):
     assert sm.classify(chrome, "20.40.1.1", "/") == ("unknown", "datacenter:azure")
     assert sm.classify(chrome, "51.146.252.73", "/")[0] == "human"                      # a /22 of a UK access network, not Azure
     assert sm.classify(chrome, "173.252.95.18", "/") == ("crawler", "meta")
+    assert sm.classify(chrome, "57.141.20.10", "/") == ("crawler", "meta")
+    assert sm.classify(chrome, "133.242.174.10", "/") == ("unknown", "datacenter:sakura")
     iphone13 = "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
     assert sm.classify(iphone13, "81.193.10.20", "/") == ("unknown", "stale-ua")
     assert sm.classify("Opera/9.80 (X11; Linux i686) Presto/2.12.388 Version/12.16", "81.193.10.20", "/") == ("unknown", "stale-ua")

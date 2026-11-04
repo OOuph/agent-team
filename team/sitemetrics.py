@@ -235,8 +235,11 @@ BUILTIN_NET_RANGES: tuple[tuple[str, str, str], ...] = (
     ("188.165.0.0/16", "cloud", "ovh"), ("192.99.0.0/16", "cloud", "ovh"), ("193.70.0.0/17", "cloud", "ovh"),
     ("198.27.64.0/18", "cloud", "ovh"), ("198.50.128.0/17", "cloud", "ovh"), ("213.32.0.0/17", "cloud", "ovh"),
     ("217.182.0.0/16", "cloud", "ovh"),
-    # Meta crawler networks (link previews)
-    ("31.13.24.0/21", "crawler", "meta"), ("66.220.144.0/20", "crawler", "meta"), ("69.63.176.0/20", "crawler", "meta"),
+    # smaller hosting networks seen with browser UAs on our sites (whois-checked 04.11)
+    ("133.242.0.0/16", "cloud", "sakura"), ("107.172.0.0/14", "cloud", "colocrossing"), ("192.3.0.0/16", "cloud", "colocrossing"),
+    ("23.94.0.0/15", "cloud", "colocrossing"), ("198.23.128.0/17", "cloud", "colocrossing"), ("109.233.108.0/22", "cloud", "pskz"),
+    # Meta crawler networks (link previews, meta-externalagent)
+    ("57.141.0.0/16", "crawler", "meta"), ("31.13.24.0/21", "crawler", "meta"), ("66.220.144.0/20", "crawler", "meta"), ("69.63.176.0/20", "crawler", "meta"),
     ("69.171.224.0/19", "crawler", "meta"), ("173.252.64.0/18", "crawler", "meta"),
 )
 # A browser UA this old is almost never a person in 2026 (bots keep stale strings): Chrome/Firefox major below the
