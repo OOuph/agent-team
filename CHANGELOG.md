@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-04
+
+- T-0025: the repeated-partial rule matches on overlapping friction kinds (any shared kind) and ignores `environment` when other kinds are present; before, a new `environment` kind made the sets differ and a third round ran (F-0085, F-0086, F-0088–F-0094).
+
 ## 2026-11-03
 
 - T-0024: a developer task whose partial result repeats the previous attempt's friction category (same set of `kind`s) is blocked at once with a PO question; no third hourly run (F-0085, F-0088, F-0091, F-0094).

@@ -338,6 +338,15 @@ def test_same_friction_kind_twice_blocks():
                               {"status": "partial", "summary": "b", "friction": [{"kind": "environment", "what": "z"}]})
 
 
+def test_repeated_partial_ignores_added_environment_kind():
+    from team import cycle as C
+    fr = lambda *ks: [{"kind": k, "what": f"w-{k}-{len(ks)}"} for k in ks]
+    t = {"results": [{"status": "partial", "summary": "a", "friction": fr("missing_data", "unclear_instruction")}]}
+    assert C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": fr("missing_data", "unclear_instruction", "environment")})
+    assert C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": fr("missing_data")})  # overlap is enough
+    assert not C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": fr("environment")})
+
+
 class PartialRunner(FakeRunner):
     """Developer commits something every run and returns partial with the same friction category but different wording."""
 

@@ -988,7 +988,10 @@ def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
     last = prev[-1]
     k_old = {str(f.get("kind")) for f in (last.get("friction") or []) if isinstance(f, dict) and f.get("kind")}
     k_new = {str(f.get("kind")) for f in (res.get("friction") or []) if isinstance(f, dict) and f.get("kind")}
-    if k_old and k_old == k_new:  # same friction category on two consecutive attempts (T-0024)
+    # a shared friction category on two consecutive attempts = stuck (T-0024); `environment` is ignored when other kinds are present,
+    # because it shows up incidentally between rounds (T-0025); if a side has only `environment`, it is compared as is
+    o, n = k_old - {"environment"} or k_old, k_new - {"environment"} or k_new
+    if o & n:
         return True
     same_summary = _short_text(last.get("summary"), 200) == _short_text(res.get("summary"), 200)
     f_old = sorted(str(f.get("what") or f)[:120] for f in (last.get("friction") or []))
