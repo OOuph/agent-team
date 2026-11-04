@@ -58,6 +58,7 @@ class RunResult:
     events: list[dict[str, Any]] = field(default_factory=list)
     transcript: str = ""
     duration_s: float = 0.0
+    limit_info: dict[str, Any] | None = None      # last rate_limit_info of the stream (plan window, credits)
 
 
 class Runner:
@@ -168,13 +169,15 @@ class Runner:
             except subprocess.TimeoutExpired:
                 proc.kill()
         dur = time.time() - t0
+        from .billing import limit_info as _limit_info
+        lim = _limit_info(events)
         raw = next((e for e in reversed(events) if e.get("type") == "result"), None)
         session_id = next((e.get("session_id") for e in events if e.get("session_id")), None)
         transcript = render_transcript(role, model, events, raw)
         if run_dir:
             (run_dir / "transcript.md").write_text(transcript, encoding="utf-8")
         if killed_reason:
-            return RunResult(False, None, None, None, 0, killed_reason, session_id=session_id, events=events, transcript=transcript, duration_s=dur)
+            return RunResult(False, None, None, None, 0, killed_reason, session_id=session_id, events=events, transcript=transcript, duration_s=dur, limit_info=lim)
         if raw is None:
             cli_error = proc.returncode != 0 and not events and dur < 15
             err = "".join(stderr_buf)[-500:]

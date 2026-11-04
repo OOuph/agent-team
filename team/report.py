@@ -405,15 +405,20 @@ def narrative(st: Settings, runner: Any, led: dict[str, Any], work_dir: Path, bo
     (work_dir / "prompt.md").write_text(prompt, encoding="utf-8")
     model = (st.claude.get("models") or {}).get("reporter")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
+    from . import billing
     for attempt in (1, 2):
+        if billing.paused(st):
+            log.warning("reporter skipped: %s", billing.paused(st))
+            return None
         run_id = f"report-{stamp}" + ("" if attempt == 1 else "-retry")
         rd = work_dir if attempt == 1 else work_dir / "retry"
         rd.mkdir(parents=True, exist_ok=True)
         rr = runner.run("reporter", prompt, schema("role-report"), max_usd=REPORT_RUN_CAP_USD, cwd=rd, model=str(model) if model else None,
                         allowed_tools=[], run_dir=rd, run_id=run_id, max_turns=REPORT_MAX_TURNS)
+        cost = rr.cost_usd if rr.cost_usd is not None else float(st.budget.get("unknown_cost_reserve_usd", 0.5))
         if book_store is not None:
-            cost = rr.cost_usd if rr.cost_usd is not None else float(st.budget.get("unknown_cost_reserve_usd", 0.5))
             book_store.book_spend(run_id, "reporter", cost, rr.cost_usd is not None)
+        billing.observe(st, rr.limit_info, run_id, notify=billing.owner_notify(), cost=cost)
         if not (rr.ok and rr.structured):
             log.warning("reporter run failed (attempt %d): %s", attempt, rr.error)
             problems = ["run failed"]
@@ -475,6 +480,8 @@ def run_report(st: Settings, products: list[Product], hours: float, *, runner: A
     (rdir / f"{stamp}.json").write_text(json.dumps(led, ensure_ascii=False, indent=1), encoding="utf-8")
     nar = narrative(st, runner, led, rdir / f"{stamp}-run", _book_store(products), style) if runner is not None else None
     text = narrative_text(nar, led) if nar else ("🗂 Ведомость ролей (модель недоступна, сухой вариант)\n\n" + md)
+    from . import billing
+    text += "\n\n💳 " + billing.status_line(st)                 # owner 04.11: plan, credits and the shared $100/day cap
     (rdir / f"{stamp}.md").write_text(text + "\n\n---\n\n" + md, encoding="utf-8")
     if out:
         out.write_text(text + "\n\n---\n\n" + md, encoding="utf-8")

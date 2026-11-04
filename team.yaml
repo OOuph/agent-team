@@ -25,6 +25,9 @@ claude:
     reporter: sonnet                # 12-hour role report to the owner (team report)
     deputy: opus                    # deputy owner: answers owner questions by DEPUTY.md while the owner is away
 
+billing:                           # owner 04.11: "лимит расхода 100 в день, общий на всех"
+  daily_cap_usd_all: 100.0         # all runs of the whole team per UTC day (products, framework, retro, reports); credits included
+
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
   max_usd_per_run: 3.0

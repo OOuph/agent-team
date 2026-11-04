@@ -87,8 +87,14 @@ class Cycle:
         if self.runner is None:
             log.error("no runner: %s skipped", label)
             return None
+        from . import billing
+        stop = billing.paused(self.st)                              # owner 04.11: shared $100/day cap, plan + credits state
+        if stop:
+            self.store.event("budget.stop", self.p.slug, "dispatcher", {"reason": stop, "label": label})
+            log.warning("%s: %s skipped: %s", self.p.slug, label, stop)
+            return None
         cap = float(cap or self.st.budget["max_usd_per_run"])
-        remaining = self.p.daily_cap - self.store.spent_today()
+        remaining = min(self.p.daily_cap - self.store.spent_today(), billing.remaining_today(self.st))
         cap = min(cap, remaining)                                   # a run may use what is left of the day
         if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap):
             if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
@@ -110,6 +116,8 @@ class Cycle:
                              allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns)
         cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
         self.store.book_spend(run_id, role, cost, rr.cost_usd is not None)
+        for kind in billing.observe(self.st, rr.limit_info, run_id, notify=billing.owner_notify(), cost=cost):
+            self.store.event(f"billing.{kind}", self.p.slug, "dispatcher", {"run": run_id, "line": billing.status_line(self.st)})
         rec = {"run_id": run_id, "role": role, "ok": rr.ok, "error": rr.error, "cost_usd": cost, "cost_reported": rr.cost_usd is not None,
                "num_turns": rr.num_turns, "duration_s": round(rr.duration_s, 1), "session_id": rr.session_id,
                "denials": rr.denials, "structured": rr.structured, "finished": utcnow()}

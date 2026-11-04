@@ -124,11 +124,17 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
         (rdir / "prompt-dry-run.md").write_text(prompt, encoding="utf-8")
         return None
     from .cycle import schema
+    from . import billing
+    if billing.paused(st):
+        log.warning("retro skipped: %s", billing.paused(st))
+        return None
     day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     rd = st.data_dir / "runs" / "_framework" / f"retro-{day}"
     rd.mkdir(parents=True, exist_ok=True)
     rr = runner.run("framework-retro", prompt, schema("retro-report"), max_usd=float(cfg.get("max_usd_per_run", 2.0)), cwd=st.root,
                     allowed_tools=["Read", "Glob", "Grep"], run_dir=rd, run_id=f"retro-{day}", max_turns=40)
+    billing.observe(st, rr.limit_info, f"retro-{day}", notify=billing.owner_notify(),
+                    cost=rr.cost_usd if rr.cost_usd is not None else float(st.budget.get("unknown_cost_reserve_usd", 0.5)))
     stamp.write_text(utcnow(), encoding="utf-8")
     if not (rr.ok and rr.structured):
         log.warning("retro: run failed: %s", rr.error)
