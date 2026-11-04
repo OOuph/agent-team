@@ -231,6 +231,10 @@ def denial_hint(denial: Any) -> str:
     inp = d.get("tool_input") or {}
     cmd = str(inp.get("command") or "") if isinstance(inp, dict) else ""
     if d.get("tool_name") == "Bash":
+        if cmd.lstrip().startswith("team-fetch") and re.search(r"<|>", cmd):
+            return ("A `<` or `>` inside a team-fetch argument looks like a shell redirect to the permission check, even in quotes. "
+                    "Grep for text without it (`--grep 'item' --around 1`, or `--grep 'class=\"item'`); `--around` takes N>=1 "
+                    "(`--around 0` itself works in team-fetch, but use 1). " + SHELL_RULE)
         if re.search(r"<<|>|\btee\b|\bcat\b", cmd):
             return "Use the Write tool to create files, not shell redirects or heredocs. " + SHELL_RULE
         return SHELL_RULE
