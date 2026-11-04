@@ -82,11 +82,19 @@ def start_task_branch(repo_dir: Path, task_id: str, base: str = "main") -> str:
                 git(repo_dir, "merge", "-q", "--no-edit", base_ref)
                 return br
             except GitError:
-                log.warning("task branch %s conflicts with %s; starting fresh", br, base)
+                log.warning("task branch %s conflicts with %s; keeping the earlier attempt's side", br, base)
                 git(repo_dir, "merge", "--abort", check=False)
                 git(repo_dir, "reset", "--hard", check=False)
-                git(repo_dir, "checkout", "-q", base)
-                break
+            try:
+                git(repo_dir, "merge", "-q", "--no-edit", "-X", "ours", base_ref)
+                return br
+            except GitError:
+                git(repo_dir, "merge", "--abort", check=False)
+                git(repo_dir, "reset", "--hard", check=False)
+            # last resort (e.g. modify/delete): base content, but the earlier commit stays in the history of the branch
+            git(repo_dir, "checkout", "-q", "-B", br, base_ref)
+            git(repo_dir, "merge", "-q", "--no-edit", "-s", "ours", cand)
+            return br
     git(repo_dir, "checkout", "-q", "-B", br)
     return br
 

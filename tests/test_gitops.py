@@ -33,16 +33,19 @@ def test_retry_keeps_earlier_commit_and_merges_base(tmp_path):
     assert "T-1 attempt" in log and "base moved" in log
 
 
-def test_retry_conflict_falls_back_to_fresh(tmp_path):
+def test_retry_conflict_keeps_earlier_commit(tmp_path):
     r = _repo(tmp_path)
     gitops.start_task_branch(r, "T-1")
     (r / "a.txt").write_text("mine\n")
     git(r, "commit", "-qam", "T-1 attempt")
+    attempt = git(r, "rev-parse", "HEAD")
     git(r, "checkout", "-q", "main")
     (r / "a.txt").write_text("theirs\n")
     git(r, "commit", "-qam", "base moved")
     gitops.start_task_branch(r, "T-1")
-    assert git(r, "rev-parse", "HEAD") == git(r, "rev-parse", "main")
+    assert git(r, "merge-base", "--is-ancestor", attempt, "HEAD", check=False) == ""
+    assert "T-1 attempt" in git(r, "log", "--format=%s")
+    assert git(r, "merge-base", "--is-ancestor", "main", "HEAD", check=False) == ""
     assert git(r, "status", "--porcelain") == ""
 
 
