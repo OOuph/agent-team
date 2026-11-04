@@ -254,6 +254,9 @@ ROTATING_OS_MIN = 3
 OS_FAMILIES: tuple[tuple[str, str], ...] = (("iphone", "ios"), ("ipad", "ios"), ("android", "android"), ("windows", "windows"),
                                            ("macintosh", "mac"), ("cros", "chromeos"), ("linux", "linux"))
 NET_RANGES_MAX_AGE_DAYS = 7
+# A proxy pool: the same exact browser UA from this many different addresses of one /16 on one day, none of which loaded
+# a single asset (CSS, image) — a fetch fleet, not visitors (04.11: 87.81/16 and 104.29/16 fetching only /day/<date>/).
+POOL_MIN_IPS = 5
 
 ASSET_EXTS: frozenset[str] = frozenset(
     {"css", "js", "mjs", "woff", "woff2", "ttf", "otf", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico"}
@@ -520,9 +523,18 @@ def _os_family(low_ua: str) -> str | None:
     return None
 
 
+def _net16(ip: str) -> str:
+    if ":" in ip:
+        return ":".join(ip.split(":")[:3])          # /48-ish for IPv6
+    return ".".join(ip.split(".")[:2])
+
+
 def find_rotating(records: Iterable["Record"]) -> set[tuple[str, str]]:
-    """(ip, day) pairs whose browser UAs span >= ROTATING_OS_MIN operating systems."""
+    """(ip, day) pairs that are tools, not people: browser UAs spanning >= ROTATING_OS_MIN operating systems from one
+    address, or a proxy pool (same UA from >= POOL_MIN_IPS addresses of one /16 that day, none of them loading an asset)."""
     seen: dict[tuple[str, str], set[str]] = {}
+    pool: dict[tuple[str, str, str], set[str]] = {}
+    with_assets: set[tuple[str, str]] = set()
     for r in records:
         low = (r.ua or "").lower()
         if not any(mk in low for mk in BROWSER_MARKERS):
@@ -530,7 +542,14 @@ def find_rotating(records: Iterable["Record"]) -> set[tuple[str, str]]:
         fam = _os_family(low)
         if fam:
             seen.setdefault((r.ip, r.day), set()).add(fam)
-    return {k for k, v in seen.items() if len(v) >= ROTATING_OS_MIN}
+        pool.setdefault((r.day, r.ua, _net16(r.ip)), set()).add(r.ip)
+        if is_asset(r.path):
+            with_assets.add((r.ip, r.day))
+    out = {k for k, v in seen.items() if len(v) >= ROTATING_OS_MIN}
+    for (day, _ua, _net), ips in pool.items():
+        if len(ips) >= POOL_MIN_IPS and not any((ip, day) in with_assets for ip in ips):
+            out.update((ip, day) for ip in ips)
+    return out
 
 
 def stale_browser(low_ua: str) -> bool:

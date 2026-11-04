@@ -484,3 +484,14 @@ def test_update_net_ranges_keeps_cache_on_failure(tmp_path):
     assert counts2["aws"] == 2                                   # kept from the previous file
     data = _json.loads(path.read_text())
     assert ["3.0.0.0/15", "cloud", "aws"] in data["ranges"]
+
+
+def test_proxy_pool_detected():
+    R = sm.Record
+    ua = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36"
+    pool = [R(f"87.81.{224 + i}.10", "2026-11-04", "GET", "/day/2026-11-03/", 200, "-", ua, "agentteam.formachines.ai") for i in range(6)]
+    # five people of one ISP with the same browser who also load CSS are not a pool
+    isp = [R(f"81.193.{i}.20", "2026-11-04", "GET", p, 200, "-", ua, "luz.bymachines.ai") for i in range(5) for p in ("/", "/style.css")]
+    rot = sm.find_rotating(pool + isp)
+    assert {("87.81.224.10", "2026-11-04"), ("87.81.229.10", "2026-11-04")} <= rot
+    assert not any(ip.startswith("81.193.") for ip, _ in rot)
