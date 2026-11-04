@@ -83,6 +83,8 @@ fetch:                            # what team-fetch may open, beyond the product
   extra_hosts_by_role:            # per role; the reviewer reads repo-only deliverables (code, tests, README) on GitHub
     reviewer: [github.com, raw.githubusercontent.com, api.github.com]
     support: [github.com, api.github.com]
+    marketer: [github.com, raw.githubusercontent.com]   # posts about the framework cite its public repo (04.11)
+    editor: [github.com, raw.githubusercontent.com]
 
 support:                          # answers to people within VISION (role support), see team/support.py
   enabled: true
