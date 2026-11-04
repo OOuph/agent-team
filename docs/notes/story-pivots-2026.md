@@ -85,22 +85,25 @@ every day and drives the work.
 - **Where it stands.** The live page says 26 verified corrections in 19 packages, updated 2026-11-03. Agent demand is
   not measured yet; the reading is 21.12.
 
-## 4. From running one product with agents to building a team (27.10 → 02.11)
+## 4. The framework grew out of Errata, step by step (27.10 → 02.11)
 
-- **What we thought.** Errata's daily work — pick a package, probe models, write an entry, review it, post about it —
-  was a cycle of roles. On 27.10 the owner proposed running it as a team: a product owner, personas of users as agents,
-  a marketer, executors, on a periodic cycle *(decision log)*. A one-product pilot on Errata was approved with a $2/day
-  budget.
-- **The same-day reversal (02.11).** Earlier that day, a review of "autonomous product factories" ended with: do not open
-  our own framework; until 21.12 AI does not publish to people. The same evening the owner wrote a spec for exactly
-  that — a framework, three new simple sites, seven days without a human — and confirmed the reversal: "everything as
-  automatic as possible". The contradiction was named in the spec, not hidden.
+- **Step 1 — Errata was already a cycle of roles.** Errata's daily work (pick a package, probe models, write an entry,
+  review it, post about it) ran as a script that called one role after another. On 27.10 the owner proposed running it
+  as a team: a product owner, personas of users as agents, a marketer, executors, on a periodic cycle *(decision log)*.
+  A one-product pilot on Errata was approved with a $2/day budget.
+- **Step 2 — from one product to a framework (02.11).** The natural next question was whether the same loop could run
+  more than one product without a human. That morning an AI review of "autonomous product factories" advised against
+  it: don't open our own framework, and until 21.12 AI does not publish to people. The owner overruled it the same
+  evening with a spec for exactly that — a framework, three new simple sites, seven days without a human — and confirmed
+  "everything as automatic as possible". This was not a reversal of a long-held plan: it was one cautious recommendation,
+  overruled within hours, on an idea that had been growing for a week. The spec named the disagreement instead of
+  hiding it.
 - **Why our own dispatcher and not Paperclip.** An outside research note recommended Paperclip (https://docs.paperclip.ing/).
   We read its releases, docs and open issues on 02.11. It is alive and has patterns we copied (the executor is never the
   reviewer, atomic task claims with a lease, a budget per agent with warn and hard stop, a watchdog on a silent run).
   But with 1.5 days to build and 7 days unattended, the open issues sat exactly where we could not afford them on that
   date: signing in with a subscription on a headless server, budgets that read zero on a subscription, runs not resumed
-  after a server restart. So: a small Python dispatcher grown from the Errata pilot script.
+  after a server restart. So: a small Python dispatcher grown from the Errata pilot script — the same loop, generalised to several products.
 - **What was built on 02.11.** Three new sites readable by people (so marketing could be tested at all):
   https://releases.formachines.ai/ · https://agentsmd.formachines.ai/ · https://luz.bymachines.ai/ — and, the same night,
   a fourth: this diary, https://agentteam.formachines.ai/, because the owner decided the main product is the framework

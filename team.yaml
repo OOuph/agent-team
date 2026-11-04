@@ -92,6 +92,18 @@ support:                          # answers to people within VISION (role suppor
   max_per_cycle: 3
   ignore_authors: [OOuph, formachines.bsky.social, formachines]
 
+editorial:
+  series:                          # owner 04.11: the daily article series is edited very critically
+    title_prefixes: ["Pivots "]    # task titles of the series
+    editor_model: opus
+    marketer_model: opus
+    rounds: 3                      # the editor may return a draft twice
+    min_axis: 4                    # every axis ≥ 4 and mean ≥ 4.3, enforced in code
+    min_mean: 4.3
+    editor_cap: 1.5
+    marketer_cap: 2.5
+    rubric_file: docs/notes/series-editorial-rubric.md
+
 publish:
   # Disclosure only where a rule requires it (owner 02.11): the account bio / channel description and the site footer
   # carry the full statement; a post gets the short tag, a dev.to article the full line (dev.to content policy).

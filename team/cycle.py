@@ -83,7 +83,7 @@ class Cycle:
 
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
-                 max_turns: int | None = None) -> RunResult | None:
+                 max_turns: int | None = None, model: str | None = None) -> RunResult | None:
         if self.runner is None:
             log.error("no runner: %s skipped", label)
             return None
@@ -105,7 +105,7 @@ class Cycle:
         env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(role),
                "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
                "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
-        model = (self.p.raw.get("models") or {}).get(role)      # product.yaml may pick a cheaper model per role
+        model = model or (self.p.raw.get("models") or {}).get(role)   # explicit override (series editing), else product.yaml per role
         rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
                              allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns)
         cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
@@ -751,6 +751,9 @@ class Cycle:
         memory = prompts.marketing_memory(self.p, self.store)      # posts of the week, visits by channel, feedback, the plan
         if is_plan_task(t):
             return self.exec_marketing_plan(t, run_id, work, channels, lessons, memory)
+        series = editorial.series_mode(self.st, t)                 # owner 04.11: the daily series is edited very critically
+        if series:
+            lessons = [f"SERIES RUBRIC (binding, the editor rejects any draft that breaks it):\n{series['rubric']}"] + lessons
         prompt = prompts.marketer_prompt(self.p, t, channels, t.get("results") or [], lessons=lessons, memory=memory)
         disc = self.st.publish.get("disclosure", "")
         disc_map = disc if isinstance(disc, dict) else {"default": str(disc)}
@@ -761,7 +764,8 @@ class Cycle:
                "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
         mkt_tools = ["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]
-        rr = self.role_run("marketer", prompt, "task-result", cwd=work, label=f"mkt-{t['id']}", cap=1.0, env_extra=env, allowed_tools=mkt_tools)
+        rr = self.role_run("marketer", prompt, "task-result", cwd=work, label=f"mkt-{t['id']}", cap=float(series["marketer_cap"]) if series else 1.0,
+                           env_extra=env, allowed_tools=mkt_tools, model=series["marketer_model"] if series else None)
         posted, editor_summary = 0, ""
         if rr is not None and rr.ok and rr.structured and self.runner is not None:
             posted, editor_summary = self.editorial_loop(t, work, drafts_dir, channels, env, mkt_tools, lessons)
@@ -826,22 +830,28 @@ class Cycle:
         verdicts: dict[str, dict[str, Any]] = {}
         summary = ""
         prev_issues: list[str] = []
-        for round_no in (1, 2):
-            prompt = editorial.editor_prompt(self.p, t, drafts, lessons, recent_issues, round_no, prev_issues or None)
+        series = editorial.series_mode(self.st, t)
+        max_rounds = int(series["rounds"]) if series else 2
+        for round_no in range(1, max_rounds + 1):
+            prompt = editorial.editor_prompt(self.p, t, drafts, lessons, recent_issues, round_no, prev_issues or None, series=series)
             ework = work / f"editor-{round_no}"
             ework.mkdir(parents=True, exist_ok=True)
-            rr = self.role_run("editor", prompt, "editor-review", cwd=ework, label=f"editor-{t['id']}-{round_no}", cap=0.5, max_turns=16)
+            rr = self.role_run("editor", prompt, "editor-review", cwd=ework, label=f"editor-{t['id']}-{round_no}",
+                               cap=float(series["editor_cap"]) if series else 0.5, max_turns=30 if series else 16,
+                               model=series["editor_model"] if series else None)
             if rr is None or not (rr.ok and rr.structured):
                 log.warning("%s: editor run failed in round %d; drafts not published", self.p.slug, round_no)
                 return 0, f"editor run failed in round {round_no}"
             rev = rr.structured
             summary = str(rev.get("summary") or "")
             verdicts = {str(r.get("draft")): r for r in rev.get("reviews") or []}
+            if series:                                            # the bar is enforced in code, not only asked for
+                verdicts = {n: editorial.enforce_series_bar(r, series, last_round=round_no == max_rounds) for n, r in verdicts.items()}
             new_lessons = [ls for r in verdicts.values() for ls in (r.get("lessons") or [])][: editorial.MAX_LESSONS_PER_REVIEW]
             if new_lessons:
                 editorial.add_lessons(self.p, new_lessons, "editor")
             revise = [(n, r) for n, r in verdicts.items() if r.get("verdict") == "revise"]
-            final = round_no == 2 or not revise
+            final = round_no == max_rounds or not revise
             for name, d in drafts:
                 r = verdicts.get(name) or {"verdict": "reject", "scores": {}, "issues": ["no verdict from the editor"]}
                 editorial.record_score(self.st, {"product": self.p.slug, "task": t["id"], "channel": d.get("channel"), "round": round_no,
@@ -852,11 +862,13 @@ class Cycle:
                 break
             prev_issues = [i for _, r in revise for i in (r.get("issues") or [])]
             notes = [{"draft": n, "issues": r.get("issues"), "scores": r.get("scores")} for n, r in revise]
-            drafts_dir2 = work / "drafts-2"
-            prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=editorial.read_lessons(self.p), editor_notes=notes,
-                                              memory=prompts.marketing_memory(self.p, self.store))
-            rr2 = self.role_run("marketer", prompt2, "task-result", cwd=work, label=f"mkt-{t['id']}-rev", cap=1.0,
-                                env_extra={**env, "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir2)}, allowed_tools=mkt_tools)
+            drafts_dir2 = work / f"drafts-{round_no + 1}"
+            prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=lessons if series else editorial.read_lessons(self.p),
+                                              editor_notes=notes, memory=prompts.marketing_memory(self.p, self.store))
+            rr2 = self.role_run("marketer", prompt2, "task-result", cwd=work, label=f"mkt-{t['id']}-rev{round_no}",
+                                cap=float(series["marketer_cap"]) if series else 1.0,
+                                env_extra={**env, "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir2)}, allowed_tools=mkt_tools,
+                                model=series["marketer_model"] if series else None)
             drafts2 = self._load_drafts(drafts_dir2) if rr2 is not None else []
             if not drafts2:
                 return 0, summary or "marketer produced no revised drafts"

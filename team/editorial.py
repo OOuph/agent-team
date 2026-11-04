@@ -108,8 +108,50 @@ def degrading(st: Settings, product: str) -> bool:
     return m is not None and n >= 5 and m < DEGRADE_BELOW
 
 
+SERIES_DEFAULTS: dict[str, Any] = {"title_prefixes": ["Pivots "], "editor_model": "opus", "marketer_model": "opus", "rounds": 3,
+                                   "min_axis": 4, "min_mean": 4.3, "editor_cap": 1.5, "marketer_cap": 2.5,
+                                   "rubric_file": "docs/notes/series-editorial-rubric.md"}
+
+
+def series_mode(st: Settings, task: dict[str, Any]) -> dict[str, Any] | None:
+    """Owner 04.11: the daily article series is edited very critically (Opus editor, written rubric, up to two returns,
+    a numeric bar enforced in code). A task belongs to a series when its title starts with a configured prefix."""
+    cfg = {**SERIES_DEFAULTS, **((st.raw.get("editorial") or {}).get("series") or {})}
+    if cfg.get("enabled") is False:
+        return None
+    title = str(task.get("title") or "")
+    if not any(title.startswith(str(px)) for px in cfg.get("title_prefixes") or []):
+        return None
+    rf = Path(str(cfg["rubric_file"]))
+    rf = rf if rf.is_absolute() else st.root / rf
+    cfg["rubric"] = rf.read_text(encoding="utf-8").strip() if rf.exists() else "(rubric file missing: apply the RULES below strictly)"
+    return cfg
+
+
+def enforce_series_bar(review: dict[str, Any], series: dict[str, Any], last_round: bool) -> dict[str, Any]:
+    """An approve under the series bar (any axis < min_axis or mean < min_mean) is not an approve: it goes back while
+    rounds remain, and is rejected in the last round. Nothing below the bar is published."""
+    r = dict(review)
+    if r.get("verdict") != "approve":
+        if last_round and r.get("verdict") == "revise":
+            r["verdict"] = "reject"
+        return r
+    sc = r.get("scores") or {}
+    vals = [float(sc[a]) for a in AXES if isinstance(sc.get(a), (int, float))]
+    low = [a for a in AXES if isinstance(sc.get(a), (int, float)) and float(sc[a]) < float(series["min_axis"])]
+    if len(vals) == len(AXES) and not low and sum(vals) / len(vals) >= float(series["min_mean"]):
+        return r
+    why = f"series bar not met (every axis ≥ {series['min_axis']}, mean ≥ {series['min_mean']}): " + (
+        f"low {', '.join(low)}" if low else f"mean {round(sum(vals) / len(vals), 2) if vals else 'n/a'}")
+    r["verdict"] = "reject" if last_round else "revise"
+    r["issues"] = list(r.get("issues") or []) + [why]
+    r["final_text"] = None
+    return r
+
+
 def editor_prompt(product: Product, task: dict[str, Any], drafts: list[tuple[str, dict[str, Any]]], lessons: list[str],
-                  recent_issues: list[str], round_no: int, previous_issues: list[str] | None = None) -> str:
+                  recent_issues: list[str], round_no: int, previous_issues: list[str] | None = None,
+                  series: dict[str, Any] | None = None) -> str:
     parts = [f"# EDITOR — product `{product.slug}` ({product.site_base}) — task {task.get('id')} — review round {round_no}",
              "You review the marketer's drafts BEFORE they are published. Score each on five axes 1–5 (hook, clarity, specificity, "
              "tone, honesty), then approve (optionally with a light final_text of your own), send back once with concrete issues "
@@ -118,10 +160,27 @@ def editor_prompt(product: Product, task: dict[str, Any], drafts: list[tuple[str
              "## VISION (tone section is binding)\n" + product.vision()[:9000],
              "## LESSONS (every draft must respect these)\n" + ("\n".join(f"- {x}" for x in lessons) if lessons else "(none yet)"),
              "## MOST FREQUENT ISSUES OF THE LAST REVIEWS\n" + ("\n".join(f"- {x}" for x in recent_issues) if recent_issues else "(none)")]
+    if series:
+        parts.append("## SERIES RUBRIC — this task is an article of the daily series; read every draft against it line by line\n"
+                     + series["rubric"])
     if previous_issues:
-        parts.append("## ISSUES YOU RAISED IN ROUND 1 (check they are fixed)\n" + "\n".join(f"- {x}" for x in previous_issues))
+        parts.append(f"## ISSUES YOU RAISED IN ROUND {round_no - 1} (check they are fixed)\n" + "\n".join(f"- {x}" for x in previous_issues))
     for name, d in drafts:
         parts.append(f"## DRAFT `{name}` — channel {d.get('channel')} → {d.get('target') or ''}\nurl: {d.get('url') or ''}\ntitle: {d.get('title') or ''}\n\n```\n{d.get('text', '')}\n```")
+    if series:
+        parts.append(f"## RULES (series mode)\n- You may send back (revise) in rounds 1–{int(series['rounds']) - 1}; in round {series['rounds']} approve "
+                     "or reject — never revise.\n"
+                     f"- Approve only if EVERY axis is ≥ {series['min_axis']} and the mean ≥ {series['min_mean']}; the dispatcher turns "
+                     "anything lower into revise/reject anyway. A 5 is rare and means you would sign it yourself.\n"
+                     "- Before scoring, re-fetch the source file(s) named in the task and check every number, date and quote against "
+                     "them; one untraceable number is honesty ≤ 2.\n"
+                     "- Read as a stranger who never heard of this team: name every place a word, abbreviation or reference "
+                     "assumes inside knowledge.\n"
+                     "- Channel formats are the ones in the task scope (Telegram up to 4000, Threads 500 per post, X 280 per post, "
+                     "Bluesky 300 with the link, dev.to 900–1500 words), not the short-post limits.\n"
+                     "- Issues must be concrete edits (quote the sentence, say what replaces it). final_text only for a light edit.\n"
+                     "- lessons: at most 2 per review, phrased as a rule for the next article.")
+        return "\n\n".join(parts)
     parts.append("## RULES\n- Round 1 may send back (revise) at most once; in round 2 approve with a final_text or reject — never revise again.\n"
                  "- approve only when the first sentence is a concrete event or fact, every number is traceable to the site, the tone "
                  "section of VISION is met, the channel length holds (Bluesky ≤ 250 chars before the tag, Telegram ≤ 600), and there is a hook.\n"
