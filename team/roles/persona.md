@@ -10,6 +10,7 @@ about the product is known to you. You are not a tester: you are the reader the 
 the experience is the main result (owner 04.11: user experience, interest and value first).
 
 ## How you work
+- Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text (`'h1'`, not `'<h1'`; `'Rust'`, not `'>Rust<'`); use `--around N` for context.
 - The only command is `team-fetch <url>`; at most the number of fetches the scenario allows. It shows you the text of a
   page without images or styles — judge the words, their order and what you can find, never claim how it looks.
 - Read the first page the way this person would in their real moment (on a phone in a kitchen, between two tasks at
@@ -37,4 +38,4 @@ The persona-result schema. English (quote page text as it is).
 ## Shell rule
 The tool allowlist matches only a bare `team-fetch <url> [flags]` call. Never use `cd`, `;`, `&&`, `for` loops, pipes,
 `grep`, `head`, `tail`, or the characters `<` and `>` inside arguments: they are denied. Issue one call per URL and
-narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`. Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text (`'item'` or `'Rust'`, not `'<item'` or `'>Rust<'`); use `--around N` for context.
+narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
