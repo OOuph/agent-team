@@ -292,10 +292,21 @@ class Cycle:
         return out
 
     def run_personas(self) -> None:
+        """Personas judge the reader's experience (owner 04.11). A run takes `persona_scenarios_per_run` scenarios in
+        rotation (not all of them every time), records the experience scores (team/ux.py) and files only what should
+        change: successes live in the scores, not in the PO's triage."""
+        from . import ux
         sdir, pdir = self.p.dir / "scenarios", self.p.dir / "personas"
         if not sdir.exists():
             return
-        for sp in sorted(sdir.glob("*.md"))[:6]:
+        all_sc = sorted(sdir.glob("*.md"))
+        if not all_sc:
+            return
+        per_run = max(1, int(self.st.cycle.get("persona_scenarios_per_run", 2)))
+        now = _now()
+        start = ((now.timetuple().tm_yday * 24 + now.hour) // max(1, int(self.st.cycle.get("persona_every_n_cycles", 12)))) * per_run
+        picked = [all_sc[(start + i) % len(all_sc)] for i in range(min(per_run, len(all_sc)))]
+        for sp in picked:
             smeta, sbody = front_matter(sp.read_text(encoding="utf-8"))
             pp = pdir / f"{smeta.get('persona', '')}.md"
             if not smeta.get("id") or not pp.exists():
@@ -304,13 +315,32 @@ class Cycle:
             shown = {k: v for k, v in smeta.items() if k not in ("success", "expected_gaps", "title")}
             prompt = prompts.persona_prompt(pmeta, pbody.strip(), shown, sbody.strip())
             work = self.p.work_dir / self.cycle_id / f"persona-{smeta['id']}"
-            rr = self.role_run("persona", prompt, "persona-result", cwd=work, label=f"persona-{smeta['id']}", cap=0.6, max_turns=25)
-            if rr and rr.ok and rr.structured:
-                for o in rr.structured.get("observations") or []:
-                    self.store.add_observation({**o, "source": f"persona:{smeta.get('persona')}", "scenario": smeta["id"],
-                                                "run_id": f"{self.cycle_id}-persona-{smeta['id']}",
-                                                "fingerprint": fingerprint(smeta["id"], o.get("classification", ""), o.get("url", ""), o.get("title", "")),
-                                                "scenario_success": str(smeta.get("success", ""))[:400]})
+            run_id = f"{self.cycle_id}-persona-{smeta['id']}"
+            rr = self.role_run("persona", prompt, "persona-result", cwd=work, label=f"persona-{smeta['id']}",
+                               cap=float(self.st.cycle.get("persona_cap_usd", 1.0)), max_turns=25)
+            if not (rr and rr.ok and rr.structured):
+                continue
+            res = rr.structured
+            persona = str(smeta.get("persona"))
+            exp = res.get("experience") or {}
+            if exp:
+                ux.record(self.p, persona, smeta["id"], run_id, exp, str(res.get("outcome", "")))
+            filed = False
+            for o in res.get("observations") or []:
+                if o.get("classification") == "success":
+                    continue
+                filed = filed or o.get("classification") in ("value_gap", "ux_friction")
+                self.store.add_observation({**o, "source": f"persona:{persona}", "scenario": smeta["id"], "run_id": run_id,
+                                            "fingerprint": fingerprint(smeta["id"], o.get("classification", ""), o.get("url", ""), o.get("title", "")),
+                                            "scenario_success": str(smeta.get("success", ""))[:400],
+                                            "experience": {k: exp.get(k) for k in ("interest", "usefulness", "would_return")}})
+            low = (exp.get("interest") or 5) <= ux.LOW_SCORE or (exp.get("usefulness") or 5) <= ux.LOW_SCORE
+            if low and not filed:
+                self.store.add_observation({
+                    "title": f"{persona}: interest {exp.get('interest')}/5, usefulness {exp.get('usefulness')}/5 — {exp.get('why', '')}"[:140],
+                    "classification": "value_gap", "source": f"persona:{persona}", "scenario": smeta["id"], "run_id": run_id,
+                    "url": self.p.site_base, "expected": str(exp.get("wish") or "")[:300], "actual": str(exp.get("first_impression") or "")[:300],
+                    "fingerprint": fingerprint(smeta["id"], "value_gap", "", persona)})
 
     # review: released tasks → reviewer --------------------------------------------------------------
 
@@ -1130,8 +1160,10 @@ def daily_digest(p: Product, store: Store, day: str) -> str:
     owner_q = [q for q in qs if q.get("to") == "owner"]
     from . import editorial
     em, en, _ = editorial.rolling(p.st, p.slug)
+    from . import ux
+    ux_line = ux.digest_line(p)
     ed_line = f"Тексты: средний балл редактора {em}/5 за последние {en} постов" + (" ⚠ ниже планки" if em is not None and en >= 5 and em < editorial.DEGRADE_BELOW else "") if em is not None else "Тексты: редактор ещё не оценивал"
-    lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "", ed_line,
+    lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "", ux_line, ed_line,
              f"Задачи: {s['tasks']} всего · " + ", ".join(f"{k} {v}" for k, v in sorted(s["by_state"].items())),
              f"Расход сегодня: ${s['spent_today']:.2f} (кап ${p.daily_cap:.0f}) · открытых вопросов: {len(qs)}, владельцу: {len(owner_q)}", "",
              "PO: " + po_txt[:1200], "", "Аналитик: " + an_txt[:1200]]

@@ -57,6 +57,7 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Budget: today's spend and the daily cap are given; when spend is above 80 % of the cap, create no new task that costs
   a model run except P0/P1.
 - Count the team's own traffic, persona successes and synthetic complaints as nothing when it comes to real demand.
+- **Reader experience is a goal, not a side check** (owner 04.11). Personas (Opus) now judge interest and usefulness as the reader; their `ux_friction` and `value_gap` observations weigh like the external critic's findings — each gets a task or a reasoned reject. The READER EXPERIENCE block shows the rolling scores and wishes: when interest or usefulness stays ≤ 3 or `would_return` is mostly no, put at least one task per cycle on making the product more interesting or more useful for that persona (content, first screen, the answer to their real question) before polishing internals. Neither the critic nor the personas are real demand; the people counter and words of real people stay first.
 - Explain each decision through the user outcome and VISION: "chosen X over Y because …; expected result …; we will
   check …".
 

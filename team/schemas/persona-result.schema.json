@@ -6,6 +6,7 @@
   "outcome",
   "steps",
   "summary",
+  "experience",
   "observations"
  ],
  "properties": {
@@ -48,7 +49,7 @@
   },
   "observations": {
    "type": "array",
-   "maxItems": 6,
+   "maxItems": 5,
    "items": {
     "type": "object",
     "additionalProperties": false,
@@ -67,10 +68,10 @@
      "classification": {
       "type": "string",
       "enum": [
+       "ux_friction",
+       "value_gap",
        "reproducible_defect",
-       "synthetic_difficulty",
        "need_hypothesis",
-       "success",
        "environment_error"
       ]
      },
@@ -93,6 +94,67 @@
        "high"
       ]
      }
+    }
+   }
+  },
+  "experience": {
+   "type": "object",
+   "additionalProperties": false,
+   "required": [
+    "first_impression",
+    "steps_to_understand",
+    "interest",
+    "usefulness",
+    "would_return",
+    "would_share",
+    "why",
+    "wish"
+   ],
+   "properties": {
+    "first_impression": {
+     "type": "string",
+     "maxLength": 300
+    },
+    "steps_to_understand": {
+     "type": "integer",
+     "minimum": 0,
+     "maximum": 30,
+     "description": "fetches until the persona understood what the page gives them; 0 = never"
+    },
+    "interest": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 5
+    },
+    "usefulness": {
+     "type": "integer",
+     "minimum": 1,
+     "maximum": 5
+    },
+    "would_return": {
+     "type": "string",
+     "enum": [
+      "yes",
+      "maybe",
+      "no"
+     ]
+    },
+    "would_share": {
+     "type": "string",
+     "enum": [
+      "yes",
+      "maybe",
+      "no"
+     ]
+    },
+    "why": {
+     "type": "string",
+     "maxLength": 400
+    },
+    "wish": {
+     "type": "string",
+     "maxLength": 300,
+     "description": "the single change that would make this persona come back"
     }
    }
   }

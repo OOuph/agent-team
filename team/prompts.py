@@ -51,8 +51,17 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
             + (("\n\n# FRAMEWORK CONTEXT (this product is the framework itself)\n" + fw_txt) if fw_txt else "")
             + (("\n\n" + mkt_txt) if mkt_txt else "")
+            + "\n\n# READER EXPERIENCE (personas, scores 1–5)\n" + _ux_block(product)
             + "\n\n# NEW OBSERVATIONS\n" + obs_txt
             + "\n\n# LATEST METRICS\n" + (_tail(metrics_md, 6000) or "(no metrics yet)") + "\n")
+
+
+def _ux_block(product: Product) -> str:
+    from . import ux
+    try:
+        return ux.prompt_block(product)
+    except Exception:  # noqa: BLE001
+        return "(unavailable)"
 
 
 def _hours_ago(h: int) -> str:
@@ -317,4 +326,8 @@ def po_marketing_block(product: Product, store: Store) -> str:
 
 def persona_prompt(persona: dict[str, Any], body: str, scenario: dict[str, Any], sbody: str) -> str:
     return ("# PERSONA\n" + _y(persona) + "\n" + body + "\n\n# SCENARIO\n" + _y(scenario) + "\n## Task\n" + sbody
-            + f"\n\nRules: only `team-fetch <url>`; at most {scenario.get('max_steps', 10)} fetches; start at {scenario.get('entry')}.\n")
+            + f"\n\nRules: only `team-fetch <url>`; at most {scenario.get('max_steps', 10)} fetches; start at {scenario.get('entry')}.\n"
+            "\n# JUDGE AS THIS PERSON\nYou are this reader in their real moment, not a tester. After your steps, fill `experience`: "
+            "first impression, steps until you understood what the page gives you, interest 1–5, usefulness 1–5, would you come back, "
+            "would you share, why in your own words, and one wish. File observations only for what should change "
+            "(ux_friction, value_gap, reproducible_defect, need_hypothesis); successes go into `experience`, not observations.\n")

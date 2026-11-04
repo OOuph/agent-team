@@ -18,7 +18,7 @@ claude:
     reviewer: sonnet
     analyst: sonnet
     marketer: sonnet
-    persona: sonnet
+    persona: opus                   # owner 04.11: personas judge user experience, interest and value
     framework-retro: sonnet
     support: sonnet
     editor: sonnet
@@ -36,7 +36,9 @@ cycle:
   review_after_min: 6             # a released task is reviewed once the droplet has had time to pull (timer every 5 min)
   measure_after_h: 24             # an accepted task is measured a day later
   max_review_fails: 2             # then the task is blocked and the owner hears about it
-  persona_every_n_cycles: 6
+  persona_every_n_cycles: 12       # twice a day on Opus (was 6 on Sonnet)
+  persona_scenarios_per_run: 2     # scenarios rotate run to run
+  persona_cap_usd: 1.0
   digest_hours_utc: [7, 19]        # digests to the owner's ops channel (UTC)
   measure_every_h: 6              # analyst reads metrics this often (daily = 24); the supervised day 03.11 runs it 4x
   seo_every_h: 12                 # programmatic SEO/GEO page checks
