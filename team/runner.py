@@ -183,7 +183,7 @@ class Runner:
             err = "".join(stderr_buf)[-500:]
             return RunResult(False, None, None, 0.0 if cli_error else None, 0,
                              f"{'cli error' if cli_error else 'no result event'} (exit {proc.returncode}): {err}",
-                             session_id=session_id, events=events, transcript=transcript, duration_s=dur)
+                             session_id=session_id, events=events, transcript=transcript, duration_s=dur, limit_info=lim)
         cost = raw.get("total_cost_usd")
         cost = float(cost) if isinstance(cost, (int, float)) and cost > 0 else None
         structured = raw.get("structured_output") if isinstance(raw.get("structured_output"), dict) else None
@@ -195,7 +195,7 @@ class Runner:
         log.info("run %s done: %.0fs turns=%s cost=%s session=%s error=%s", run_id, dur, raw.get("num_turns"),
                  f"${cost:.3f}" if cost is not None else "unknown", session_id, err)
         return RunResult(err is None, structured, raw, cost, int(raw.get("num_turns") or 0), err,
-                         list(raw.get("permission_denials") or []), session_id, events, transcript, dur)
+                         list(raw.get("permission_denials") or []), session_id, events, transcript, dur, limit_info=lim)
 
 
 def _readable(stream: Any) -> bool:

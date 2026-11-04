@@ -58,3 +58,11 @@ def test_exhausted_pauses_until_reset_and_credits_warning(tmp_path: Path) -> Non
     out = billing.observe(st, _info(1.0, ovs="rejected", status="rejected"), "b", sent.append, now=DAY + 5)
     assert out == ["exhausted"] and "exhausted" in (billing.paused(st, now=DAY + 10) or "")
     assert billing.paused(st, now=1796083200 + 1) is None
+
+
+def test_runner_passes_limit_info_on_success(tmp_path: Path) -> None:
+    """Regression 04.11: the success path of Runner.run dropped limit_info, so the plan and credit state was never recorded."""
+    import inspect
+    from team import runner
+    src = inspect.getsource(runner.Runner.run)
+    assert src.count("limit_info=lim") >= 3
