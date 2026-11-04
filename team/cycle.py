@@ -680,6 +680,12 @@ class Cycle:
                     "\n\n_Opened by the agent-team dispatcher for task " + t["id"] + "; tests passed on the branch. A human merges._")
             url = gitops.open_pull_request(self.p.repo_url, t["id"], self.p.repo_branch, f"{t['id']}: {t.get('title', '')}", body)
         except gitops.GitError as exc:
+            if gitops.is_transient(exc):
+                # GitHub 5xx after the retries (F-0100): the commit is intact, so the task goes back to ready, not blocked
+                self.store.event("pr.transient_failure", t["id"], "dispatcher", {"error": gitops.redact(str(exc))[:300]})
+                self.store.transition(t["id"], "ready", "dispatcher", f"push/PR failed on GitHub 5xx after {gitops.RETRIES} tries, will retry: {gitops.redact(str(exc))[:200]}",
+                                      force=True, assignee_run=None)
+                return True
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
         if not fw.get("auto_merge") or protected:
