@@ -37,6 +37,7 @@ CRON_REQUIRED = {
     "agentsmd build": "build-site.sh agentsmd-tracker",
     "release-radar build": "build-site.sh release-radar",
     "luz build": "build-site.sh luz-amanha",
+    "autonomy check": "autonomy-check.sh",
 }
 BUILD_SITES = ("agentsmd-tracker", "release-radar", "luz-amanha")
 MAX_AGE_H = {"cycle_warn": 1.25, "cycle_fail": 2.5, "backup": 26, "build": 26, "diary": 26, "report": 13, "posts": 26,
@@ -142,7 +143,7 @@ def check_code(st: Settings, now: datetime) -> Check:
 def check_tests(st: Settings) -> Check:
     py = st.root / ".venv" / "bin" / "python"
     try:
-        r = subprocess.run([str(py if py.exists() else "python3"), "-m", "pytest", "-q", "-x"], cwd=st.root, capture_output=True,
+        r = subprocess.run([str(py if py.exists() else "python3"), "-m", "pytest", "-q", "-x", "tests"], cwd=st.root, capture_output=True,
                            text=True, timeout=600)
     except (OSError, subprocess.SubprocessError) as exc:
         return Check("C6", "tests on HEAD", FAIL, f"could not run: {exc}")

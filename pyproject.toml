@@ -20,5 +20,8 @@ build-backend = "setuptools.build_meta"
 [tool.setuptools.packages.find]
 include = ["team*"]
 
+[tool.pytest.ini_options]
+testpaths = ["tests"]          # never collect the product repos cloned under data/ and builds/ on the server
+
 [tool.setuptools.package-data]
 team = ["roles/*.md", "schemas/*.json", "templates/*"]
