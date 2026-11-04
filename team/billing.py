@@ -53,7 +53,7 @@ def _save(st: Settings, state: dict[str, Any]) -> None:
     tmp.replace(p)
 
 
-DEFAULT_DAILY_CAP_USD = 100.0      # owner 04.11: "лимит расхода 100 в день, общий на всех"
+DEFAULT_DAILY_CAP_USD = 100.0      # owner 04.11: "лимит расхода 100 в день, общий на всех; подписку не учитывай" — credits only
 
 
 def daily_cap(st: Settings) -> float:
@@ -77,12 +77,16 @@ def _day(now: float) -> str:
 
 
 def spent_today(st: Settings, now: float | None = None) -> float:
-    """All runs of the whole team today (UTC): products, framework, retro, reports — one shared ledger."""
+    """Credits (real money) spent today (UTC) by the whole team: products, framework, retro, reports. Runs covered by
+    the subscription are not counted (owner 04.11)."""
     now = now if now is not None else _now()
-    return float((load(st).get("spend") or {}).get(_day(now), 0.0))
+    return float((load(st).get("credit_spend") or {}).get(_day(now), 0.0))
 
 
-def remaining_today(st: Settings, now: float | None = None) -> float:
+def remaining_today(st: Settings, now: float | None = None) -> float | None:
+    """What a run may still spend today; None while the team runs inside the subscription (no money cap applies)."""
+    if not load(st).get("using_credits"):
+        return None
     return max(0.0, daily_cap(st) - spent_today(st, now))
 
 
@@ -104,9 +108,9 @@ def paused(st: Settings, now: float | None = None) -> str | None:
     until = s.get("paused_until")
     if until and float(until) > now:
         return f"plan limit and credits exhausted until {_ts(until)}"
-    spent = float((s.get("spend") or {}).get(_day(now), 0.0))
+    spent = float((s.get("credit_spend") or {}).get(_day(now), 0.0))
     if spent >= daily_cap(st):
-        return f"shared daily spend cap ${daily_cap(st):.0f} reached (${spent:.2f} today); runs resume after 00:00 UTC"
+        return f"shared daily credit cap ${daily_cap(st):.0f} reached (${spent:.2f} of credits today); runs resume after 00:00 UTC"
     return None
 
 
@@ -128,16 +132,18 @@ def _observe(st: Settings, info: dict[str, Any] | None, run_id: str, notify: Cal
         if info and info.get("isUsingOverage"):
             cs = s.setdefault("credit_spend", {})
             cs[day] = round(float(cs.get(day, 0.0)) + float(cost), 4)
-    for d in sorted(spend)[:-14]:                         # keep two weeks
-        spend.pop(d, None)
+    cspend = s.setdefault("credit_spend", {})
+    for led in (spend, cspend):
+        for d in sorted(led)[:-14]:                        # keep two weeks
+            led.pop(d, None)
     sent = s.setdefault("notified", {})
     out: list[str] = []
-    if spend.get(day, 0.0) >= daily_cap(st) and not sent.get(f"daily_cap:{day}"):
+    if cspend.get(day, 0.0) >= daily_cap(st) and not sent.get(f"daily_cap:{day}"):
         sent[f"daily_cap:{day}"] = day
         out.append("daily_cap")
         if notify:
             try:
-                notify(f"Расход команды за сутки дошёл до общего лимита ${daily_cap(st):.0f} (${spend[day]:.2f}). "
+                notify(f"Расход кредитов командой за сутки дошёл до общего лимита ${daily_cap(st):.0f} (${cspend[day]:.2f}). "
                        f"Новые прогоны ролей остановлены до 00:00 UTC; сайты работают.")
             except Exception as exc:
                 log.warning("billing notify failed: %s", exc)
@@ -167,8 +173,8 @@ def _observe(st: Settings, info: dict[str, Any] | None, run_id: str, notify: Cal
 
     if using:
         once("overage_started", f"Подписка Claude: недельный лимит исчерпан, команда работает на купленных кредитах "
-                                f"(сброс лимита {_ts(info.get('resetsAt'))}). Кредиты — реальные деньги; общий лимит команды "
-                                f"${daily_cap(st):.0f} в сутки действует.")
+                                f"(сброс лимита {_ts(info.get('resetsAt'))}). Кредиты — реальные деньги; на них действует общий лимит "
+                                f"команды ${daily_cap(st):.0f} в сутки.")
     if ovs and ovs != "allowed" and isinstance(util, (int, float)) and util >= 0.9:
         once("credits_unavailable", f"Подписка Claude: использовано {round(util * 100)} % недельного лимита, а кредиты "
                                     f"недоступны ({info.get('overageDisabledReason') or ovs}). После 100 % команда встанет "
@@ -192,10 +198,9 @@ def status_line(st: Settings) -> str:
     credits = "идут кредиты" if s.get("using_credits") else ("кредиты доступны" if s.get("overage_status") == "allowed"
                                                             else f"кредиты недоступны ({s.get('overage_reason') or s.get('overage_status')})")
     now = _now()
-    spent = float((s.get("spend") or {}).get(_day(now), 0.0))
     cred = float((s.get("credit_spend") or {}).get(_day(now), 0.0))
-    return (f"Подписка Claude: неделя {pct}, сброс {s.get('window_resets')}; {credits}. Расход сегодня ${spent:.2f} "
-            f"из общего лимита ${daily_cap(st):.0f}" + (f", из них кредитами ${cred:.2f}" if cred else ""))
+    return (f"Подписка Claude: неделя {pct}, сброс {s.get('window_resets')}; {credits}. Кредитами сегодня ${cred:.2f} "
+            f"из лимита ${daily_cap(st):.0f} в сутки")
 
 
 def owner_notify(dry_run: bool = False) -> Callable[[str], Any]:

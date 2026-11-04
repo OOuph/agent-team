@@ -35,15 +35,17 @@ def test_overage_notified_once_and_credit_spend(tmp_path: Path) -> None:
     assert billing.paused(st, now=DAY + 200) is None
 
 
-def test_shared_daily_cap(tmp_path: Path) -> None:
+def test_shared_daily_cap_counts_only_credits(tmp_path: Path) -> None:
     st, sent = _st(tmp_path), []
     st.raw["billing"] = {"daily_cap_usd_all": 10.0}
-    billing.observe(st, _info(0.5), "a", sent.append, now=DAY, cost=6.0)
-    assert billing.paused(st, now=DAY + 1) is None and billing.remaining_today(st, now=DAY + 1) == 4.0
-    assert billing.observe(st, None, "b", sent.append, now=DAY + 2, cost=4.5) == ["daily_cap"]
-    assert "shared daily spend cap" in (billing.paused(st, now=DAY + 3) or "")
+    billing.observe(st, _info(0.9), "sub", sent.append, now=DAY, cost=50.0)          # inside the subscription: not counted
+    assert billing.paused(st, now=DAY + 1) is None and billing.remaining_today(st, now=DAY + 1) is None
+    billing.observe(st, _info(1.0, using=True), "a", sent.append, now=DAY + 2, cost=6.0)
+    assert billing.remaining_today(st, now=DAY + 3) == 4.0
+    assert billing.observe(st, _info(1.0, using=True), "b", sent.append, now=DAY + 4, cost=4.5) == ["daily_cap"]
+    assert "credit cap" in (billing.paused(st, now=DAY + 5) or "")
     assert billing.paused(st, now=DAY + 86400 + 1) is None              # next UTC day
-    assert len(sent) == 1 and "$10" in sent[0]
+    assert any("$10" in m for m in sent)
 
 
 def test_default_cap_is_100(tmp_path: Path) -> None:

@@ -94,7 +94,10 @@ class Cycle:
             log.warning("%s: %s skipped: %s", self.p.slug, label, stop)
             return None
         cap = float(cap or self.st.budget["max_usd_per_run"])
-        remaining = min(self.p.daily_cap - self.store.spent_today(), billing.remaining_today(self.st))
+        credit_left = billing.remaining_today(self.st)             # None inside the subscription
+        remaining = self.p.daily_cap - self.store.spent_today()
+        if credit_left is not None:
+            remaining = min(remaining, credit_left)
         cap = min(cap, remaining)                                   # a run may use what is left of the day
         if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap):
             if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
