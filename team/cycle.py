@@ -33,6 +33,8 @@ PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
 # reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
 REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
+                          "Bash(python3 -m unittest -v)", "Bash(python3 -m unittest tests.*)", "Bash(python3 -m unittest -v tests.*)",
+                          "Bash(python3 -m unittest discover -s *)", "Bash(python3 -m unittest discover -v -s *)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 
@@ -380,7 +382,7 @@ class Cycle:
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
                 env = {"PYTHONDONTWRITEBYTECODE": "1"}
                 prompt += (f"\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
-                           "`python3 -m unittest`, `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
+                           "`python3 -m unittest` (also `-v`, `tests.<module>`, `discover -s <dir>`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
                            "A criterion about tests or code gets pass/fail from this checkout.\n")
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)

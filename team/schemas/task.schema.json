@@ -15,7 +15,7 @@
   "repo_only": {
    "type": "boolean",
    "default": false,
-   "description": "The deliverable is not served publicly (code, tests, docs). The reviewer runs in a read-only checkout of released_sha with Read/Glob/Grep, python3 -m unittest, python3 -m pytest -q, git log -1 and team-fetch."
+   "description": "The deliverable is not served publicly (code, tests, docs). The reviewer runs in a read-only checkout of released_sha with Read/Glob/Grep, python3 -m unittest (also -v, tests.<module>, discover -s <dir>), python3 -m pytest -q, git log -1 and team-fetch."
   }
  },
  "additionalProperties": true
