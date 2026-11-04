@@ -20,4 +20,4 @@ may run is `team-fetch <url>` (options `--grep TEXT`, `--tail N`) to check the l
 `support-reply`: action (reply / escalate / skip), text, reason, question (escalate only), checked_urls.
 
 ## Shell rule
-The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`.
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--offset K`. Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text (`'h1'`, not `'<h1'`; `'Rust'`, not `'>Rust<'`); use `--around N` for context.
