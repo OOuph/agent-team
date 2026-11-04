@@ -35,7 +35,17 @@ SCHEMAS = Path(__file__).parent / "schemas"
 REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
                           "Bash(python3 -m unittest -v)", "Bash(python3 -m unittest tests.*)", "Bash(python3 -m unittest -v tests.*)",
                           "Bash(python3 -m unittest discover -s *)", "Bash(python3 -m unittest discover -v -s *)",
+                          "Bash(python3 -m unittest tests.* -v)", "Bash(python3 -m unittest -v discover*)",
+                          "Bash(python3 -m unittest discover -s * -v)", "Bash(python3 -m unittest discover -s * -t *)",
+                          "Bash(python3 -m unittest discover -v -s * -t *)", "Bash(python3 -m unittest -v discover -s *)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
+
+REPO_ONLY_PROMPT = (
+    "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
+    "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
+    "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
+    "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
+    "A criterion about tests or code gets pass/fail from this checkout.\n")
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -381,9 +391,7 @@ class Cycle:
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
                 env = {"PYTHONDONTWRITEBYTECODE": "1"}
-                prompt += (f"\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
-                           "`python3 -m unittest` (also `-v`, `tests.<module>`, `discover -s <dir>`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
-                           "A criterion about tests or code gets pass/fail from this checkout.\n")
+                prompt += REPO_ONLY_PROMPT.format(sha=sha)
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)
                 work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
