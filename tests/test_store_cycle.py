@@ -336,3 +336,35 @@ def test_same_friction_kind_twice_blocks():
     assert not C.repeated_partial(t, {"status": "partial", "summary": "b", "friction": [{"kind": "environment", "what": "y"}]})
     assert C.repeated_partial({"results": [{"status": "blocked", "summary": "a", "friction": [{"kind": "environment", "what": "q"}]}]},
                               {"status": "partial", "summary": "b", "friction": [{"kind": "environment", "what": "z"}]})
+
+
+class PartialRunner(FakeRunner):
+    """Developer commits something every run and returns partial with the same friction category but different wording."""
+
+    def run(self, role, prompt, schema, *, cwd, **kw):
+        if role != "developer":
+            return super().run(role, prompt, schema, cwd=cwd, **kw)
+        self.calls.append(role)
+        n = self.calls.count("developer")
+        (Path(cwd) / f"part{n}.txt").write_text(str(n))
+        gitops.git(Path(cwd), "add", "-A"); gitops.git(Path(cwd), "commit", "-q", "-m", f"T-0001: part {n}")
+        out = {"status": "partial", "summary": f"attempt {n}: could not reach the data", "changes": [], "how_to_verify": [], "self_check": [],
+               "friction": [{"kind": "missing_data", "what": f"source unreachable ({n})"}]}
+        return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id="s", duration_s=1.0)
+
+
+def test_two_partials_same_friction_block_and_ask_po(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    r = PartialRunner()
+    for i in (1, 2):
+        Cycle(st, p, r, f"c{i}").phase_execute()
+        if i == 1:
+            assert s.task(t["id"])["state"] == "in_progress"       # first partial continues
+    assert s.task(t["id"])["state"] == "blocked"
+    assert [q for q in s.questions(["open"]) if q.get("task") == t["id"] and q["to"] == "po"]
+    Cycle(st, p, r, "c3").phase_execute()
+    assert r.calls.count("developer") == 2                          # no third developer run
+    assert s.task(t["id"])["state"] == "blocked"
