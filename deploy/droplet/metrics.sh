@@ -48,7 +48,16 @@ if [ "${#log_args[@]}" -eq 0 ]; then
   exit 1
 fi
 
+# Published cloud/crawler address lists: browser traffic from them is not people (owner 04.11). Refreshed weekly;
+# a failed refresh keeps the previous file, and sitemetrics always has its built-in list.
+NET_RANGES="${NET_RANGES:-/var/lib/agent-team/net-ranges.json}"
+if [ ! -f "$NET_RANGES" ] || [ -n "$(find "$NET_RANGES" -mtime +6 2>/dev/null)" ]; then
+  echo "refreshing $NET_RANGES"
+  "$PYTHON" "$SITEMETRICS" --update-net-ranges "$NET_RANGES" || echo "WARN: net ranges refresh failed, using previous/built-in"
+fi
+
 target_args=()
+[ -f "$NET_RANGES" ] && target_args+=(--net-ranges "$NET_RANGES")
 for t in $TARGETS; do target_args+=(--target "$t"); done
 for ip in $OWN_IPS; do target_args+=(--own-ip "$ip"); done
 for ua in $OWN_UA; do target_args+=(--own-ua "$ua"); done

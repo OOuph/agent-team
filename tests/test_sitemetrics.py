@@ -415,3 +415,70 @@ def test_scanner_probes_at_any_depth():
         assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", path)[0] == "scanner", path
     assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", "/pkg/npm/dotenv/")[0] == "human"     # 'env' inside a name is not a probe
     assert sm.classify("Mozilla/5.0 (X11; Linux) Chrome/120", "9.9.9.9", "/environment/")[0] == "human"
+
+
+def test_not_a_person_signals(tmp_path):
+    import json as _json
+    sm.load_net_ranges(None)                                       # built-in list only
+    chrome = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36"
+    assert sm.classify(chrome, "81.193.10.20", "/")[0] == "human"                       # residential, current browser
+    assert sm.classify(chrome, "43.165.2.110", "/") == ("unknown", "datacenter:tencent")
+    assert sm.classify(chrome, "20.40.1.1", "/") == ("unknown", "datacenter:azure")
+    assert sm.classify(chrome, "51.146.252.73", "/")[0] == "human"                      # a /22 of a UK access network, not Azure
+    assert sm.classify(chrome, "173.252.95.18", "/") == ("crawler", "meta")
+    iphone13 = "Mozilla/5.0 (iPhone; CPU iPhone OS 13_2_3 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/13.0.3 Mobile/15E148 Safari/604.1"
+    assert sm.classify(iphone13, "81.193.10.20", "/") == ("unknown", "stale-ua")
+    assert sm.classify("Opera/9.80 (X11; Linux i686) Presto/2.12.388 Version/12.16", "81.193.10.20", "/") == ("unknown", "stale-ua")
+    assert sm.classify("Mozilla/5.0 (Linux; Android 12; Pixel 6) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/114.0.0.0 Mobile Safari/537.36",
+                       "136.87.128.22", "/")[0] == "human"
+    old_chrome = chrome.replace("Chrome/140", "Chrome/80")
+    assert sm.classify(old_chrome, "81.193.10.20", "/") == ("unknown", "stale-ua")
+    # published ranges from the cache file; crawler beats cloud inside an overlapping block
+    cache = tmp_path / "nets.json"
+    cache.write_text(_json.dumps({"ranges": [["34.64.0.0/10", "cloud", "gcp"], ["66.249.64.0/27", "crawler", "googlebot"],
+                                             ["66.249.0.0/16", "cloud", "gcp"], ["2600:1f00::/24", "cloud", "aws"]]}))
+    sm.load_net_ranges(str(cache))
+    assert sm.classify(chrome, "34.77.47.50", "/") == ("unknown", "datacenter:gcp")
+    assert sm.classify(chrome, "66.249.64.5", "/") == ("crawler", "googlebot")
+    assert sm.classify(chrome, "66.249.80.1", "/") == ("unknown", "datacenter:gcp")
+    assert sm.classify(chrome, "2600:1f00::5", "/") == ("unknown", "datacenter:aws")
+    assert sm.classify(chrome, "81.193.10.20", "/")[0] == "human"
+    sm.load_net_ranges(None)
+
+
+def test_rotating_ua_detected():
+    R = sm.Record
+    recs = [R("45.138.12.168", "2026-11-03", "GET", "/", 200, "-", ua, "luz.bymachines.ai") for ua in (
+        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36",
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/133.0.0.0 Safari/537.36")]
+    recs.append(R("81.193.10.20", "2026-11-03", "GET", "/", 200, "-", recs[0].ua, "luz.bymachines.ai"))
+    rot = sm.find_rotating(recs)
+    assert rot == {("45.138.12.168", "2026-11-03")}
+    sm.ROTATING.clear(); sm.ROTATING.update(rot); sm.load_net_ranges(None)
+    assert sm.classify(recs[0].ua, "45.138.12.168", "/", day="2026-11-03") == ("unknown", "rotating-ua")
+    assert sm.classify(recs[0].ua, "45.138.12.168", "/", day="2026-11-04")[0] == "human"
+    sm.ROTATING.clear()
+
+
+def test_update_net_ranges_keeps_cache_on_failure(tmp_path):
+    import json as _json
+    path = tmp_path / "nets.json"
+    def fetch_ok(url):
+        if "amazonaws" in url:
+            return _json.dumps({"prefixes": [{"ip_prefix": "3.0.0.0/15"}], "ipv6_prefixes": [{"ipv6_prefix": "2600:1f00::/24"}]}).encode()
+        if url.endswith(".csv") or "linode" in url or "constant" in url:
+            return b"# comment\n45.32.0.0/16,NL,,,\n"
+        if "oracle" in url:
+            return _json.dumps({"regions": [{"cidrs": [{"cidr": "129.146.0.0/16"}]}]}).encode()
+        return _json.dumps({"prefixes": [{"ipv4Prefix": "66.249.64.0/27"}, {"ipv6Prefix": "2001:4860:4801::/48"}]}).encode()
+    counts = sm.update_net_ranges(path, fetch_ok)
+    assert counts["aws"] == 2 and counts["vultr"] == 1 and counts["oracle"] == 1 and counts["googlebot"] == 2
+    def fetch_fail(url):
+        if "amazonaws" in url:
+            raise OSError("down")
+        return fetch_ok(url)
+    counts2 = sm.update_net_ranges(path, fetch_fail)
+    assert counts2["aws"] == 2                                   # kept from the previous file
+    data = _json.loads(path.read_text())
+    assert ["3.0.0.0/15", "cloud", "aws"] in data["ranges"]

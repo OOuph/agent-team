@@ -40,6 +40,8 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import bisect
+import ipaddress
 import gzip
 import io
 import json
@@ -165,6 +167,90 @@ AGENT_FAMILIES: tuple[tuple[str, str], ...] = (
 
 BROWSER_MARKERS: tuple[str, ...] = ("mozilla/", "opera/", "opera ")
 NON_HUMAN_MARKERS: tuple[str, ...] = ("bot", "crawl", "spider", "headless", "http", "python", "curl", "wget", "java", "go-")
+
+# --- "not a person" signals for browser-looking traffic (owner 04.11: cloud networks and bots with a browser UA
+#     must not count as people). A browser UA is classified human only if none of these fire.
+# Published address lists (refreshed by `--update-net-ranges`, cached as JSON; `--net-ranges PATH` loads it).
+NET_RANGE_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    # (owner, kind, url, format)
+    ("googlebot", "crawler", "https://developers.google.com/static/search/apis/ipranges/googlebot.json", "google"),
+    ("google-special", "crawler", "https://developers.google.com/static/search/apis/ipranges/special-crawlers.json", "google"),
+    ("google-fetchers", "crawler", "https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers.json", "google"),
+    ("google-fetchers", "crawler", "https://developers.google.com/static/search/apis/ipranges/user-triggered-fetchers-google.json", "google"),
+    ("bingbot", "crawler", "https://www.bing.com/toolbox/bingbot.json", "google"),
+    ("aws", "cloud", "https://ip-ranges.amazonaws.com/ip-ranges.json", "aws"),
+    ("gcp", "cloud", "https://www.gstatic.com/ipranges/cloud.json", "google"),
+    ("oracle", "cloud", "https://docs.oracle.com/en-us/iaas/tools/public_ip_ranges.json", "oracle"),
+    ("digitalocean", "cloud", "https://digitalocean.com/geo/google.csv", "csv"),
+    ("linode", "cloud", "https://geoip.linode.com/", "csv"),
+    ("vultr", "cloud", "https://geofeed.constant.com/?text", "csv"),
+)
+# Always-on fallback for big hosting networks without a public list (and in case a download fails). Coarse on purpose.
+BUILTIN_NET_RANGES: tuple[tuple[str, str, str], ...] = (
+    # Tencent Cloud
+    ("43.128.0.0/10", "cloud", "tencent"), ("49.51.0.0/16", "cloud", "tencent"), ("101.32.0.0/16", "cloud", "tencent"),
+    ("119.28.0.0/15", "cloud", "tencent"), ("129.226.0.0/16", "cloud", "tencent"), ("150.109.0.0/16", "cloud", "tencent"),
+    ("162.62.0.0/16", "cloud", "tencent"), ("170.106.0.0/16", "cloud", "tencent"),
+    # Alibaba Cloud
+    ("8.208.0.0/12", "cloud", "alibaba"), ("47.74.0.0/15", "cloud", "alibaba"), ("47.76.0.0/14", "cloud", "alibaba"),
+    ("47.80.0.0/13", "cloud", "alibaba"), ("47.88.0.0/14", "cloud", "alibaba"), ("47.235.0.0/16", "cloud", "alibaba"),
+    ("47.236.0.0/14", "cloud", "alibaba"), ("47.240.0.0/14", "cloud", "alibaba"), ("47.244.0.0/15", "cloud", "alibaba"),
+    ("47.246.0.0/16", "cloud", "alibaba"), ("47.250.0.0/15", "cloud", "alibaba"), ("47.252.0.0/15", "cloud", "alibaba"),
+    ("47.254.0.0/16", "cloud", "alibaba"),
+    # Microsoft Azure (main public blocks; the service-tag file has no stable URL)
+    ("13.64.0.0/11", "cloud", "azure"), ("13.104.0.0/14", "cloud", "azure"), ("20.33.0.0/16", "cloud", "azure"),
+    ("20.34.0.0/15", "cloud", "azure"), ("20.36.0.0/14", "cloud", "azure"), ("20.40.0.0/13", "cloud", "azure"),
+    ("20.48.0.0/12", "cloud", "azure"), ("20.64.0.0/10", "cloud", "azure"), ("20.128.0.0/16", "cloud", "azure"),
+    ("20.135.0.0/16", "cloud", "azure"), ("20.136.0.0/13", "cloud", "azure"), ("20.150.0.0/15", "cloud", "azure"),
+    ("20.160.0.0/12", "cloud", "azure"), ("20.176.0.0/12", "cloud", "azure"), ("20.192.0.0/10", "cloud", "azure"),
+    ("40.64.0.0/10", "cloud", "azure"), ("51.4.0.0/15", "cloud", "azure"), ("51.8.0.0/16", "cloud", "azure"),
+    ("51.10.0.0/15", "cloud", "azure"), ("51.12.0.0/15", "cloud", "azure"), ("51.18.0.0/16", "cloud", "azure"),
+    ("51.51.0.0/16", "cloud", "azure"), ("51.53.0.0/16", "cloud", "azure"), ("51.103.0.0/16", "cloud", "azure"),
+    ("51.104.0.0/15", "cloud", "azure"), ("51.107.0.0/16", "cloud", "azure"), ("51.116.0.0/16", "cloud", "azure"),
+    ("51.120.0.0/16", "cloud", "azure"), ("51.124.0.0/16", "cloud", "azure"), ("51.132.0.0/16", "cloud", "azure"),
+    ("51.136.0.0/15", "cloud", "azure"), ("51.138.0.0/16", "cloud", "azure"), ("51.140.0.0/14", "cloud", "azure"),
+    ("52.96.0.0/12", "cloud", "azure"), ("52.136.0.0/13", "cloud", "azure"), ("52.224.0.0/11", "cloud", "azure"),
+    ("104.40.0.0/13", "cloud", "azure"), ("137.116.0.0/15", "cloud", "azure"), ("168.61.0.0/16", "cloud", "azure"),
+    ("168.62.0.0/15", "cloud", "azure"), ("191.232.0.0/13", "cloud", "azure"),
+    # Hetzner
+    ("5.9.0.0/16", "cloud", "hetzner"), ("49.12.0.0/15", "cloud", "hetzner"), ("65.21.0.0/16", "cloud", "hetzner"),
+    ("65.108.0.0/15", "cloud", "hetzner"), ("78.46.0.0/15", "cloud", "hetzner"), ("88.198.0.0/16", "cloud", "hetzner"),
+    ("88.99.0.0/16", "cloud", "hetzner"), ("94.130.0.0/16", "cloud", "hetzner"), ("95.216.0.0/15", "cloud", "hetzner"),
+    ("116.202.0.0/15", "cloud", "hetzner"), ("135.181.0.0/16", "cloud", "hetzner"), ("136.243.0.0/16", "cloud", "hetzner"),
+    ("138.201.0.0/16", "cloud", "hetzner"), ("142.132.128.0/17", "cloud", "hetzner"), ("144.76.0.0/16", "cloud", "hetzner"),
+    ("148.251.0.0/16", "cloud", "hetzner"), ("157.90.0.0/16", "cloud", "hetzner"), ("159.69.0.0/16", "cloud", "hetzner"),
+    ("162.55.0.0/16", "cloud", "hetzner"), ("167.233.0.0/16", "cloud", "hetzner"), ("168.119.0.0/16", "cloud", "hetzner"),
+    ("176.9.0.0/16", "cloud", "hetzner"), ("178.63.0.0/16", "cloud", "hetzner"), ("188.40.0.0/16", "cloud", "hetzner"),
+    ("195.201.0.0/16", "cloud", "hetzner"),
+    # OVH
+    ("51.38.0.0/16", "cloud", "ovh"), ("51.68.0.0/16", "cloud", "ovh"), ("51.75.0.0/16", "cloud", "ovh"),
+    ("51.77.0.0/16", "cloud", "ovh"), ("51.79.0.0/16", "cloud", "ovh"), ("51.81.0.0/16", "cloud", "ovh"),
+    ("51.83.0.0/16", "cloud", "ovh"), ("51.89.0.0/16", "cloud", "ovh"), ("51.91.0.0/16", "cloud", "ovh"),
+    ("51.161.0.0/16", "cloud", "ovh"), ("51.178.0.0/16", "cloud", "ovh"), ("51.195.0.0/16", "cloud", "ovh"),
+    ("51.210.0.0/16", "cloud", "ovh"), ("51.222.0.0/16", "cloud", "ovh"), ("54.36.0.0/14", "cloud", "ovh"),
+    ("135.125.0.0/16", "cloud", "ovh"), ("137.74.0.0/16", "cloud", "ovh"), ("141.94.0.0/15", "cloud", "ovh"),
+    ("145.239.0.0/16", "cloud", "ovh"), ("146.59.0.0/16", "cloud", "ovh"), ("147.135.0.0/16", "cloud", "ovh"),
+    ("149.202.0.0/16", "cloud", "ovh"), ("151.80.0.0/16", "cloud", "ovh"), ("158.69.0.0/16", "cloud", "ovh"),
+    ("164.132.0.0/16", "cloud", "ovh"), ("176.31.0.0/16", "cloud", "ovh"), ("178.32.0.0/15", "cloud", "ovh"),
+    ("188.165.0.0/16", "cloud", "ovh"), ("192.99.0.0/16", "cloud", "ovh"), ("193.70.0.0/17", "cloud", "ovh"),
+    ("198.27.64.0/18", "cloud", "ovh"), ("198.50.128.0/17", "cloud", "ovh"), ("213.32.0.0/17", "cloud", "ovh"),
+    ("217.182.0.0/16", "cloud", "ovh"),
+    # Meta crawler networks (link previews)
+    ("31.13.24.0/21", "crawler", "meta"), ("66.220.144.0/20", "crawler", "meta"), ("69.63.176.0/20", "crawler", "meta"),
+    ("69.171.224.0/19", "crawler", "meta"), ("173.252.64.0/18", "crawler", "meta"),
+)
+# A browser UA this old is almost never a person in 2026 (bots keep stale strings): Chrome/Firefox major below the
+# threshold, Presto Opera, Internet Explorer, Android 6 and older, iOS 13 and older.
+STALE_CHROME_MAJOR = 100
+STALE_FIREFOX_MAJOR = 100
+STALE_UA_RE = re.compile(r"presto/|msie |trident/|android [1-6]\.|iphone os (?:[1-9]|1[0-3])_|cpu os (?:[1-9]|1[0-3])_", re.I)
+CHROME_RE = re.compile(r"(?:chrome|crios)/(\d+)", re.I)
+FIREFOX_RE = re.compile(r"(?:firefox|fxios)/(\d+)", re.I)
+# One address that presents this many different operating systems on one day is rotating its UA — a tool, not a person.
+ROTATING_OS_MIN = 3
+OS_FAMILIES: tuple[tuple[str, str], ...] = (("iphone", "ios"), ("ipad", "ios"), ("android", "android"), ("windows", "windows"),
+                                           ("macintosh", "mac"), ("cros", "chromeos"), ("linux", "linux"))
+NET_RANGES_MAX_AGE_DAYS = 7
 
 ASSET_EXTS: frozenset[str] = frozenset(
     {"css", "js", "mjs", "woff", "woff2", "ttf", "otf", "png", "jpg", "jpeg", "gif", "webp", "svg", "ico"}
@@ -311,7 +397,163 @@ def iter_records(log_paths: Iterable[str | os.PathLike[str]], stats: ParseStats 
 # Classification
 # ----------------------------------------------------------------------------------------------------------------
 
-def classify(ua: str, ip: str, path: str, own_ua_prefixes: Iterable[str] = DEFAULT_OWN_UA_PREFIXES) -> tuple[str, str]:
+class NetIndex:
+    """Sorted integer intervals per IP version; lookup by bisect. Entries: (start, end, kind, owner)."""
+
+    def __init__(self) -> None:
+        self._v: dict[int, list[tuple[int, int, str, str]]] = {4: [], 6: []}
+        self._starts: dict[int, list[int]] = {4: [], 6: []}
+        self.count = 0
+
+    def add(self, cidr: str, kind: str, owner: str) -> None:
+        try:
+            net = ipaddress.ip_network(cidr.strip(), strict=False)
+        except ValueError:
+            return
+        self._v[net.version].append((int(net.network_address), int(net.broadcast_address), kind, owner))
+        self.count += 1
+
+    def freeze(self) -> "NetIndex":
+        for v in (4, 6):
+            # crawler ranges win over cloud ranges when they overlap (Googlebot lives inside Google's space)
+            self._v[v].sort(key=lambda r: (r[0], 0 if r[2] == "crawler" else 1))
+            self._starts[v] = [r[0] for r in self._v[v]]
+        return self
+
+    def lookup(self, ip: str) -> tuple[str, str] | None:
+        try:
+            a = ipaddress.ip_address(ip)
+        except ValueError:
+            return None
+        if a.version == 6 and a.ipv4_mapped:
+            a = a.ipv4_mapped
+        n, rows, starts = int(a), self._v[a.version], self._starts[a.version]
+        i = bisect.bisect_right(starts, n)
+        best = None
+        # walk back over intervals that start at or before n; nested ranges are short lists, stop after a few misses
+        j, misses = i - 1, 0
+        while j >= 0 and misses < 64:
+            lo, hi, kind, owner = rows[j]
+            if lo <= n <= hi:
+                if kind == "crawler":
+                    return kind, owner
+                best = best or (kind, owner)
+            else:
+                misses += 1
+            j -= 1
+        return best
+
+
+NETS: NetIndex = NetIndex()
+ROTATING: set[tuple[str, str]] = set()      # (ip, day) that rotate their browser UA across operating systems
+
+
+def load_net_ranges(path: str | os.PathLike[str] | None) -> NetIndex:
+    """Built-in ranges plus the cached published lists at ``path`` (if readable). Replaces the global index."""
+    global NETS
+    idx = NetIndex()
+    for cidr, kind, owner in BUILTIN_NET_RANGES:
+        idx.add(cidr, kind, owner)
+    if path:
+        try:
+            data = json.loads(Path(path).read_text(encoding="utf-8"))
+            for r in data.get("ranges") or []:
+                idx.add(str(r[0]), str(r[1]), str(r[2]))
+        except (OSError, json.JSONDecodeError, IndexError, TypeError) as e:
+            log.warning("net ranges %s not loaded (%s); built-in list only", path, e)
+    NETS = idx.freeze()
+    log.info("net ranges: %d entries", NETS.count)
+    return NETS
+
+
+def _parse_ranges(fmt: str, body: bytes) -> list[str]:
+    text = body.decode("utf-8", "replace")
+    if fmt == "csv":
+        return [ln.split(",")[0].strip() for ln in text.splitlines() if ln.strip() and not ln.startswith("#") and "/" in ln.split(",")[0]]
+    data = json.loads(text)
+    if fmt == "aws":
+        return [x["ip_prefix"] for x in data.get("prefixes", [])] + [x["ipv6_prefix"] for x in data.get("ipv6_prefixes", [])]
+    if fmt == "oracle":
+        return [c["cidr"] for r in data.get("regions", []) for c in r.get("cidrs", [])]
+    return [x.get("ipv4Prefix") or x.get("ipv6Prefix") for x in data.get("prefixes", []) if x.get("ipv4Prefix") or x.get("ipv6Prefix")]
+
+
+def update_net_ranges(path: str | os.PathLike[str], fetch: Any = None) -> dict[str, int]:
+    """Download the published lists into ``path`` (JSON). A failing source keeps its previous entries."""
+    import urllib.request
+    fetch = fetch or (lambda url: urllib.request.urlopen(urllib.request.Request(url, headers={"User-Agent": "agent-team/sitemetrics"}), timeout=60).read())
+    old: dict[str, list[list[str]]] = {}
+    p = Path(path)
+    if p.exists():
+        try:
+            for r in json.loads(p.read_text(encoding="utf-8")).get("ranges") or []:
+                old.setdefault(r[2], []).append(r)
+        except (OSError, json.JSONDecodeError):
+            pass
+    by_owner: dict[str, list[list[str]]] = {}
+    counts: dict[str, int] = {}
+    for owner, kind, url, fmt in NET_RANGE_SOURCES:
+        try:
+            cidrs = [c for c in _parse_ranges(fmt, fetch(url)) if c]
+            by_owner.setdefault(owner, []).extend([c, kind, owner] for c in cidrs)
+            counts[owner] = counts.get(owner, 0) + len(cidrs)
+        except Exception as e:  # noqa: BLE001 — one source failing keeps the cached copy
+            log.warning("net ranges: %s failed (%s); keeping %d cached", owner, e, len(old.get(owner, [])))
+            if owner not in by_owner and old.get(owner):
+                by_owner[owner] = old[owner]
+                counts[owner] = len(old[owner])
+    ranges = [r for rs in by_owner.values() for r in rs]
+    p.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(p, json.dumps({"generated": datetime.now(timezone.utc).isoformat(timespec="seconds"), "counts": counts,
+                                 "ranges": ranges}))
+    log.info("net ranges updated: %s", counts)
+    return counts
+
+
+def _os_family(low_ua: str) -> str | None:
+    for needle, fam in OS_FAMILIES:
+        if needle in low_ua:
+            return fam
+    return None
+
+
+def find_rotating(records: Iterable["Record"]) -> set[tuple[str, str]]:
+    """(ip, day) pairs whose browser UAs span >= ROTATING_OS_MIN operating systems."""
+    seen: dict[tuple[str, str], set[str]] = {}
+    for r in records:
+        low = (r.ua or "").lower()
+        if not any(mk in low for mk in BROWSER_MARKERS):
+            continue
+        fam = _os_family(low)
+        if fam:
+            seen.setdefault((r.ip, r.day), set()).add(fam)
+    return {k for k, v in seen.items() if len(v) >= ROTATING_OS_MIN}
+
+
+def stale_browser(low_ua: str) -> bool:
+    if STALE_UA_RE.search(low_ua):
+        return True
+    m = CHROME_RE.search(low_ua)
+    if m and int(m.group(1)) < STALE_CHROME_MAJOR:
+        return True
+    m = FIREFOX_RE.search(low_ua)
+    return bool(m and int(m.group(1)) < STALE_FIREFOX_MAJOR)
+
+
+def not_a_person(ip: str, low_ua: str, day: str = "") -> tuple[str, str] | None:
+    """Why a browser-looking request is not a person: (class, reason) or None when it may be a person."""
+    hit = NETS.lookup(ip)
+    if hit:
+        kind, owner = hit
+        return ("crawler", owner) if kind == "crawler" else ("unknown", f"datacenter:{owner}")
+    if (ip, day) in ROTATING:
+        return "unknown", "rotating-ua"
+    if stale_browser(low_ua):
+        return "unknown", "stale-ua"
+    return None
+
+
+def classify(ua: str, ip: str, path: str, own_ua_prefixes: Iterable[str] = DEFAULT_OWN_UA_PREFIXES, day: str = "") -> tuple[str, str]:
     """Return (class, name). ``name`` is the bot for crawlers, the family for agents, '' otherwise."""
     ua = ua or ""
     low = ua.lower()
@@ -329,7 +571,8 @@ def classify(ua: str, ip: str, path: str, own_ua_prefixes: Iterable[str] = DEFAU
         if needle in low:
             return "agent", family
     if any(mk in low for mk in BROWSER_MARKERS) and not any(mk in low for mk in NON_HUMAN_MARKERS):
-        return "human", ""
+        why = not_a_person(ip, low, day)
+        return why if why else ("human", "")
     return "unknown", ""
 
 
@@ -419,7 +662,7 @@ class Aggregator:
     def add(self, rec: Record) -> None:
         if self.until and rec.day > self.until:
             return
-        cls, name = classify(rec.ua, rec.ip, rec.path, self.own_ua_prefixes)
+        cls, name = classify(rec.ua, rec.ip, rec.path, self.own_ua_prefixes, rec.day)
         src: Source = (rec.ip, rec.ua)
         self.all_days.add(rec.day)
         if cls == "human":
@@ -586,6 +829,9 @@ def run(log_paths: Iterable[str | os.PathLike[str]], host: str, since: str | dat
     """Aggregate the logs for ``host`` and return the metrics dict (see module docstring for the shape)."""
     host_l = host.lower()
     log.info("sitemetrics run: host=%s since=%s until=%s targets=%s", host_l, since, until, list(targets))
+    log_paths = list(log_paths)
+    ROTATING.clear()
+    ROTATING.update(find_rotating(iter_records(log_paths)))
     agg = Aggregator(host_l, targets, own_ua_prefixes, since, until)
     stats = ParseStats()
     for rec in iter_records(log_paths, stats):
@@ -606,6 +852,10 @@ def run_all_hosts(log_paths: Iterable[str | os.PathLike[str]], since: str | date
     (no aggregator, no directory). None means every safe host seen in the logs.
     """
     wanted = {h.lower() for h in only_hosts} if only_hosts is not None else None
+    log_paths = list(log_paths)
+    ROTATING.clear()
+    ROTATING.update(find_rotating(iter_records(log_paths)))      # first pass: addresses rotating their UA across systems
+    log.info("rotating-UA sources (ip, day): %d", len(ROTATING))
     aggs: dict[str, Aggregator] = {}
     stats = ParseStats()
     dropped: Counter = Counter()
@@ -714,10 +964,10 @@ def _atomic_write(path: Path, text: str) -> None:
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="python3 -m team.sitemetrics",
                                 description="Per-day site metrics from the nginx access log, without addresses.")
-    g = p.add_mutually_exclusive_group(required=True)
+    g = p.add_mutually_exclusive_group()
     g.add_argument("--host", help="site host to report on, e.g. x.formachines.ai")
     g.add_argument("--all-hosts", action="store_true", help="one report per host seen in the log: <out>/<host>/")
-    p.add_argument("--log", action="append", required=True, metavar="PATH",
+    p.add_argument("--log", action="append", default=[], metavar="PATH",
                    help="access log (plain or .gz); repeat for rotated files")
     p.add_argument("--since", metavar="YYYY-MM-DD", help="first day to report (earlier days feed 'returns' only)")
     p.add_argument("--until", metavar="YYYY-MM-DD", help="last day to report (inclusive)")
@@ -725,6 +975,9 @@ def build_parser() -> argparse.ArgumentParser:
                    help="target path: '/feed.xml' exact, '/api/' prefix, 'index.json' substring; repeatable")
     p.add_argument("--own-ua", action="append", default=[], metavar="PREFIX",
                    help=f"UA prefix counted as 'own' (default: {', '.join(DEFAULT_OWN_UA_PREFIXES)}); repeatable")
+    p.add_argument("--net-ranges", metavar="PATH", help="JSON of published cloud/crawler ranges (see --update-net-ranges); "
+                   "browser traffic from them is not counted as people. The built-in list is always on.")
+    p.add_argument("--update-net-ranges", metavar="PATH", help="download the published ranges into PATH and exit")
     p.add_argument("--own-ip", action="append", default=[], metavar="IP",
                    help="client address counted as 'own' whatever the UA (the team's own servers); repeatable")
     p.add_argument("--out", default="-", metavar="DIR",
@@ -752,6 +1005,13 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(stream=sys.stderr, level=getattr(logging, args.log_level),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     OWN_IPS.update(ip.strip() for ip in args.own_ip if ip.strip())
+    if args.update_net_ranges:
+        print(json.dumps(update_net_ranges(args.update_net_ranges)))
+        return 0
+    load_net_ranges(args.net_ranges)
+    if not (args.host or args.all_hosts) or not args.log:
+        log.error("--host or --all-hosts and at least one --log are required (or --update-net-ranges PATH)")
+        return 2
     try:
         if args.all_hosts:
             only_hosts = _parse_hosts(args.hosts)

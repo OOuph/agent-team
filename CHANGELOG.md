@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-04
 
+- sitemetrics: browser traffic is counted as people only if it is not (a) from a published cloud/crawler network (Googlebot, Bingbot, AWS, GCP, Oracle, DigitalOcean, Linode, Vultr — refreshed weekly by metrics.sh — plus a built-in list for Tencent, Alibaba, Azure, Hetzner, OVH, Meta), (b) a stale browser string (Chrome/Firefox < 100, Presto, IE, Android ≤ 6, iOS ≤ 13), (c) one address presenting ≥ 3 operating systems in a day. Owner 04.11: the 'people' counter was inflated by bots.
 - T-0031: denial hint (transcript «Denied calls») names the allowed form for `team-fetch ... --grep '<item' --around 0` (a `<`/`>` in an argument reads as a redirect; grep without it, `--around N≥1`); persona card already carries the shell rule; tests (F-0084, F-0038, F-0040, F-0033, F-0031).
 - T-0030: reviewer card states one verdict rule: criteria visible on the live site decide pass/fail; non-public ones (build marker, scan time, code, zero-case) go to `limits` as `not observable`; `inconclusive` only if no criterion is observable (F-0064, F-0060, F-0050, F-0055, F-0046).
 - T-0029: PO card: before Ready list the files each criterion needs, including the generator (e.g. `build.py` when `llms.txt` links a report), and put all in `scope`; no `depends_on` on a task that is not done with a non-stub report (F-0088, F-0089, F-0092, F-0094).
