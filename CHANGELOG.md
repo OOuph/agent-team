@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-05
 
+- T-0047: reviewer card: first Rules bullet bans `<` `>` and other shell metacharacters in `--grep` and points to `--tag h1` / `--tag h1 --count`; persona card repeats the rule at the top (F-0101, F-0098, F-0099, F-0084). Card only.
 - T-0046: guard `Cycle.guard_no_commit_loop` (≥2 «committed nothing» records, developer role) now runs for tasks in any state (ready, in_progress, claimed) and again inside `execute_task`, so no path can start the developer a third time (T-0057 replay test) (F-0107, F-0108, F-0109, F-0110, F-0112, F-0113).
 - T-0045: developer card: first rule checks `git rev-parse --show-toplevel` and `git branch --show-current` before any edit; wrong checkout or branch other than `task/<id>` means `blocked` with a question (F-0111, F-0093). Card only, no dispatcher behaviour change.
 - T-0044: F-0095/F-0096 cause recorded: `repo_only` WAS set on luz-amanha T-0042 (the reviewer ran in `review-T-0042/checkout`); the allowlist then lacked the trailing-flag form `tests.* -v`, which T-0033 (1ed6328, 11-04 08:07) added after the 02:09 denial. Not a matcher bug; test `test_f0095_exact_command_allowed` feeds the exact command through the matcher.
