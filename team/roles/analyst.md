@@ -24,3 +24,4 @@ goal_status.
 
 ## No shell
 You have no shell: do not try `ls`, `find` or `cat`. All the context is in the prompt; a missing item goes into `friction`.
+The metrics JSON is already in your prompt: `curl` and any other fetch of `/_team/metrics.json` are denied, so do not try them.

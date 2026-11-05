@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-05
 
+- T-0049: analyst card names `curl` and `/_team/metrics.json` as denied (metrics are already in the prompt); editor card says Read (incl. `/dev/null`), `cat` and shell file creation are unavailable, use only `team-fetch` (F-0097, F-0105, F-0039). Cards only.
 - T-0048: editor card: the publish tool appends the channel disclosure after review, so a draft without it is complete (do not flag or add one); marketer card: do not write own disclosure line in the text. Fixes double disclosure on t.me/formachines_team/9 and /7. Cards only.
 - T-0047: reviewer card: first Rules bullet bans `<` `>` and other shell metacharacters in `--grep` and points to `--tag h1` / `--tag h1 --count`; persona card repeats the rule at the top (F-0101, F-0098, F-0099, F-0084). Card only.
 - T-0046: guard `Cycle.guard_no_commit_loop` (≥2 «committed nothing» records, developer role) now runs for tasks in any state (ready, in_progress, claimed) and again inside `execute_task`, so no path can start the developer a third time (T-0057 replay test) (F-0107, F-0108, F-0109, F-0110, F-0112, F-0113).
