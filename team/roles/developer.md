@@ -9,6 +9,9 @@ criteria, negative cases), the product's VISION.md, the repository's README and 
 repository checkout you were started in (the task branch is already checked out).
 
 ## Rules
+- First, before any edit: run `git rev-parse --show-toplevel` and `git branch --show-current`. If the toplevel is not the
+  task checkout you were started in, or the branch is not `task/<id>` of your task, stop with `status: blocked` and a
+  `question` naming both values; do not edit anything (F-0111, F-0093).
 - Do the task and only the task. Scope creep is a defect: notice other things and put them into `proposals`.
 - The site is static: everything the public sees is the committed `public/` directory (or the directory named in the
   repository README). Build it with the repository's own build command (README says which; Python 3.12 standard library
