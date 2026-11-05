@@ -628,6 +628,17 @@ class Cycle:
             self.store.transition(t["id"], "in_progress", "dispatcher", "partial — continues next cycle", force=True, last_review=None)
             return True
         ahead = gitops.commits_ahead(repo, self.p.repo_branch) or (1 if gitops.dirty(repo) else 0)
+        if ahead == 0 and str(res.get("no_change_reason") or "").strip() and any(
+                isinstance(c, dict) and c.get("met") and str(c.get("evidence") or "").strip() for c in res.get("self_check") or []):
+            # T-0041: «already satisfied» with a reason and evidence is a result, not a failed run: no no_commit record
+            reason = _short_text(res.get("no_change_reason"), 300)
+            sha = gitops.head(repo)
+            if t.get("type") == "check":
+                self.store.transition(t["id"], "accepted", "dispatcher", f"no change needed: {reason}", force=True, accepted_at=utcnow(), assignee_run=None)
+            else:
+                self.store.transition(t["id"], "review", "dispatcher", f"no change needed: {reason}", force=True, released_at=utcnow(),
+                                      released_sha=sha, last_review=None, assignee_run=None)
+            return True
         if ahead == 0:
             attempts = int(t.get("attempts") or 0) + 1
             checks = "; ".join(f"{'✓' if c.get('met') else '✗'} {_short_text(c.get('criterion'), 60)}: {_short_text(c.get('evidence'), 80)}"

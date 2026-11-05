@@ -25,6 +25,10 @@ repository checkout you were started in (the task branch is already checked out)
   than a question.
 - Time and budget are limited: a task of size S should take a few minutes of work, not an exploration.
 
+- Nothing to commit because the task is already satisfied: return `status: done` with `no_change_reason` (why nothing
+  needed to change) and `self_check` with evidence per criterion (command output, file path, line). Without
+  `no_change_reason` a done result with no commit is treated as a failed run and the task is blocked on the second time.
+
 - `friction` (optional, ≤ 5): where the FRAMEWORK got in your way — a tool you lacked, a denied permission, an unclear
   instruction or acceptance criterion, a schema field that did not fit, data you could not reach. Not product defects
   (those are proposals). The retro role reads these to improve the framework; an empty list is fine.
