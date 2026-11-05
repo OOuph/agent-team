@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-05
+
+- T-0040: transient GitHub 5xx on push/PR returns the task to `ready` at most 3 times in a row (`transient_failures`), then `blocked` with a clear reason; push 5xx detection matches «returned error: 5xx», «HTTP 502», «HTTP/2 504», «status 5xx», «remote: … 503», 4xx never retried. Tests: https://github.com/OOuph/agent-team/blob/main/tests/test_gitops.py and https://github.com/OOuph/agent-team/blob/main/tests/test_store_cycle.py (F-0100, OBS-0070, OBS-0071).
+
 ## 2026-11-04
 
 - T-0039: push of the task branch and `POST /pulls` are retried 3 times with backoff (5/15/45 s) on HTTP 5xx; if GitHub still answers 5xx the task goes back to `ready` with a `pr.transient_failure` event instead of `blocked` (F-0100).

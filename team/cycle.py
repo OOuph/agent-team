@@ -681,10 +681,16 @@ class Cycle:
             url = gitops.open_pull_request(self.p.repo_url, t["id"], self.p.repo_branch, f"{t['id']}: {t.get('title', '')}", body)
         except gitops.GitError as exc:
             if gitops.is_transient(exc):
-                # GitHub 5xx after the retries (F-0100): the commit is intact, so the task goes back to ready, not blocked
-                self.store.event("pr.transient_failure", t["id"], "dispatcher", {"error": gitops.redact(str(exc))[:300]})
-                self.store.transition(t["id"], "ready", "dispatcher", f"push/PR failed on GitHub 5xx after {gitops.RETRIES} tries, will retry: {gitops.redact(str(exc))[:200]}",
-                                      force=True, assignee_run=None)
+                # GitHub 5xx after the retries (F-0100): the commit is intact, so the task goes back to ready, not blocked;
+                # but only MAX_TRANSIENT times in a row, then a persistent outage blocks it instead of looping forever
+                n = int(t.get("transient_failures") or 0) + 1
+                self.store.event("pr.transient_failure", t["id"], "dispatcher", {"error": gitops.redact(str(exc))[:300], "consecutive": n})
+                if n >= gitops.MAX_TRANSIENT:
+                    self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed on GitHub 5xx {n} times in a row, giving up: {gitops.redact(str(exc))[:200]}",
+                                          force=True, transient_failures=n, assignee_run=None)
+                    return True
+                self.store.transition(t["id"], "ready", "dispatcher", f"push/PR failed on GitHub 5xx after {gitops.RETRIES} tries ({n}/{gitops.MAX_TRANSIENT}), will retry: {gitops.redact(str(exc))[:200]}",
+                                      force=True, transient_failures=n, assignee_run=None)
                 return True
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True

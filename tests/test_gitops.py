@@ -142,3 +142,51 @@ def test_open_pull_request_three_502s_raise_transient(monkeypatch) -> None:
     with pytest.raises(gitops.GitError) as ei:
         gitops.open_pull_request("https://github.com/o/r.git", "T-1", "main", "t", "b")
     assert len(posts) == 3 and gitops.is_transient(ei.value)
+
+
+def test_is_transient_matches_git_push_stderr_variants() -> None:
+    from team import gitops
+    yes = [
+        "git push -q origin task/T-1: fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 503",
+        "git push: error: RPC failed; HTTP 502 curl 22 The requested URL returned error: 502",
+        "git push: remote: Internal Server Error\nremote: ... 503\nfatal: the remote end hung up",
+        "git push: fatal: HTTP/2 504 gateway timeout",
+        "github POST: HTTP Error 500: Internal Server Error",
+        "git push: error: unable to push, status 502",
+    ]
+    no = [
+        "git push: fatal: unable to access 'https://github.com/o/r.git/': The requested URL returned error: 403",
+        "git push: remote: Permission to o/r.git denied\nfatal: HTTP 401",
+        "github POST: HTTP Error 422: Unprocessable Entity",
+        "git push: ! [rejected] task/T-1 -> task/T-1 (stale info)",
+        "git push: fatal: HTTP 404 not found",
+    ]
+    for s in yes:
+        assert gitops.is_transient(gitops.GitError(s)), s
+    for s in no:
+        assert not gitops.is_transient(gitops.GitError(s)), s
+
+
+def test_push_branch_retries_5xx_but_not_4xx(monkeypatch, tmp_path) -> None:
+    import pytest
+    from team import gitops
+    calls = []
+
+    def mk(msg):
+        def fake(repo, *args, **k):
+            if args and args[0] == "push":
+                calls.append(1)
+                raise gitops.GitError(msg)
+            return ""
+        return fake
+    monkeypatch.setattr(gitops, "dirty", lambda r: False)
+    monkeypatch.setattr(gitops.time, "sleep", lambda s: None)
+    monkeypatch.setattr(gitops, "git", mk("The requested URL returned error: 502"))
+    with pytest.raises(gitops.GitError):
+        gitops.push_branch(tmp_path, "T-1")
+    assert len(calls) == gitops.RETRIES
+    calls.clear()
+    monkeypatch.setattr(gitops, "git", mk("The requested URL returned error: 403"))
+    with pytest.raises(gitops.GitError):
+        gitops.push_branch(tmp_path, "T-1")
+    assert len(calls) == 1
