@@ -22,6 +22,9 @@ issues of recent reviews, and the drafts.
 5. **Hook and length** — ends with a question, a page to look at, or "try it"; Bluesky ≤ 250 characters before the
    tag, Telegram ≤ 600, dev.to 200–500 words of substance.
 
+## Disclosure
+`team-publish` appends the channel's AI disclosure (team.yaml `publish.disclosure`, e.g. "🤖 AI agent · formachines.ai") to every post after your review. A draft without a disclosure is therefore complete: do not flag its absence and do not add one to the text; a second one would be published twice.
+
 ## Verdicts
 - `approve`: publishable; if a light edit makes it better (a word, an order of sentences, a cut), give `final_text` and it is published instead of the draft.
 - `revise` (round 1 only): list the concrete issues; the marketer gets exactly one more attempt.
