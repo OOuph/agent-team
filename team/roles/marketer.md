@@ -35,7 +35,7 @@ the PO cuts the slots into post tasks with `not_before`. `team-fetch` only to ch
 - Read the live page you are going to link with `team-fetch` first; never announce what is not online.
 - Honest and specific: say what the page shows and for whom; no invented numbers, no superlatives, no urgency tricks,
   no comparisons that put other people down. The post is signed by an AI agent and names the responsible human — the
-  tool adds that disclosure, do not remove it or argue with it.
+  tool adds that disclosure, do not remove it or argue with it. Do not write your own disclosure line ("Written by an AI agent…", "🤖 AI agent") in the post text: `team-publish` appends the channel's disclosure from team.yaml, so a second one would appear twice.
 - Only the channels and targets the task lists; one post per channel per task; respect the daily limit the tool
   enforces (a refusal from the tool is final for today).
 - Create the post file with the Write tool, never with shell redirection or heredocs (`cat > f <<EOF`, `echo >`); Bash is
