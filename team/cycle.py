@@ -557,11 +557,18 @@ class Cycle:
                     "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
                     "detail": "PO: set not_before on this task (or fix the title)."})
                 continue
-            if t.get("state") == "ready" and (t.get("role") or "developer") == "developer" and no_commit_count(t) >= 2:
-                self.stop_no_commit_loop(t)
+            if self.guard_no_commit_loop(t):
                 continue
             if self.execute_task(t):
                 used[key] = used.get(key, 0) + 1
+
+    def guard_no_commit_loop(self, t: dict[str, Any]) -> bool:
+        """T-0046: the single check for «never run the developer on a task with ≥2 no-commit records», whatever state (ready,
+        in_progress, claimed) or missing role the task was re-readied to. True = the task was stopped and must not be executed."""
+        if (t.get("role") or "developer") == "developer" and no_commit_count(t) >= 2:
+            self.stop_no_commit_loop(t)
+            return True
+        return False
 
     def stop_no_commit_loop(self, t: dict[str, Any]) -> None:
         """T-0043: a developer task that already came back with no commit twice (counted over its whole history) and was re-readied
@@ -576,6 +583,8 @@ class Cycle:
                        "Name the file the developer must change, or make it a check task for the analyst, or close it.", task_id=t["id"], blocks=[t["id"]])
 
     def execute_task(self, t: dict[str, Any]) -> bool:
+        if self.guard_no_commit_loop(t):
+            return False
         run_id = f"{self.cycle_id}-exec-{t['id']}"
         if not self.store.claim(t["id"], str(t.get("role")), run_id):
             return False
