@@ -175,11 +175,16 @@ def log_since(repo_dir: Path, n: int = 10) -> str:
 
 
 RETRIES = 3
+MAX_TRANSIENT = 3  # consecutive transient push/PR failures (each already retried RETRIES times) before the task is blocked (F-0100)
+# "The requested URL returned error: 503", "HTTP Error 502", "HTTP 502", "HTTP/2 504", "status 500", "remote: ... 503"
+_TRANSIENT_RE = re.compile(
+    r"(?:returned error:|\berror:|\bstatus(?: code)?:?|\bHTTP(?:/[\d.]+)?(?: Error:?)?)\s*5\d\d\b"
+    r"|\bremote:[^\n]*\b5\d\d\b", re.I | re.M)
 
 
 def is_transient(exc: BaseException) -> bool:
     """HTTP 5xx from GitHub (API or git over https): the commit is intact, trying again later is safe (F-0100)."""
-    return bool(re.search(r"(HTTP Error|returned error:|error:|status)\s*5\d\d\b", str(exc)))
+    return bool(_TRANSIENT_RE.search(str(exc)))
 
 
 def push_branch(repo_dir: Path, task_id: str) -> str:

@@ -469,3 +469,38 @@ def test_pr_push_5xx_leaves_task_ready_not_blocked(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(gitops, "open_pull_request", lambda *a, **k: (_ for _ in ()).throw(gitops.GitError("HTTP Error 422")))
     cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
     assert cy.store.task(t["id"])["state"] == "blocked"
+
+
+def test_pr_push_5xx_blocks_after_max_consecutive(tmp_path: Path, monkeypatch):
+    """F-0100 / T-0040: a persistent GitHub 5xx must not loop the task through ready forever: block after MAX_TRANSIENT in a row."""
+    st = _settings(tmp_path)
+    p = _product(st)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    t = cy.store.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="test")
+    cy.store.transition(t["id"], "ready", "po")
+    monkeypatch.setattr(gitops, "push_branch", lambda repo, tid: "abc")
+    monkeypatch.setattr(gitops, "changed_files", lambda repo, base: [])
+
+    def boom(*a, **k):
+        raise gitops.GitError("github POST /pulls: HTTP Error 503: Service Unavailable")
+    monkeypatch.setattr(gitops, "open_pull_request", boom)
+    for i in range(gitops.MAX_TRANSIENT - 1):
+        assert cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
+        assert cy.store.task(t["id"])["state"] == "ready", i
+    assert cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
+    final = cy.store.task(t["id"])
+    assert final["state"] == "blocked" and "in a row" in final["history"][-1]["note"]
+
+
+def test_pr_4xx_is_not_retried(tmp_path: Path, monkeypatch):
+    st = _settings(tmp_path)
+    p = _product(st)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    t = cy.store.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="test")
+    cy.store.transition(t["id"], "ready", "po")
+    monkeypatch.setattr(gitops, "push_branch", lambda repo, tid: "abc")
+    monkeypatch.setattr(gitops, "changed_files", lambda repo, base: [])
+    monkeypatch.setattr(gitops, "open_pull_request", lambda *a, **k: (_ for _ in ()).throw(gitops.GitError("HTTP Error 403: Forbidden")))
+    cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
+    assert cy.store.task(t["id"])["state"] == "blocked"
+    assert not any(e["kind"] == "pr.transient_failure" for e in cy.store.events())
