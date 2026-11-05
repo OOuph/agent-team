@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-05
 
+- T-0044: F-0095/F-0096 cause recorded: `repo_only` WAS set on luz-amanha T-0042 (the reviewer ran in `review-T-0042/checkout`); the allowlist then lacked the trailing-flag form `tests.* -v`, which T-0033 (1ed6328, 11-04 08:07) added after the 02:09 denial. Not a matcher bug; test `test_f0095_exact_command_allowed` feeds the exact command through the matcher.
 - T-0043: `previous_no_commit` counts «committed nothing» records over the task's whole history, not only since the last return to `ready`; a developer task with two such records that the PO re-readies is not started: a title starting with `Check:` becomes type `check` for the analyst, anything else goes back to `blocked` with a question (F-0103, F-0104, F-0107–F-0110, F-0112, F-0113).
 - T-0042: PO card: a verification-only task (no repo change needed) goes to the analyst or names the file to change; no zero-commit developer tasks (F-0104, F-0107, F-0109, F-0110, F-0113).
 - T-0041: optional task-result field `no_change_reason`; `done` with no commit, a non-empty reason and self_check evidence goes to `review` (`accepted` for type `check`) with no `no_commit` friction record; without it the T-0038 rule stays (F-0103, F-0104, F-0107–F-0110, F-0112, F-0113).
