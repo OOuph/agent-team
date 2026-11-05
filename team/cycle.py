@@ -557,8 +557,23 @@ class Cycle:
                     "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
                     "detail": "PO: set not_before on this task (or fix the title)."})
                 continue
+            if t.get("state") == "ready" and (t.get("role") or "developer") == "developer" and no_commit_count(t) >= 2:
+                self.stop_no_commit_loop(t)
+                continue
             if self.execute_task(t):
                 used[key] = used.get(key, 0) + 1
+
+    def stop_no_commit_loop(self, t: dict[str, Any]) -> None:
+        """T-0043: a developer task that already came back with no commit twice (counted over its whole history) and was re-readied
+        is not started again: a title `Check: …` becomes a `check` task for the analyst, anything else goes back to `blocked`."""
+        if str(t.get("title") or "").lstrip().lower().startswith("check:"):
+            t["type"], t["role"] = "check", "analyst"
+            self.store.save_task(t)
+            self.store.transition(t["id"], "ready", "dispatcher", "title starts with 'Check:' after repeated no-commit runs: routed to the analyst as type check", force=True)
+            return
+        self.store.transition(t["id"], "blocked", "dispatcher", "re-readied after repeated developer runs that committed nothing: not started; name the file to change or close it", force=True, assignee_run=None)
+        self.store.ask(from_="dispatcher", to="po", question=f"Task {t['id']} returned 'done' without a commit {no_commit_count(t)} times and was re-readied. "
+                       "Name the file the developer must change, or make it a check task for the analyst, or close it.", task_id=t["id"], blocks=[t["id"]])
 
     def execute_task(self, t: dict[str, Any]) -> bool:
         run_id = f"{self.cycle_id}-exec-{t['id']}"
@@ -1092,10 +1107,14 @@ def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
     return out
 
 
+def no_commit_count(t: dict[str, Any]) -> int:
+    """Number of «developer reported done but committed nothing» records in the task's whole history (T-0043)."""
+    return sum(1 for h in (t.get("history") or []) if "committed nothing" in str(h.get("note") or ""))
+
+
 def previous_no_commit(t: dict[str, Any]) -> bool:
-    """True when the last time the task went back to `ready` it was because the developer committed nothing."""
-    back = [h for h in (t.get("history") or []) if h.get("to") == "ready"]
-    return bool(back) and "committed nothing" in str(back[-1].get("note") or "")
+    """True when the task has any earlier no-commit record, however many re-readies lie in between."""
+    return no_commit_count(t) > 0
 
 
 def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:

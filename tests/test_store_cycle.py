@@ -449,6 +449,52 @@ def test_two_done_without_commit_block_task_with_po_question(tmp_path: Path):
     s.close()
 
 
+def _no_commit_setup(tmp_path, title):
+    class NoCommitRunner(FakeRunner):
+        def run(self, role, prompt, schema, **kw):
+            self.n = getattr(self, "n", 0) + 1
+            out = {"status": "done", "summary": "nothing", "changes": [], "how_to_verify": [],
+                   "self_check": [{"criterion": "ok", "met": True, "evidence": "e"}]}
+            return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id="s", duration_s=1.0)
+
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title=title, type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    return st, p, s, t, NoCommitRunner()
+
+
+def _run_dev(st, p, s, r, tid, n):
+    s.claim(tid, "developer", f"run-{n}")
+    s.transition(tid, "claimed", "d", force=True)
+    assert Cycle(st, p, r, f"c{n}").exec_developer(s.task(tid), f"run-{n}")
+
+
+def test_no_commit_history_survives_po_reready(tmp_path: Path):
+    st, p, s, t, r = _no_commit_setup(tmp_path, "Verify things")
+    _run_dev(st, p, s, r, t["id"], 1)
+    _run_dev(st, p, s, r, t["id"], 2)
+    assert s.task(t["id"])["state"] == "blocked"
+    s.transition(t["id"], "ready", "po", "re-scoped", force=True)
+    cy = Cycle(st, p, r, "c3")
+    cy.phase_execute()
+    assert r.n == 2          # no third run
+    assert s.task(t["id"])["state"] == "blocked"
+    s.close()
+
+
+def test_check_title_rerouted_to_analyst(tmp_path: Path):
+    st, p, s, t, r = _no_commit_setup(tmp_path, "Check: the page")
+    _run_dev(st, p, s, r, t["id"], 1)
+    _run_dev(st, p, s, r, t["id"], 2)
+    s.transition(t["id"], "ready", "po", "again", force=True)
+    Cycle(st, p, r, "c3").phase_execute()
+    got = s.task(t["id"])
+    assert r.n == 2 or got["role"] == "analyst"
+    assert got["type"] == "check" and got["role"] == "analyst"
+    s.close()
+
+
 def test_done_without_commit_with_no_change_reason_goes_to_review(tmp_path: Path):
     from team import friction
 
