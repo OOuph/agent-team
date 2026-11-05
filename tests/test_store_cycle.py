@@ -483,6 +483,24 @@ def test_no_commit_history_survives_po_reready(tmp_path: Path):
     s.close()
 
 
+def test_no_commit_guard_any_state_and_execute_task(tmp_path: Path):
+    """T-0046: T-0057 replay — hourly no-commit results, PO re-readies; whatever state, the developer never runs a third time."""
+    for state in ("ready", "in_progress", "claimed"):
+        st, p, s, t, r = _no_commit_setup(tmp_path / state, "Check: the page" if state == "ready" else "Verify things")
+        _run_dev(st, p, s, r, t["id"], 1)
+        _run_dev(st, p, s, r, t["id"], 2)
+        s.transition(t["id"], state, "po", "re-readied", force=True, assignee_run=None)
+        cy = Cycle(st, p, r, "c3")
+        assert not cy.execute_task(s.task(t["id"]))      # direct path: also stopped
+        got = s.task(t["id"])
+        assert r.n == 2, state
+        if state == "ready":
+            assert got["role"] == "analyst" and got["type"] == "check"
+        else:
+            assert got["state"] == "blocked"
+        s.close()
+
+
 def test_check_title_rerouted_to_analyst(tmp_path: Path):
     st, p, s, t, r = _no_commit_setup(tmp_path, "Check: the page")
     _run_dev(st, p, s, r, t["id"], 1)
