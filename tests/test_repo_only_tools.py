@@ -39,3 +39,9 @@ def test_every_prompt_command_is_allowed():
     assert len(cmds) >= 6
     for c in cmds:
         assert _allowed(c), c
+
+
+def test_f0095_exact_command_allowed():
+    # F-0095/F-0096: the reviewer of luz-amanha T-0042 was denied this exact command
+    assert _allowed("python3 -m unittest tests.test_offline_build -v")
+    assert _allowed("python3 -m unittest tests.test_offline_build")
