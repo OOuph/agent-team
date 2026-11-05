@@ -449,6 +449,27 @@ def test_two_done_without_commit_block_task_with_po_question(tmp_path: Path):
     s.close()
 
 
+def test_done_without_commit_with_no_change_reason_goes_to_review(tmp_path: Path):
+    from team import friction
+
+    class ReasonRunner(FakeRunner):
+        def run(self, role, prompt, schema, **kw):
+            out = {"status": "done", "summary": "already satisfied", "changes": [], "how_to_verify": [], "no_change_reason": "field exists",
+                   "self_check": [{"criterion": "page ok", "met": True, "evidence": "grep shows line 3"}]}
+            return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id="s", duration_s=1.0)
+
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    s.claim(t["id"], "developer", "run-1")
+    s.transition(t["id"], "claimed", "d", force=True)
+    assert Cycle(st, p, ReasonRunner(), "c1").exec_developer(s.task(t["id"]), "run-1")
+    assert s.task(t["id"])["state"] == "review"
+    assert not [r for r in friction.collect_product(p, s) if r["kind"] == "no_commit"]
+    s.close()
+
+
 def test_pr_push_5xx_leaves_task_ready_not_blocked(tmp_path: Path, monkeypatch):
     """F-0100: three 502s from GitHub must not block the task: the commit is intact, so it returns to ready with an event."""
     st = _settings(tmp_path)

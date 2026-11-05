@@ -63,6 +63,11 @@
     }
    }
   },
+  "no_change_reason": {
+   "type": "string",
+   "maxLength": 600,
+   "description": "status=done with no commits: why nothing needed to change (already satisfied); required then, with self_check evidence"
+  },
   "question": {
    "type": "string",
    "maxLength": 800,
