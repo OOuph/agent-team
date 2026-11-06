@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -41,6 +42,14 @@ def read_lessons(product: Product) -> list[str]:
     return [ln[2:].strip() for ln in p.read_text(encoding="utf-8").splitlines() if ln.startswith("- ")]
 
 
+_LABEL_RE = re.compile(r"\bAI[- ](label|disclosure|generated|agents?)\b|\bdisclosure\b|\bdisclos|\bAI label|\blabel\b.*\b(AI|agents?)\b|\b(AI|agents?)\b.*\blabel\b|made by AI", re.I)
+
+
+def is_label_lesson(text: str) -> bool:
+    """team-publish appends the AI disclosure itself; a lesson about it only makes the marketer duplicate it (F-0121, F-0122)."""
+    return bool(_LABEL_RE.search(text))
+
+
 def add_lessons(product: Product, lessons: list[str], by: str) -> int:
     have = {x.lower() for x in read_lessons(product)}
     p = lessons_path(product)
@@ -51,7 +60,7 @@ def add_lessons(product: Product, lessons: list[str], by: str) -> int:
     with p.open("a", encoding="utf-8") as fh:
         for ls in lessons:
             t = " ".join(str(ls).split())[:300]
-            if not t or t.lower() in have or len(have) >= MAX_LESSONS:
+            if not t or is_label_lesson(t) or t.lower() in have or len(have) >= MAX_LESSONS:
                 continue
             fh.write(f"- {t} _({by}, {day})_\n")
             have.add(t.lower())

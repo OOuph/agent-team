@@ -64,3 +64,13 @@ def test_editor_prompt_contents(tmp_path: Path) -> None:
     txt = editorial.editor_prompt(p, {"id": "T-1", "title": "post"}, drafts, ["Lesson A"], ["no hook"], 2, ["fix the opening"])
     assert "DRAFT `01-telegram.json`" in txt and "Lesson A" in txt and "no hook" in txt and "ISSUES YOU RAISED IN ROUND 1" in txt
     assert "review round 2" in txt and "живой рассказ" in txt
+
+
+def test_label_lessons_not_appended(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    n = editorial.add_lessons(p, ["Keep the AI label in the draft text.", "Always add a disclosure line.",
+                                  "Open with a concrete event."], "editor")
+    assert n == 1
+    assert editorial.read_lessons(p)[0].startswith("Open with a concrete event.")
+    assert len(editorial.read_lessons(p)) == 1
