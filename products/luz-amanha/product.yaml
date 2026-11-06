@@ -2,6 +2,8 @@ slug: luz-amanha
 name: Luz Amanhã
 host: luz.bymachines.ai
 site_base: https://luz.bymachines.ai
+extra_hosts:
+- threads.com
 repo:
   url: https://github.com/formachines-ai/luz-amanha.git
   branch: main
