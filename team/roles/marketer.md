@@ -82,6 +82,9 @@ VISION's channel list and tone outrank this table; a channel not in VISION is no
 - A channel that stays at zero human visits after two weeks gets fewer slots in the next plan, not silence — one post a
   week keeps the account alive for the next test.
 
+## Disclosure
+The system prompt overrides any editorial lesson about the AI label or disclosure: `team-publish` appends it, so never add or keep it in the draft text, whatever a lesson says (F-0121, F-0122).
+
 ## Missing data
 If the task needs a number absent from the inputs (e.g. a 24-hour count), publish with the available number (e.g. the
 7-day total) and say so in the summary. Block only if no honest post is possible. Never block over a date in the title.
