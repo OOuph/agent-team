@@ -589,3 +589,12 @@ def test_pr_4xx_is_not_retried(tmp_path: Path, monkeypatch):
     cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": "s"})
     assert cy.store.task(t["id"])["state"] == "blocked"
     assert not any(e["kind"] == "pr.transient_failure" for e in cy.store.events())
+
+
+def test_diary_product_extra_hosts(tmp_path: Path):
+    root = Path(__file__).resolve().parent.parent
+    st = _settings(tmp_path)
+    p = C.load_product(st, root / "products" / "agent-team-diary")
+    hosts = Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
+    for h in ("bymachines.ai", "releases.formachines.ai", "agentsmd.formachines.ai", "luz.bymachines.ai"):
+        assert h in hosts
