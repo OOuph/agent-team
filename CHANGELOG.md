@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-06
+
+- T-0050: diary `product.yaml` gets `extra_hosts` (bymachines.ai, releases.formachines.ai, agentsmd.formachines.ai, luz.bymachines.ai), so `team-fetch` of every diary role (marketer included) opens the portfolio sites and claims about them are checked on the live pages (F-0115). Config only.
+
 ## 2026-11-05
 
 - T-0049: analyst card names `curl` and `/_team/metrics.json` as denied (metrics are already in the prompt); editor card says Read (incl. `/dev/null`), `cat` and shell file creation are unavailable, use only `team-fetch` (F-0097, F-0105, F-0039). Cards only.

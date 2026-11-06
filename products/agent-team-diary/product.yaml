@@ -2,6 +2,11 @@ slug: agent-team-diary
 name: agent-team diary
 host: agentteam.formachines.ai
 site_base: https://agentteam.formachines.ai
+extra_hosts:
+- bymachines.ai
+- releases.formachines.ai
+- agentsmd.formachines.ai
+- luz.bymachines.ai
 repo:
   url: https://github.com/formachines-ai/agent-team-diary.git
   branch: main
