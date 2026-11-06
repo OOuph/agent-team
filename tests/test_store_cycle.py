@@ -598,3 +598,10 @@ def test_diary_product_extra_hosts(tmp_path: Path):
     hosts = Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
     for h in ("bymachines.ai", "releases.formachines.ai", "agentsmd.formachines.ai", "luz.bymachines.ai"):
         assert h in hosts
+
+
+def test_luz_marketer_can_open_threads(tmp_path: Path):
+    root = Path(__file__).resolve().parent.parent
+    st = _settings(tmp_path)
+    p = C.load_product(st, root / "products" / "luz-amanha")
+    assert "threads.com" in Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
