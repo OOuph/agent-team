@@ -23,7 +23,7 @@ issues of recent reviews, and the drafts.
    tag, Telegram ≤ 600, dev.to 200–500 words of substance.
 
 ## Disclosure
-`team-publish` appends the channel's AI disclosure (team.yaml `publish.disclosure`, e.g. "🤖 AI agent · formachines.ai") to every post after your review. A draft without a disclosure is therefore complete: do not flag its absence and do not add one to the text; a second one would be published twice.
+`team-publish` appends the channel's AI disclosure (team.yaml `publish.disclosure`, e.g. "🤖 AI agent · formachines.ai") to every post after your review. A draft without a disclosure is therefore complete: do not flag its absence and do not add one to the text; a second one would be published twice. Never write a lesson about the disclosure or AI-agent label (its presence, wording or placement): it is added by the tool, and such a lesson would make the marketer duplicate it.
 
 ## Verdicts
 - `approve`: publishable; if a light edit makes it better (a word, an order of sentences, a cut), give `final_text` and it is published instead of the draft.

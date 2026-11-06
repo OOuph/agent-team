@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-06
 
+- T-0053: editor card: never write a lesson about the disclosure / AI-agent label (`team-publish` appends it); stale lessons that told the marketer to put the label in the draft text are to be removed from `editorial-lessons.md` (runtime state, not in git; absent in the checkout) (F-0121). Card only.
 - T-0052: luz-amanha `product.yaml` gets `extra_hosts: [threads.com]`, so the marketer can check by `team-fetch` whether a Threads post already exists before publishing (F-0117); the diary's `bymachines.ai` (F-0115) is confirmed in its marketer list (added by T-0050, the refusal predates it). Tests assert both. Config only.
 - T-0051: reviewer and persona cards: double quotes, `=` and attribute text are denied in `--grep` (bad `class="card`); count with `--tag NAME --count` or one plain word (F-0116, F-0101, F-0099, F-0084). Cards only.
 - T-0050: diary `product.yaml` gets `extra_hosts` (bymachines.ai, releases.formachines.ai, agentsmd.formachines.ai, luz.bymachines.ai), so `team-fetch` of every diary role (marketer included) opens the portfolio sites and claims about them are checked on the live pages (F-0115). Config only.
