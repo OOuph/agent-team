@@ -147,3 +147,20 @@ def test_answer_with_not_before_reschedules(tmp_path: Path) -> None:
     t2 = s.task(t["id"])
     assert t2["state"] == "ready" and t2["not_before"] == "2099-01-01T04:15:00+00:00"
     s.close()
+
+
+def test_retro_spend_section(tmp_path: Path) -> None:
+    from datetime import datetime, timezone
+    st = _settings(tmp_path)
+    now = datetime(2026, 11, 7, tzinfo=timezone.utc)
+    md, ok = retro.spend_section(st, now=now, cap=5.0)
+    assert not ok and "spend: n/a" in md and "$" not in md.split("n/a")[0].split("## Spend")[1]
+    (st.data_dir / "framework").mkdir(parents=True, exist_ok=True)
+    from team import billing
+    billing._path(st).write_text(json.dumps({"spend": {"2026-11-07": 4.5, "2026-11-06": 1.0, "2026-10-01": 9.0}}), encoding="utf-8")
+    md, ok = retro.spend_section(st, now=now, cap=5.0)
+    assert ok
+    assert "| 2026-11-07 | $4.50 | $5.00 | 90 % | OVER 80% |" in md
+    assert "| 2026-11-06 | $1.00 | $5.00 | 20 % |  |" in md
+    assert "2026-11-05 | n/a" in md and "2026-10-01" not in md
+    assert "over 80 % of the cap: 1" in md
