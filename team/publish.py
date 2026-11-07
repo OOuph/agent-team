@@ -54,6 +54,7 @@ THREADS_API = "https://graph.threads.net/v1.0"
 THREADS_MAX_CHARS = 500
 THREADS_PUBLISH_RETRIES = 4           # a fresh container may answer "not ready" for a few seconds
 THREADS_RETRY_SLEEP_S = 3
+THREADS_LOOKUP_LIMIT = 100           # reply_to by link: our own recent posts are searched by permalink
 THREADS_REFRESH_URL = "https://graph.threads.net/refresh_access_token"
 X_API = "https://api.x.com/2/tweets"
 X_MAX_WEIGHT = 280                    # X counts in weighted units: most CJK/emoji count 2, every link counts 23
@@ -269,8 +270,29 @@ def _telegram(text: str, target: str | None, url: str | None, disclosure: str, e
     return PostResult(True, "telegram", str(mid) if mid is not None else None, link, None, False)
 
 
+_BSKY_WEB_RE = re.compile(r"^https?://(?:www\.)?bsky\.app/profile/([^/]+)/post/([A-Za-z0-9]+)/?$")
+_THREADS_WEB_RE = re.compile(r"^https?://(?:www\.)?threads\.(?:com|net)/@?[^/]+/post/([A-Za-z0-9_-]+)")
+
+
+def bluesky_at_uri(http: HttpFn, ref: str) -> str:
+    """A bsky.app post link becomes its at:// uri (the handle is resolved to a DID); an at:// uri passes through.
+    07.11 T-0057: the marketer passed the web link, getPosts answered 400 and the correction reply never went out."""
+    m = _BSKY_WEB_RE.match(ref.strip())
+    if not m:
+        return ref.strip()
+    actor, rkey = m.groups()
+    if not actor.startswith("did:"):
+        data = _call_json(http, "GET", f"{BLUESKY_PUBLIC_API}/xrpc/com.atproto.identity.resolveHandle?handle={urllib.parse.quote(actor, safe='')}",
+                          None, {}, [], "bluesky.resolveHandle")
+        actor = str(data.get("did") or "")
+        if not actor:
+            raise PublishError(f"bluesky.resolveHandle: no did for {m.group(1)}")
+    return f"at://{actor}/{BLUESKY_POST_COLLECTION}/{rkey}"
+
+
 def bluesky_reply_ref(http: HttpFn, parent_uri: str) -> dict[str, Any]:
     """{"root": {uri,cid}, "parent": {uri,cid}} for a reply to ``parent_uri`` (public API, no auth)."""
+    parent_uri = bluesky_at_uri(http, parent_uri)
     data = _call_json(http, "GET", f"{BLUESKY_PUBLIC_API}/xrpc/app.bsky.feed.getPosts?uris={urllib.parse.quote(parent_uri, safe='')}",
                       None, {}, [], "bluesky.getPosts")
     posts = data.get("posts") or []
@@ -371,12 +393,14 @@ def _threads(text: str, url: str | None, disclosure: str, env: dict[str, str], d
     body = compose(text, disclosure, url, limit=THREADS_MAX_CHARS, counter="chars")
     form = {"media_type": "TEXT", "text": body}
     if reply_to:
-        form["reply_to_id"] = reply_to
+        form["reply_to_id"] = reply_to.strip()
     if dry_run:
         _print_dry_run("threads", form)
         return PostResult(True, "threads", None, None, None, True)
     sec = _require(env, SECRET_KEYS["threads"])
     uid, tok = sec["THREADS_USER_ID"].strip(), sec["THREADS_ACCESS_TOKEN"].strip()
+    if reply_to and _THREADS_WEB_RE.match(reply_to.strip()):
+        form["reply_to_id"] = threads_media_id(http, uid, tok, reply_to)
     created = _call_json(http, "POST", f"{THREADS_API}/{uid}/threads", None, {}, [tok], "threads.create",
                          form={**form, "access_token": tok})
     cid = created.get("id")
@@ -404,6 +428,20 @@ def _threads(text: str, url: str | None, disclosure: str, env: dict[str, str], d
         except PublishError as e:  # the post is out; a missing link is not a failure
             log.warning("threads: published %s but permalink failed: %s", mid, e)
     return PostResult(True, "threads", str(mid) if mid else None, link, None, False)
+
+
+def threads_media_id(http: HttpFn, uid: str, tok: str, link: str) -> str:
+    """The media id of one of our own posts from its threads.com link: the API has no lookup by shortcode, so our
+    recent posts are listed and matched by permalink. 07.11 T-0057: a link as reply_to_id gave HTTP 500."""
+    m = _THREADS_WEB_RE.match(link.strip())
+    code = m.group(1) if m else ""
+    q = urllib.parse.urlencode({"fields": "id,permalink", "limit": THREADS_LOOKUP_LIMIT, "access_token": tok})
+    data = _call_json(http, "GET", f"{THREADS_API}/{uid}/threads?{q}", None, {}, [tok, urllib.parse.quote(tok, safe="")],
+                      "threads.lookup")
+    for item in data.get("data") or []:
+        if code and f"/post/{code}" in str(item.get("permalink") or ""):
+            return str(item.get("id"))
+    raise PublishError(f"threads.lookup: {code or link} is not among our last {THREADS_LOOKUP_LIMIT} posts")
 
 
 def threads_refresh_token(token: str, http: HttpFn | None = None) -> tuple[str, int]:
@@ -702,7 +740,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="team-publish", description=__doc__.splitlines()[0])
     p.add_argument("--channel", required=True, choices=CHANNELS)
     p.add_argument("--target", help="telegram: chat id or @channel; github: issue url")
-    p.add_argument("--reply-to", help="bluesky: at:// uri; threads: media id; x: post id or url — of the post to reply to")
+    p.add_argument("--reply-to", help="bluesky: at:// uri or bsky.app link; threads: media id or threads.com link of our post; x: post id or url — of the post to reply to")
     src = p.add_mutually_exclusive_group(required=True)
     src.add_argument("--text-file", type=Path)
     src.add_argument("--text")

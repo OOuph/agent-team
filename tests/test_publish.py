@@ -117,6 +117,27 @@ def test_bluesky_url_argument_becomes_facet():
     assert record["facets"][0]["index"] == {"byteStart": 10, "byteEnd": 10 + len("https://formachines.ai/errata/")}
 
 
+def test_bluesky_reply_to_web_link_becomes_at_uri():
+    # 07.11 T-0057: the bsky.app link went to getPosts as is and got HTTP 400
+    parent = {"uri": "at://did:plc:me/app.bsky.feed.post/3mzn", "cid": "pc", "record": {}}
+    http = FakeHttp({"resolveHandle": (200, {"did": "did:plc:me"}), "getPosts": (200, {"posts": [parent]}), **BSKY_ROUTES})
+    r = post("bluesky", "Correction", disclosure=DISC, env=BSKY_ENV, http=http,
+             reply_to="https://bsky.app/profile/formachines.bsky.social/post/3mzn")
+    assert r.ok
+    res, get = http.calls[0], http.calls[1]
+    assert "handle=formachines.bsky.social" in res["url"]
+    assert publish.urllib.parse.quote("at://did:plc:me/app.bsky.feed.post/3mzn", safe="") in get["url"]
+    reply = http.calls[-1]["json"]["record"]["reply"]
+    assert reply == {"root": {"uri": parent["uri"], "cid": "pc"}, "parent": {"uri": parent["uri"], "cid": "pc"}}
+
+
+def test_bluesky_at_uri_passes_through_and_did_link_skips_resolve():
+    http = FakeHttp()
+    assert publish.bluesky_at_uri(http, "at://did:plc:x/app.bsky.feed.post/1") == "at://did:plc:x/app.bsky.feed.post/1"
+    assert publish.bluesky_at_uri(http, "https://bsky.app/profile/did:plc:x/post/2") == "at://did:plc:x/app.bsky.feed.post/2"
+    assert http.calls == []
+
+
 def test_bluesky_session_failure():
     http = FakeHttp({"createSession": (401, {"error": "AuthenticationRequired", "message": "Invalid identifier or password"})})
     r = post("bluesky", "x", disclosure=DISC, env=BSKY_ENV, http=http)
@@ -181,6 +202,35 @@ def test_threads_publish_retries_then_fails_without_token_in_error(monkeypatch):
     r = post("threads", "x", disclosure=DISC, env=TH_ENV, http=http)
     assert not r.ok and "threads.publish" in r.error and "HTTP 400" in r.error and "THTOK" not in r.error
     assert len(slept) == publish.THREADS_PUBLISH_RETRIES and len(http.calls) == 1 + publish.THREADS_PUBLISH_RETRIES
+
+
+def test_threads_reply_to_link_becomes_media_id(monkeypatch):
+    # 07.11 T-0057: a threads.com link went out as reply_to_id and Threads answered 500
+    monkeypatch.setattr(publish.time, "sleep", lambda s: None)
+    http = FakeHttp({"/1789/threads?fields": (200, {"data": [{"id": "M1", "permalink": "https://www.threads.com/@formachines/post/Zz"},
+                                                             {"id": "M2", "permalink": "https://www.threads.com/@formachines/post/DfaG_0FDBtN"}]}),
+                     "/1789/threads_publish": (200, {"id": "M56"}), "/1789/threads": (200, {"id": "C2"}),
+                     "/M56?fields=permalink": (200, {"permalink": "https://www.threads.com/@formachines/post/New"})})
+    r = post("threads", "Correction", disclosure=DISC, env=TH_ENV, http=http,
+             reply_to="https://www.threads.com/@formachines/post/DfaG_0FDBtN")
+    assert r.ok and r.post_id == "M56"
+    lookup, create = http.calls[0], http.calls[1]
+    assert lookup["method"] == "GET" and "/1789/threads?" in lookup["url"]
+    assert dict(publish.urllib.parse.parse_qsl(create["raw"].decode()))["reply_to_id"] == "M2"
+
+
+def test_threads_reply_to_unknown_link_fails_without_token():
+    http = FakeHttp({"/1789/threads?fields": (200, {"data": [{"id": "M1", "permalink": "https://www.threads.com/@formachines/post/Zz"}]})})
+    r = post("threads", "x", disclosure=DISC, env=TH_ENV, http=http, reply_to="https://www.threads.net/@formachines/post/Missing")
+    assert not r.ok and "Missing" in r.error and "THTOK" not in r.error and len(http.calls) == 1
+
+
+def test_threads_reply_to_media_id_passes_through(monkeypatch):
+    monkeypatch.setattr(publish.time, "sleep", lambda s: None)
+    http = FakeHttp({"/1789/threads_publish": (200, {"id": "M57"}), "/1789/threads": (200, {"id": "C3"}),
+                     "/M57?fields=permalink": (200, {"permalink": "p"})})
+    r = post("threads", "x", disclosure=DISC, env=TH_ENV, http=http, reply_to="17900000000000001")
+    assert r.ok and dict(publish.urllib.parse.parse_qsl(http.calls[0]["raw"].decode()))["reply_to_id"] == "17900000000000001"
 
 
 def test_threads_limit_500_chars():
