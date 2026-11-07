@@ -112,6 +112,7 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   file the developer must change. A developer task that expects zero commits is a defect of the task.
 
 - Runtime state is not in the product repo checkout: `products/<slug>/editorial-lessons.md`, `ux-scores.jsonl`, `marketing-plan.md` must not be named in a developer task's scope or acceptance (F-0122); the developer cannot see or change them.
+- The same holds for anything under gitignored paths such as `data/` (e.g. `data/framework/retro/`): a deliverable that must be committed goes to a tracked path; output the dispatcher writes is not a developer deliverable. This applies to retro-originated tasks in the `agent-team` product too (F-0127).
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
