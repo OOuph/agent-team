@@ -21,14 +21,14 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, prompts, publish
+from . import geo, gitops, hypothesis, prompts, publish, voice
 from .config import Product, Settings
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 
 log = logging.getLogger("team.cycle")
 
-PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "digest")
+PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "voice", "digest")
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
 # reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
@@ -453,6 +453,7 @@ class Cycle:
             deputy.run_for_product(self)          # owner away: answer owner questions by mandate before the PO reads them
         except Exception as exc:  # noqa: BLE001
             log.exception("%s: deputy failed: %s", self.p.slug, exc)
+        self.hand_over_readouts()
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])
@@ -492,7 +493,20 @@ class Cycle:
             t = self.store.task(str(c.get("task_id")))
             if t and t.get("state") in CLOSABLE_BY_PO:
                 self.store.transition(t["id"], "rejected", "po", f"closed by PO: {c.get('reason', '')[:300]}", force=True)
-        skipped = []
+        skipped, held = [], []
+        for pr in res.get("promote_tasks") or []:
+            t = self.store.task(str(pr.get("task_id")))
+            if not t or t.get("state") not in ("proposed", "ready", "deferred"):
+                continue
+            t["hypothesis"] = pr.get("hypothesis")
+            problems = self.hypothesis_problems(t)
+            t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t["state"], "to": t["state"],
+                                                "note": "hypothesis set" + (f"; rule not met: {'; '.join(problems)}" if problems else "")})
+            self.store.save_task(t)
+            if problems:
+                held.append(f"{t['id']} stays {t['state']}: {'; '.join(problems)[:160]}")
+            elif t["state"] != "ready":
+                self.store.transition(t["id"], "ready", "po", "hypothesis rule met", force=True)
         for rt in res.get("ready_tasks") or []:
             dup = duplicate_task(self.store.tasks(OPEN_TASK_STATES), rt)
             if dup:
@@ -508,11 +522,20 @@ class Cycle:
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
+            if rt.get("hypothesis") or hypothesis.applies(new):
+                new["hypothesis"] = rt.get("hypothesis")
+                self.store.save_task(new)
+                problems = self.hypothesis_problems(new)
+                if problems:                          # owner 07.11: no real evidence → the feature waits as an idea
+                    self.store.transition(new["id"], "proposed", "dispatcher", f"hypothesis rule: {'; '.join(problems)}"[:500], force=True)
+                    held.append(f"{new['id']} → proposed: {'; '.join(problems)[:160]}")
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         digest = res.get("digest_md", "")
         if skipped:
             digest += "\n\n_Диспетчер не создал дубли (задача уже открыта): " + "; ".join(skipped) + "._"
+        if held:
+            digest += "\n\n_Правило гипотез (фича без доказательств от живых людей ждёт в proposed): " + "; ".join(held) + "._"
         (self.p.dir / "digests" / f"{self.cycle_id}.md").write_text(f"# PO digest {self.cycle_id}\n\n{digest}\n", encoding="utf-8")
 
     # execute: one ready task → developer / marketer / analyst ------------------------------------
@@ -550,6 +573,11 @@ class Cycle:
                 continue        # scheduled for later (daily posts): the PO set not_before
             if t.get("state") == "ready" and unmet_dependencies(self.store, t):
                 continue        # `depends_on`: a dependency is not done yet or its result is a stub
+            if t.get("state") == "ready" and hypothesis.applies(t):
+                problems = self.hypothesis_problems(t)
+                if problems:    # owner 07.11: a feature without real evidence does not start; the PO promotes it with one
+                    self.store.transition(t["id"], "proposed", "dispatcher", f"hypothesis rule: {'; '.join(problems)}"[:500], force=True)
+                    continue
             if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
                 self.store.add_observation({
                     "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
@@ -1056,6 +1084,34 @@ class Cycle:
             f"# GEO probe {day}\n\n{rr.structured.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump(m, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
         for card in geo.to_observations(rr.structured, self.p.slug):
             self.store.add_observation({**card, "run_id": f"{self.cycle_id}-geo"})
+
+    # voice: weekly voice-of-user research ---------------------------------------------------------
+
+    def phase_voice(self) -> None:
+        if not voice.due(self.p.dir, int(self.st.cycle.get("voice_every_h", voice.EVERY_H_DEFAULT)), _now()):
+            return
+        prompt = voice.build_prompt(str(self.p.raw.get("name") or self.p.slug), self.p.site_base, self.p.vision(),
+                                    voice.topics_for(self.p.raw), voice.latest(self.p.dir))
+        rr = self.role_run(voice.ROLE, prompt, voice.SCHEMA, cwd=self.p.work_dir / self.cycle_id / "voice", label="voice",
+                           cap=float(self.st.cycle.get("voice_cap_usd", 3.0)), allowed_tools=["WebSearch", "WebFetch"], max_turns=60)
+        if rr is None or not (rr.ok and rr.structured):
+            return
+        day = _now().strftime("%Y-%m-%d")
+        voice.save(self.p.dir, rr.structured, day, utcnow())
+        for card in voice.to_observations(rr.structured, self.p.slug, day):
+            self.store.add_observation({**card, "run_id": f"{self.cycle_id}-voice"})
+
+    def hypothesis_problems(self, t: dict[str, Any]) -> list[str]:
+        obs = {o["id"]: o for o in self.store.observations()}
+        return hypothesis.check(t, voice_ids=voice.known_evidence_ids(self.p.dir), observations=obs, site_bases=[self.p.site_base],
+                                today=_now().date())
+
+    def hand_over_readouts(self) -> None:
+        """A finished feature whose hypothesis is due gets one readout card for the PO (confirmed / refuted / too few people)."""
+        for t in hypothesis.readouts_due(self.store.tasks(list(hypothesis.READ_STATES)), _now().date()):
+            self.store.add_observation({**hypothesis.readout_card(t, self.p.slug), "run_id": f"{self.cycle_id}-triage"})
+            t["hypothesis_readout"] = utcnow()
+            self.store.save_task(t)
 
     def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]

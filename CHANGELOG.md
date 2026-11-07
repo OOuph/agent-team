@@ -5,6 +5,12 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-07
+
+- Voice of the user (owner 07.11: «голос пользователя — часть фреймворка, нужен для любого продукта»): new role `voice` (Opus, WebSearch/WebFetch), phase `voice` weekly (`cycle.voice_every_h: 168`), topics from `product.yaml: voice_topics` or per-product defaults; report `products/<slug>/voice/<day>.json|md`, one `voice` observation per sourced pain (`voice:<day>:P#`), a VOICE OF THE USER block in the PO prompt (`team/voice.py`, `team/roles/voice.md`, `voice-report` schema).
+- Hypothesis rule (owner 07.11): a PO `feature` carries `hypothesis` (who, pain, evidence, change, expected effect, metric, min_sample, read_on, score); without evidence from real people it is created in `proposed`, and a Ready feature without one goes back to `proposed` before it starts; `promote_tasks` lifts it; a due `read_on` gives the PO one `hypothesis_readout` card. Defects, content, marketing, analyst, owner and retro tasks are outside (`team/hypothesis.py`, PO card, po-decision schema). Generic dispatcher tests now use type `defect` for their PO tasks, since the rule would hold a bare `feature`.
+- `team-publish --reply-to` accepts bsky.app and threads.com links (resolved to the at:// uri / our media id); real send errors reach the PO's question; a saved draft is no longer reported as dry-run (T-0057: the correction under Pivots 2/7 failed twice and was closed as «dry-run»).
+
 ## 2026-11-06
 
 - T-0054: `add_lessons` drops lessons about the AI label / disclosure at write time (`team-publish` appends it); marketer card: the system prompt overrides any lesson on disclosure; PO card: runtime files (`editorial-lessons.md`, `ux-scores.jsonl`, `marketing-plan.md`) are not in the product checkout and never go into developer task scope (F-0121, F-0122).

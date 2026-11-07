@@ -193,7 +193,7 @@ def test_po_duplicate_tasks_skipped_and_close_tasks(tmp_path: Path):
     assert sum(1 for e in s.events() if e["kind"] == "task.duplicate_skipped") == 3
     assert "не создал дубли" in (p.dir / "digests" / "c1.md").read_text(encoding="utf-8")
     # a developer task with the same not_before is a different slot
-    cy.apply_po({"ready_tasks": [{**base, "role": "developer", "type": "feature", "title": "Verify build", "not_before": "2026-11-03T14:05:00Z"}],
+    cy.apply_po({"ready_tasks": [{**base, "role": "developer", "type": "defect", "title": "Verify build", "not_before": "2026-11-03T14:05:00Z"}],
                  "digest_md": "d"}, [])
     assert len(s.tasks(["ready"])) == 3
     # close_tasks → rejected; an in_progress task is not closable
@@ -218,7 +218,7 @@ def test_execute_slots_per_role(tmp_path: Path, monkeypatch):
     st.raw["cycle"]["execute_slots"] = {"developer": 1, "marketer": 1}
     p = _product(st)
     s = Store(p.dir)
-    base = dict(type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    base = dict(type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     d1 = s.create_task(title="dev P1", priority="P1", role="developer", **base)
     d2 = s.create_task(title="dev P2", priority="P2", role="developer", **base)
     m = s.create_task(title="post", priority="P3", role="marketer", **base)
@@ -236,7 +236,7 @@ def test_content_without_post_guard(tmp_path: Path):
     s = Store(p.dir)
     cy = Cycle(st, p, FakeRunner(), "c1")
     m = s.create_task(title="post", type_="marketing", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="marketer")
-    d = s.create_task(title="code", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    d = s.create_task(title="code", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     assert cy.content_without_post(m) and not cy.content_without_post(d)
     s.record_post("telegram", "1", "https://t.me/x/1", m["id"])
     assert not cy.content_without_post(m)
@@ -275,7 +275,7 @@ def test_canary_runs_dry_on_a_state_copy(tmp_path: Path):
     (st.root / "team.yaml").write_text("paths:\n  products_dir: products\n  data_dir: data\n  repos_dir: data/repos\n", encoding="utf-8")
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title="live task", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    t = s.create_task(title="live task", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     n_events = len(s.events())
     s.close()
     cy = Cycle(st, p, FakeRunner(), "c9")
@@ -366,7 +366,7 @@ def test_two_partials_same_friction_block_and_ask_po(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    t = s.create_task(title="t", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
     r = PartialRunner()
     for i in (1, 2):
         Cycle(st, p, r, f"c{i}").phase_execute()
@@ -393,7 +393,7 @@ def test_partial_without_commits_still_blocks_on_second_attempt(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    t = s.create_task(title="t", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
     r = NoCommitPartialRunner()
     for i in (1, 2, 3):
         Cycle(st, p, r, f"c{i}").phase_execute()
@@ -405,8 +405,8 @@ def test_depends_on_gates_start(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    dep = s.create_task(title="dep", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
-    t = s.create_task(title="t", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready",
+    dep = s.create_task(title="dep", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready", role="developer")
+    t = s.create_task(title="t", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready",
                       role="developer", depends_on=[dep["id"]])
     from team import cycle as C
     assert C.unmet_dependencies(s, s.task(t["id"])) == [dep["id"]]
@@ -433,7 +433,7 @@ def test_two_done_without_commit_block_task_with_po_question(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    t = s.create_task(title="x", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     for n in (1, 2):
         cy = Cycle(st, p, NoCommitRunner(), f"c{n}")
         s.claim(t["id"], "developer", f"run-{n}")
@@ -460,7 +460,7 @@ def _no_commit_setup(tmp_path, title):
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title=title, type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    t = s.create_task(title=title, type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     return st, p, s, t, NoCommitRunner()
 
 
@@ -525,7 +525,7 @@ def test_done_without_commit_with_no_change_reason_goes_to_review(tmp_path: Path
     st = _settings(tmp_path)
     p = _product(st)
     s = Store(p.dir)
-    t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    t = s.create_task(title="x", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
     s.claim(t["id"], "developer", "run-1")
     s.transition(t["id"], "claimed", "d", force=True)
     assert Cycle(st, p, ReasonRunner(), "c1").exec_developer(s.task(t["id"]), "run-1")

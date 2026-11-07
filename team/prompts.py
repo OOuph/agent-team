@@ -24,7 +24,11 @@ def _y(obj: Any) -> str:
 def _task_brief(t: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "repo_only", "not_before", "blocked_by", "problem", "scope",
             "acceptance", "negative_cases", "observations", "links", "review_fails", "created")
-    return {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
+    out = {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
+    if t.get("hypothesis"):
+        from . import hypothesis
+        out["hypothesis"] = hypothesis.brief(t["hypothesis"])
+    return out
 
 
 def _tail(s: str, n: int) -> str:
@@ -51,9 +55,18 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
             + (("\n\n# FRAMEWORK CONTEXT (this product is the framework itself)\n" + fw_txt) if fw_txt else "")
             + (("\n\n" + mkt_txt) if mkt_txt else "")
+            + "\n\n# VOICE OF THE USER (weekly research: real people's words about the problem)\n" + _voice_block(product)
             + "\n\n# READER EXPERIENCE (personas, scores 1–5)\n" + _ux_block(product)
             + "\n\n# NEW OBSERVATIONS\n" + obs_txt
             + "\n\n# LATEST METRICS\n" + (_tail(metrics_md, 6000) or "(no metrics yet)") + "\n")
+
+
+def _voice_block(product: Product) -> str:
+    from . import voice
+    try:
+        return voice.prompt_block(product.dir)
+    except Exception:  # noqa: BLE001
+        return "(unavailable)"
 
 
 def _ux_block(product: Product) -> str:

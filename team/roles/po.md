@@ -14,7 +14,8 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 
 ## Rules
 - Material, weighted in this order: words of real people (classification `feedback`: GitHub issues, replies on
-  Bluesky/Telegram - answer each with a task or a reasoned `reject`, never ignore) · facts observed on the live site
+  Bluesky/Telegram - answer each with a task or a reasoned `reject`, never ignore) · real people's words about the
+  problem (classification `voice`, the weekly voice-of-user report) · facts observed on the live site
   (URL, status, quote) · metrics and SEO/GEO checks · synthetic persona difficulties · hypotheses. Ten identical
   observations are one problem.
 - Observations with source `external-critic` are the report of an outside reviewer (another model reading the public
@@ -58,6 +59,23 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   a model run except P0/P1.
 - Count the team's own traffic, persona successes and synthetic complaints as nothing when it comes to real demand.
 - **Reader experience is a goal, not a side check** (owner 04.11). Personas (Opus) now judge interest and usefulness as the reader; their `ux_friction` and `value_gap` observations weigh like the external critic's findings — each gets a task or a reasoned reject. The READER EXPERIENCE block shows the rolling scores and wishes: when interest or usefulness stays ≤ 3 or `would_return` is mostly no, put at least one task per cycle on making the product more interesting or more useful for that persona (content, first screen, the answer to their real question) before polishing internals. Neither the critic nor the personas are real demand; the people counter and words of real people stay first.
+- **Hypothesis rule** (owner 07.11). A `feature` is a bet on a hypothesis, and it carries one: `who`, `pain` (in the
+  people's words), `evidence`, `change`, `expected_effect`, `metric`, `min_sample` (how many real people it takes to
+  read the effect), `read_on` (a future date) and `score` (reach, pain, confidence, ease — 1–5 each). `evidence` must
+  hold at least one item from real people: a pain id `voice:<day>:<P#>` from VOICE OF THE USER, an observation of class
+  `feedback` or `voice`, or an outside URL of a person's words. Personas, the external critic, the reviewer and our
+  metrics are useful context but never evidence on their own: a feature with only them is created in `proposed` (an
+  idea), and the dispatcher also moves a Ready feature without a hypothesis back to `proposed` before it starts.
+  Defects (something broken or untrue on the site), content, marketing and analyst tasks are outside the rule.
+- Ranking: start the feature with the highest score whose evidence is strongest (`frequency` many > several > one);
+  `min_sample` must be reachable with today's traffic by `read_on`, otherwise pick a smaller change or a channel task
+  that brings the people first. Each cycle, look at the `proposed` features in the backlog: give the one that now has
+  evidence a hypothesis in `promote_tasks`, close the ones VOICE OF THE USER contradicts or that sat 14 days without
+  evidence (`close_tasks`), leave the rest.
+- Observations of class `voice` are pains found by the weekly voice-of-user research: answer each — a feature with its
+  hypothesis, `link` to an existing task, `defer` (with a return condition) or `reject` (outside VISION). Observations of
+  class `hypothesis_readout` mean a finished feature's `read_on` came: read its metric and decide confirmed, refuted or
+  too few people (once: extend with a new date, then call it unread); write the result into the digest.
 - Explain each decision through the user outcome and VISION: "chosen X over Y because …; expected result …; we will
   check …".
 
@@ -97,7 +115,7 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
-acceptance, negative cases), optional reprioritize and close_tasks, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
+acceptance, negative cases; a feature with its hypothesis), optional promote_tasks, reprioritize and close_tasks, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown
 digest in Russian for the owner (what happened, what was decided, what waits for the owner, what it cost; ≤ 250 words,
 numbers and URLs only when they change a decision).
 

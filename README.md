@@ -1,7 +1,7 @@
 # agent-team
 
 A dispatcher that runs a small product with AI roles (product owner, developer, reviewer, analyst, marketer, personas,
-GEO probe) as short headless [Claude Code](https://claude.com/claude-code) runs on a subscription token. A product
+GEO probe, voice-of-user researcher) as short headless [Claude Code](https://claude.com/claude-code) runs on a subscription token. A product
 description goes in; a static site that keeps improving against measurable goals comes out. People are needed only
 for decisions outside the product's own vision.
 

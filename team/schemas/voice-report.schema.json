@@ -1,0 +1,169 @@
+{
+ "title": "voice-report",
+ "type": "object",
+ "additionalProperties": false,
+ "required": [
+  "sources_searched",
+  "pains",
+  "hypotheses",
+  "summary_md"
+ ],
+ "properties": {
+  "sources_searched": {
+   "type": "array",
+   "maxItems": 20,
+   "description": "where you looked: a search query or a page/forum with what it gave",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "where",
+     "query",
+     "useful"
+    ],
+    "properties": {
+     "where": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "query": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "useful": {
+      "type": "boolean"
+     }
+    }
+   }
+  },
+  "pains": {
+   "type": "array",
+   "maxItems": 10,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "who",
+     "pain",
+     "quotes",
+     "frequency",
+     "workarounds",
+     "fit"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 12,
+      "description": "P1, P2, ..."
+     },
+     "who": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "the kind of person in their own context, not a persona name"
+     },
+     "pain": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "the problem in plain words, as the people put it"
+     },
+     "quotes": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 4,
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "url",
+        "quote",
+        "date"
+       ],
+       "properties": {
+        "url": {
+         "type": "string",
+         "maxLength": 500
+        },
+        "quote": {
+         "type": "string",
+         "maxLength": 300
+        },
+        "date": {
+         "type": "string",
+         "maxLength": 20
+        }
+       }
+      }
+     },
+     "frequency": {
+      "type": "string",
+      "enum": [
+       "one",
+       "several",
+       "many"
+      ],
+      "description": "how many distinct people say it"
+     },
+     "workarounds": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "what they do today instead (tools, scripts, sites)"
+     },
+     "fit": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "how our product touches this pain today, or 'none'"
+     }
+    }
+   }
+  },
+  "hypotheses": {
+   "type": "array",
+   "maxItems": 6,
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "id",
+     "pain_ids",
+     "change",
+     "expected_effect",
+     "metric"
+    ],
+    "properties": {
+     "id": {
+      "type": "string",
+      "maxLength": 12,
+      "description": "H1, H2, ..."
+     },
+     "pain_ids": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+       "type": "string"
+      }
+     },
+     "change": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "what we would change on the product"
+     },
+     "expected_effect": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "metric": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "what in our metrics would show it"
+     }
+    }
+   }
+  },
+  "summary_md": {
+   "type": "string",
+   "maxLength": 2000,
+   "description": "Russian, for the owner"
+  }
+ }
+}

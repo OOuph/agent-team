@@ -182,7 +182,9 @@
      },
      "depends_on": {
       "type": "array",
-      "items": {"type": "string"},
+      "items": {
+       "type": "string"
+      },
       "description": "Task ids that must be accepted/done with a non-stub result before this task starts (e.g. a task that consumes another task's report). Omit when independent."
      },
      "plan": {
@@ -192,6 +194,98 @@
      "repo_only": {
       "type": "boolean",
       "description": "true when the acceptance criteria name repo files (mcp/, tests, README, code) that the site does not serve: the reviewer then gets a read-only checkout of the merged commit. Omit for tasks checkable on the live site."
+     },
+     "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Required for type feature (owner 07.11): without evidence from real people the feature waits in proposed.",
+      "required": [
+       "who",
+       "pain",
+       "evidence",
+       "change",
+       "expected_effect",
+       "metric",
+       "min_sample",
+       "read_on",
+       "score"
+      ],
+      "properties": {
+       "who": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "pain": {
+        "type": "string",
+        "maxLength": 300,
+        "description": "the problem in the people's words"
+       },
+       "evidence": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "string",
+         "maxLength": 300
+        },
+        "description": "voice:<day>:<pain id> from VOICE OF THE USER, an OBS id of class feedback/voice, an outside URL of a real person's words, or metric:<what> (never alone)"
+       },
+       "change": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "expected_effect": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "metric": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "a count we already have (LATEST METRICS), or the path to ask ops for"
+       },
+       "min_sample": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "how many real people (visits, clicks) it takes to read the effect"
+       },
+       "read_on": {
+        "type": "string",
+        "maxLength": 10,
+        "description": "YYYY-MM-DD in the future: the day the PO reads the metric"
+       },
+       "score": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "reach",
+         "pain",
+         "confidence",
+         "ease"
+        ],
+        "properties": {
+         "reach": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "pain": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "confidence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "ease": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         }
+        }
+       }
+      }
      }
     }
    }
@@ -279,6 +373,116 @@
     }
    },
    "description": "open tasks to close as rejected (duplicates of another task, no longer needed); not for claimed/in_progress ones"
+  },
+  "promote_tasks": {
+   "type": "array",
+   "maxItems": 5,
+   "description": "Attach a hypothesis to an existing proposed (or ready) feature; the dispatcher moves it to ready when the rule is met",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "hypothesis"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "hypothesis": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Required for type feature (owner 07.11): without evidence from real people the feature waits in proposed.",
+      "required": [
+       "who",
+       "pain",
+       "evidence",
+       "change",
+       "expected_effect",
+       "metric",
+       "min_sample",
+       "read_on",
+       "score"
+      ],
+      "properties": {
+       "who": {
+        "type": "string",
+        "maxLength": 200
+       },
+       "pain": {
+        "type": "string",
+        "maxLength": 300,
+        "description": "the problem in the people's words"
+       },
+       "evidence": {
+        "type": "array",
+        "minItems": 1,
+        "maxItems": 6,
+        "items": {
+         "type": "string",
+         "maxLength": 300
+        },
+        "description": "voice:<day>:<pain id> from VOICE OF THE USER, an OBS id of class feedback/voice, an outside URL of a real person's words, or metric:<what> (never alone)"
+       },
+       "change": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "expected_effect": {
+        "type": "string",
+        "maxLength": 300
+       },
+       "metric": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "a count we already have (LATEST METRICS), or the path to ask ops for"
+       },
+       "min_sample": {
+        "type": "integer",
+        "minimum": 1,
+        "description": "how many real people (visits, clicks) it takes to read the effect"
+       },
+       "read_on": {
+        "type": "string",
+        "maxLength": 10,
+        "description": "YYYY-MM-DD in the future: the day the PO reads the metric"
+       },
+       "score": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+         "reach",
+         "pain",
+         "confidence",
+         "ease"
+        ],
+        "properties": {
+         "reach": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "pain": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "confidence": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         },
+         "ease": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 5
+         }
+        }
+       }
+      }
+     }
+    }
+   }
   }
  }
 }
