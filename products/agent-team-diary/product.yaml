@@ -3,6 +3,7 @@ name: agent-team diary
 host: agentteam.formachines.ai
 site_base: https://agentteam.formachines.ai
 extra_hosts:
+- formachines.ai
 - bymachines.ai
 - releases.formachines.ai
 - agentsmd.formachines.ai
