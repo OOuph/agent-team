@@ -20,6 +20,7 @@ targets:
 - /d/
 - /feed.xml
 - /go/vote/
+- /ha/
 budget_usd_per_day: 20
 paused: false
 geo_queries:

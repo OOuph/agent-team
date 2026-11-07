@@ -19,6 +19,7 @@ targets:
 - /today.json
 - /feed.xml
 - /repo/
+- /lang/
 budget_usd_per_day: 20
 paused: false
 geo_queries:
