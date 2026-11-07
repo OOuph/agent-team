@@ -100,6 +100,36 @@ def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], exis
     ])
 
 
+SPEND_CAP_USD = 5.0        # VISION.md: $5 a day for the framework; override with framework.retro.spend_cap_usd
+SPEND_WARN_SHARE = 0.8
+
+
+def spend_section(st: Settings, now: datetime | None = None, cap: float | None = None, days: int = 7) -> tuple[str, bool]:
+    """Markdown 'Spend' section: dispatcher-recorded spend per day (billing ledger) for the last ``days`` days against the cap,
+    days over 80 % flagged. Returns (markdown, data_available). No ledger data → 'spend: n/a', never invented numbers."""
+    from . import billing
+    now = now or datetime.now(timezone.utc)
+    cap = float(cap if cap is not None else (_cfg(st).get("spend_cap_usd") or SPEND_CAP_USD))
+    ledger = billing.load(st).get("spend")
+    if not isinstance(ledger, dict) or not ledger:
+        return "## Spend\n\nspend: n/a (no per-day spend record readable in the billing ledger)\n", False
+    lines = ["## Spend", "", f"Spend per day (UTC) vs the ${cap:.2f} daily cap; days over {int(SPEND_WARN_SHARE * 100)} % are flagged.", "",
+             "| day | spend | cap | share | flag |", "|---|---|---|---|---|"]
+    over = 0
+    for i in range(days - 1, -1, -1):
+        d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
+        if d not in ledger:
+            lines.append(f"| {d} | n/a | ${cap:.2f} | n/a | |")
+            continue
+        usd = float(ledger[d])
+        share = usd / cap if cap > 0 else 0.0
+        flag = "OVER 80%" if share > SPEND_WARN_SHARE else ""
+        over += bool(flag)
+        lines.append(f"| {d} | ${usd:.2f} | ${cap:.2f} | {share * 100:.0f} % | {flag} |")
+    lines += ["", f"Days over {int(SPEND_WARN_SHARE * 100)} % of the cap: {over}.", ""]
+    return "\n".join(lines), True
+
+
 def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any] | None:
     cfg = _cfg(st)
     reg = friction.Register(friction.register_dir(st))
@@ -141,7 +171,11 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
         return None
     rep = rr.structured
     props = rep.get("proposals") or []
-    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{rep.get('summary_md', '')}\n\n" +
+    spend_md, spend_ok = spend_section(st)
+    if not spend_ok:
+        reg.add([friction._rec("agent-team", "missing_data", "retro Spend section: no per-day spend record readable (billing ledger empty)",
+                               role="framework-retro", fp=f"retro-spend-{day}")])
+    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{rep.get('summary_md', '')}\n\n{spend_md}\n" +
                                     "\n".join(f"## {p.get('title')}\n- kind: {p.get('kind')} · risk: {p.get('risk')} · evidence: {', '.join(p.get('evidence') or [])}\n"
                                               f"- files: {', '.join(p.get('files') or [])}\n- change: {p.get('change')}\n- acceptance:\n" +
                                               "\n".join(f"  - {a}" for a in p.get("acceptance") or []) for p in props) +
