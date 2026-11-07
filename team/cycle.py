@@ -951,7 +951,7 @@ class Cycle:
                 return 0, summary or "marketer produced no revised drafts"
             approved_r1 = [(n, d) for n, d in drafts if (verdicts.get(n) or {}).get("verdict") == "approve"]
             drafts = approved_r1 + drafts2 if approved_r1 else drafts2
-        posted = 0
+        posted, errors = 0, []
         for name, d in drafts:
             r = verdicts.get(name) or {}
             if r.get("verdict") != "approve":
@@ -963,11 +963,14 @@ class Cycle:
                 posted += 1
             elif not res.ok:
                 self.store.event("post.error", t["id"], "dispatcher", {"channel": d.get("channel"), "error": str(res.error)[:200]})
+                errors.append(f"{d.get('channel')}: {str(res.error)[:160]}")
         if editorial.degrading(self.st, self.p.slug):
             m, n, top = editorial.rolling(self.st, self.p.slug)
             self.store.add_observation({"title": f"Editorial quality falling: mean {m}/5 over the last {n} posts", "classification": "need_hypothesis",
                                         "source": "editor", "url": self.p.site_base, "actual": "; ".join(top)[:400], "expected": f"≥ {editorial.DEGRADE_BELOW}",
                                         "fingerprint": fingerprint("editor", "degrading", self.p.slug, _now().strftime("%Y-%m-%d"))})
+        if errors:  # 07.11 T-0057: the PO saw only the marketer's "dry-run" and closed the task; the real send errors go first
+            summary = f"publish failed on the real send (not dry-run): {'; '.join(errors)} / {summary}"
         return posted, summary
 
     @staticmethod

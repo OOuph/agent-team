@@ -27,8 +27,10 @@ def test_publish_cli_draft_mode(tmp_path: Path, monkeypatch, capsys) -> None:
     f.write_text("One minute. That's how long the first daily post ran.", encoding="utf-8")
     rc = publish.main(["--channel", "telegram", "--target", "@x", "--text-file", str(f), "--url", "https://p1.example/day/1/"])
     assert rc == 0
-    out = json.loads(capsys.readouterr().out.strip().splitlines()[-1])
+    cap = capsys.readouterr()
+    out = json.loads(cap.out.strip().splitlines()[-1])
     assert out["ok"] and out["dry_run"] and str(out["post_id"]).startswith("draft:")
+    assert "not dry-run" in cap.err          # 07.11 T-0057: the marketer read the draft flag as dry-run mode
     files = sorted(drafts.glob("*.json"))
     assert len(files) == 1 and files[0].name == "01-telegram.json"
     d = publish.load_draft(files[0])

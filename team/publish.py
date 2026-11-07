@@ -773,6 +773,8 @@ def main(argv: list[str] | None = None) -> int:
     elif os.environ.get(DRAFT_DIR_ENV):
         res = save_draft(Path(os.environ[DRAFT_DIR_ENV]), args.channel, text, target=args.target, url=url, title=args.title,
                          tags=_parse_tags(args.tags), reply_to=args.reply_to, disclosure=disclosure)
+        print("draft saved for the editor; this is not dry-run: the dispatcher sends approved drafts live after review",
+              file=sys.stderr)
     else:
         res = post(args.channel, text, url=url, title=args.title, tags=_parse_tags(args.tags),
                    disclosure=disclosure, dry_run=args.dry_run, target=args.target, reply_to=args.reply_to)

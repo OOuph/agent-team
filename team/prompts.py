@@ -205,7 +205,10 @@ def marketer_prompt(product: Product, task: dict[str, Any], channels: dict[str, 
             + "\n\n# CHANNELS CONFIGURED (channel → target)\n" + _y(channels)
             + "\n\n# VISION\n" + product.vision() + les + mem + prev + notes
             + "\n\nWrite each post to a file here, then `team-publish --channel <channel> --target <target> --text-file <file> --url <url>`. "
-            "Every post goes to the editor before it is sent; the editor may approve, send it back once, or reject.\n")
+            "Every post goes to the editor before it is sent; the editor may approve, send it back once, or reject. "
+            "team-publish answers `\"dry_run\": true` with a `draft:` id: that only means the draft is saved for the editor, "
+            "the dispatcher sends approved drafts live; never report it as dry-run mode. For a reply, `--reply-to` takes the "
+            "post's bsky.app or threads.com link (or its at:// uri / media id).\n")
 
 
 def marketing_plan_prompt(product: Product, task: dict[str, Any], channels: dict[str, Any], lessons: list[str] | None = None,
