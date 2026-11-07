@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-07
 
+- T-0057: PO card: the runtime-file rule extends to anything under gitignored paths (`data/`, e.g. `data/framework/retro/`): no acceptance needs a committed file there, deliverables go to tracked paths; also for retro-originated tasks in `agent-team` (F-0127, F-0122). Card only.
 - T-0056: the retro report gets a `Spend` section: spend per day for the last 7 days (billing ledger) next to the $5 cap, days over 80 % flagged; no ledger data → `spend: n/a` plus a `missing_data` friction record (voice P1: unattended loops burn money unnoticed). `team/retro.py`, test.
 - T-0055: diary `product.yaml` `extra_hosts` gets the apex `formachines.ai` (errata and other pages; F-0125). Host-matching rule of `team-fetch` (already in code, now documented and tested): a listed host is allowed together with all its subdomains (`www.threads.com` under `threads.com`), never by bare suffix (`notthreads.com` is refused). Config, docs, test.
 - Voice of the user (owner 07.11: «голос пользователя — часть фреймворка, нужен для любого продукта»): new role `voice` (Opus, WebSearch/WebFetch), phase `voice` weekly (`cycle.voice_every_h: 168`), topics from `product.yaml: voice_topics` or per-product defaults; report `products/<slug>/voice/<day>.json|md`, one `voice` observation per sourced pain (`voice:<day>:P#`), a VOICE OF THE USER block in the PO prompt (`team/voice.py`, `team/roles/voice.md`, `voice-report` schema).
