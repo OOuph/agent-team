@@ -605,3 +605,31 @@ def test_luz_marketer_can_open_threads(tmp_path: Path):
     st = _settings(tmp_path)
     p = C.load_product(st, root / "products" / "luz-amanha")
     assert "threads.com" in Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
+
+
+def test_marketer_fetch_apex_and_www(tmp_path: Path, monkeypatch):
+    """team-fetch matches a listed host and its subdomains (www. included), not look-alike suffixes (F-0125)."""
+    import urllib.request
+    from team import fetch
+    root = Path(__file__).resolve().parent.parent
+    st = _settings(tmp_path)
+
+    class _R:
+        status, headers = 200, {}
+        def read(self): return b"ok"
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: _R())
+    monkeypatch.setenv("TEAM_PAUSE", "0")
+    monkeypatch.delenv("TEAM_TRACE_FILE", raising=False)
+
+    def rc(slug, url):
+        p = C.load_product(st, root / "products" / slug)
+        monkeypatch.setenv("TEAM_ALLOWED_HOSTS", Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer"))
+        return fetch.main([url])
+
+    assert rc("agent-team-diary", "https://formachines.ai/errata/") == 0
+    assert rc("agent-team-diary", "https://www.formachines.ai/errata/") == 0
+    assert rc("luz-amanha", "https://www.threads.com/") == 0
+    assert rc("luz-amanha", "https://notthreads.com/") == 3
