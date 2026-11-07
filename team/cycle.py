@@ -1090,6 +1090,9 @@ class Cycle:
     def phase_voice(self) -> None:
         if not voice.due(self.p.dir, int(self.st.cycle.get("voice_every_h", voice.EVERY_H_DEFAULT)), _now()):
             return
+        if self.runner is None or self.dry_run or not voice.claim_cycle(self.st.data_dir, self.cycle_id):
+            return
+        voice.mark_attempt(self.p.dir, _now())
         prompt = voice.build_prompt(str(self.p.raw.get("name") or self.p.slug), self.p.site_base, self.p.vision(),
                                     voice.topics_for(self.p.raw), voice.latest(self.p.dir))
         rr = self.role_run(voice.ROLE, prompt, voice.SCHEMA, cwd=self.p.work_dir / self.cycle_id / "voice", label="voice",

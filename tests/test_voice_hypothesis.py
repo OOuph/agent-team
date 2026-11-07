@@ -7,6 +7,7 @@ from pathlib import Path
 
 from test_store_cycle import FakeRunner, _product, _settings
 
+from team import config as C
 from team import cycle as cyc
 from team import hypothesis, voice
 from team.cycle import Cycle
@@ -61,6 +62,13 @@ def test_due_weekly(tmp_path: Path):
     assert not voice.due(d, 168, now + timedelta(days=6))
     assert voice.due(d, 168, now + timedelta(days=7))
     assert not voice.due(d, 0, now + timedelta(days=30))        # 0 = off
+    voice.mark_attempt(d, now + timedelta(days=7))
+    assert not voice.due(d, 168, now + timedelta(days=7, hours=23))   # a started or failed run is not retried for a day
+    assert voice.due(d, 168, now + timedelta(days=8))
+
+
+def test_one_voice_run_per_cycle(tmp_path: Path):
+    assert voice.claim_cycle(tmp_path, "c1") and not voice.claim_cycle(tmp_path, "c1") and voice.claim_cycle(tmp_path, "c2")
 
 
 def test_topics_default_and_override():
@@ -137,9 +145,15 @@ def test_phase_voice_runs_weekly_and_files_cards(tmp_path: Path):
             return RunResult(True, json.loads(json.dumps(REPORT)), {}, 0.5, 5, None)
 
     r = R()
+    d2 = st.products_dir / "other"
+    d2.mkdir()
+    (d2 / "product.yaml").write_text("slug: other\nname: Other\nhost: ''\nrepo:\n  url: ''\n  branch: main\n")
+    (d2 / "VISION.md").write_text("# Other\n")
+    p2 = C.load_product(st, d2)
     Cycle(st, p, r, "c1").phase_voice()
+    Cycle(st, p2, r, "c1").phase_voice()                        # one voice run per cycle: the other product waits
     Cycle(st, p, r, "c2").phase_voice()                         # a week has not passed: no second run
-    assert r.calls == ["voice"] and len(voice.reports(p.dir)) == 1
+    assert r.calls == ["voice"] and len(voice.reports(p.dir)) == 1 and not voice.reports(p2.dir)
     assert [o["classification"] for o in Cycle(st, p, r, "c3").store.observations()] == ["voice"]
 
 

@@ -21,6 +21,9 @@ log = logging.getLogger("team.voice")
 ROLE = "voice"
 SCHEMA = "voice-report"
 EVERY_H_DEFAULT = 168
+RETRY_H = 24                       # a run that failed or is still going is not started again for this long
+ATTEMPT_FILE = "last-attempt"      # products/<slug>/voice/last-attempt: ISO time of the last start
+CYCLE_FILE = "voice-cycle"         # data/voice-cycle: the cycle id that already ran one voice run (one product per cycle)
 MAX_TOPICS = 8
 OBS_TITLE_MAX = 140
 OBS_ACTUAL_MAX = 600
@@ -86,8 +89,39 @@ def latest(product_dir: Path) -> dict[str, Any] | None:
         return None
 
 
+def mark_attempt(product_dir: Path, now: datetime) -> None:
+    voice_dir(product_dir).mkdir(parents=True, exist_ok=True)
+    (voice_dir(product_dir) / ATTEMPT_FILE).write_text(now.isoformat(timespec="seconds"), encoding="utf-8")
+
+
+def _recent_attempt(product_dir: Path, now: datetime) -> bool:
+    f = voice_dir(product_dir) / ATTEMPT_FILE
+    try:
+        prev = datetime.fromisoformat(f.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return False
+    return now - prev < timedelta(hours=RETRY_H)
+
+
+def claim_cycle(data_dir: Path, cycle_id: str) -> bool:
+    """One voice run per dispatcher cycle across all products, so the weekly runs spread over hours instead of
+    stretching one hourly cycle past the next. True when this cycle had none yet (and now has one)."""
+    f = Path(data_dir) / CYCLE_FILE
+    try:
+        if f.read_text(encoding="utf-8").strip() == cycle_id:
+            return False
+    except OSError:
+        pass
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(cycle_id, encoding="utf-8")
+    return True
+
+
 def due(product_dir: Path, every_h: int, now: datetime | None = None) -> bool:
     if every_h <= 0:
+        return False
+    now = now or datetime.now(timezone.utc)
+    if _recent_attempt(product_dir, now):
         return False
     rep = latest(product_dir)
     if not rep:
@@ -96,7 +130,7 @@ def due(product_dir: Path, every_h: int, now: datetime | None = None) -> bool:
         prev = datetime.fromisoformat(str(rep.get("generated")))
     except ValueError:
         return True
-    return (now or datetime.now(timezone.utc)) - prev >= timedelta(hours=every_h)
+    return now - prev >= timedelta(hours=every_h)
 
 
 def build_prompt(product_name: str, site_base: str, vision_md: str, topics: list[str], previous: dict[str, Any] | None) -> str:
