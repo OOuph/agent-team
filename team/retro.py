@@ -148,6 +148,89 @@ def spend_section(st: Settings, now: datetime | None = None, cap: float | None =
     return "\n".join(lines), True
 
 
+DIGEST_MAX_LINES = 12
+
+
+def fetch_prs(repo: str, now: datetime | None = None) -> dict[str, Any] | None:
+    """Pull requests of ``repo`` for the owner digest via the retro GitHub helper: ``merged`` (last 24 h) and ``open`` (with
+    changed files). None when GitHub cannot be read (the digest then says 'unknown')."""
+    now = now or datetime.now(timezone.utc)
+    if not repo:
+        return None
+    try:
+        closed = _gh("GET", f"/repos/{repo}/pulls?state=closed&sort=updated&direction=desc&per_page=50") or []
+        merged = []
+        for p in closed:
+            ts = parse_ts(p.get("merged_at") or "")
+            if ts and now - ts <= timedelta(hours=24):
+                merged.append({"number": p.get("number"), "title": p.get("title")})
+        opened = []
+        for p in _gh("GET", f"/repos/{repo}/pulls?state=open&per_page=50") or []:
+            files = _gh("GET", f"/repos/{repo}/pulls/{p['number']}/files?per_page=100") or []
+            opened.append({"number": p.get("number"), "title": p.get("title"), "body": p.get("body") or "",
+                           "files": [{"name": f.get("filename"), "status": f.get("status")} for f in files]})
+        return {"merged": merged, "open": opened}
+    except (urllib.error.URLError, RuntimeError, OSError, KeyError, TypeError, ValueError) as exc:
+        log.warning("retro: cannot read pull requests of %s: %s", repo, exc)
+        return None
+
+
+def _waiting_reason(pr: dict[str, Any], protected: list[str]) -> str | None:
+    from . import gitops
+    files = pr.get("files") or []
+    prot = [f["name"] for f in files if any(f["name"] == pp or f["name"].startswith(pp.rstrip("/") + "/") for pp in protected)]
+    if prot:
+        return "protected " + ", ".join(prot[:2])
+    tests = [f["name"] for f in files if str(f["name"]).startswith("tests/") and f.get("status") != "added"]
+    if tests and not gitops.has_tests_change_reason(pr.get("body") or ""):
+        return "tests changed without reason"
+    return None
+
+
+def owner_digest(st: Settings, prs: dict[str, Any] | None, records: list[dict[str, Any]], now: datetime | None = None,
+                 cap: float | None = None) -> str:
+    """'## Owner digest': at most DIGEST_MAX_LINES lines, four items in fixed order (merged PRs 24 h, PRs waiting for a human,
+    rollbacks 24 h, spend today vs cap), an explicit 'none' for an empty item and 'unknown' where the source cannot be read."""
+    from . import billing
+    now = now or datetime.now(timezone.utc)
+    protected = list(_cfg(st).get("protected_paths") or [])
+
+    def short(t: Any) -> str:
+        t = str(t or "").replace("\n", " ")
+        return t if len(t) <= 60 else t[:57] + "..."
+
+    def listing(label: str, items: list[str]) -> str:
+        if not items:
+            return f"- {label}: none"
+        shown = "; ".join(items[:4]) + (f"; +{len(items) - 4} more" if len(items) > 4 else "")
+        return f"- {label} ({len(items)}): {shown}"
+
+    if prs is None:
+        merged_l = "- PRs merged in the last 24 h: unknown (GitHub not readable)"
+        wait_l = "- PRs waiting for a human: unknown (GitHub not readable)"
+    else:
+        merged_l = listing("PRs merged in the last 24 h", [f"#{p['number']} {short(p['title'])}" for p in prs.get("merged") or []])
+        waiting = []
+        for p in prs.get("open") or []:
+            why = _waiting_reason(p, protected)
+            if why:
+                waiting.append(f"#{p['number']} {short(p['title'])} [{why}]")
+        wait_l = listing("PRs waiting for a human", waiting)
+    since = now - timedelta(hours=24)
+    rb = [r for r in records if r.get("kind") == "rollback" and (parse_ts(str(r.get("ts") or "")) or since) >= since]
+    rb_l = listing("Rollbacks to last-good in the last 24 h", [short(r.get("summary")) for r in rb])
+    try:
+        ledger = billing.load(st).get("spend")
+        today = now.strftime("%Y-%m-%d")
+        c = float(cap if cap is not None else team_cap_usd(st))
+        spend_l = (f"- Spend today: ${float(ledger[today]):.2f} of ${c:.2f} cap" if isinstance(ledger, dict) and today in ledger
+                   else "- Spend today: unknown (no record in the billing ledger)")
+    except (OSError, ValueError, TypeError, KeyError):
+        spend_l = "- Spend today: unknown (billing ledger not readable)"
+    lines = ["## Owner digest", "", merged_l, wait_l, rb_l, spend_l]
+    return "\n".join(lines[:DIGEST_MAX_LINES]) + "\n"
+
+
 def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any] | None:
     cfg = _cfg(st)
     reg = friction.Register(friction.register_dir(st))
@@ -190,10 +273,15 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
     rep = rr.structured
     props = rep.get("proposals") or []
     spend_md, spend_ok = spend_section(st)
+    try:
+        digest_md = owner_digest(st, fetch_prs(repo), reg.since(1))
+    except Exception as exc:  # noqa: BLE001
+        log.warning("retro: owner digest failed: %s", exc)
+        digest_md = "## Owner digest\n\n- unknown (digest could not be built)\n"
     if not spend_ok:
         reg.add([friction._rec("agent-team", "missing_data", "retro Spend section: no per-day spend record readable (billing ledger empty)",
                                role="framework-retro", fp=f"retro-spend-{day}")])
-    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{rep.get('summary_md', '')}\n\n{spend_md}\n" +
+    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{digest_md}\n{rep.get('summary_md', '')}\n\n{spend_md}\n" +
                                     "\n".join(f"## {p.get('title')}\n- kind: {p.get('kind')} · risk: {p.get('risk')} · evidence: {', '.join(p.get('evidence') or [])}\n"
                                               f"- files: {', '.join(p.get('files') or [])}\n- change: {p.get('change')}\n- acceptance:\n" +
                                               "\n".join(f"  - {a}" for a in p.get("acceptance") or []) for p in props) +
