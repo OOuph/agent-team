@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-08
 
+- T-0061: rollback visibility: at the start of `team cycle --product all` the dispatcher compares the checkout HEAD with the previously recorded one (`data/framework/last-head`); when HEAD is an ancestor (watchdog rollback to last-good) it appends one friction record of kind `rollback` listing the dropped commits (hash + subject). Fast-forwards write nothing (voice:2026-11-07:P8). `team/friction.py`, `cli.py`, SCHEME.md, test.
+
 - T-0060: the PR body gets a section `Verified by dispatcher` computed from git (`git diff --stat`, files changed), the test run (passed/failed counts) and the canary result (edited into the PR after the canary); files named in the developer's summary but absent from the diff add a `MISMATCH` line and a friction record. Claim-vs-reality evidence of the F-0127 class (voice 2026-11-07 P2). `team/prfacts.py`, `gitops.py`, `cycle.py`, `friction.py`, test.
 
 - Quality rule (owner 08.11): new task type `quality` (speed, SEO/GEO, mobile, accessibility, clarity, data completeness), outside the hypothesis rule like `defect`. When no developer task is open the dispatcher wakes the PO at most every `cycle.dev_idle_po_every_h` (6 h) to queue 1–2 defect/quality tasks with a named source.
