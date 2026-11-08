@@ -36,7 +36,7 @@ def _tail(s: str, n: int) -> str:
 
 
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
-              metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool) -> str:
+              metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False) -> str:
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
@@ -48,6 +48,10 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
             f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
             + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
+            + (" The developer has no ready work: queue 1–2 tasks of type `defect` or `quality` (see the quality rule) from failing "
+               "SEO/GEO checks, review fails, persona `ux_friction`, critic findings or facts on the live site, each naming its source "
+               "in `problem`; if nothing is broken or measurably improvable, say so in the digest and invent no feature."
+               if dev_idle and not idle else "")
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# BACKLOG (open tasks)\n" + (_y([_task_brief(t) for t in tasks]) if tasks else "(empty)")
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")

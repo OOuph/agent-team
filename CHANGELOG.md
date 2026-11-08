@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-08
 
+- Quality rule (owner 08.11): new task type `quality` (speed, SEO/GEO, mobile, accessibility, clarity, data completeness), outside the hypothesis rule like `defect`. When no developer task is open the dispatcher wakes the PO at most every `cycle.dev_idle_po_every_h` (6 h) to queue 1–2 defect/quality tasks with a named source.
+- Voice of the user twice a week: `cycle.voice_every_h` 168 → 84.
 - T-0059: developer card: if the PR edits or deletes anything under `tests/`, the result summary carries a line of its own `tests-change-reason: F-xxxx <reason>`, so the T-0058 gate finds it in the PR body (OBS-0108, F-0127). Card, SCHEME.md.
 - T-0058: auto-merge gate: a PR that modifies or deletes a file under `tests/` and has no `tests-change-reason: F-xxxx ...` line in its body is not self-merged (`waiting_owner`); pure additions of test files and PRs without `tests/` changes are unchanged (voice P6: the loop must not edit tests to go green). `team/cycle.py`, `team/gitops.py`, test.
 

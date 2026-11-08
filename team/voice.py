@@ -1,10 +1,10 @@
-"""Voice of the user: once a week a role reads what real people say in public about the problem the product exists for
+"""Voice of the user: twice a week a role reads what real people say in public about the problem the product exists for
 (GitHub issues, Reddit, HN, forums) and returns pains with quotes, links and dates plus hypotheses. The PO ranks and
 starts hypotheses on this material (owner 07.11: "голос пользователя — часть фреймворка, нужен для любого продукта").
 This module is the pure part — topics, prompt, report files, observation cards, the PO block; the run is in the cycle.
 
 Configuration: `product.yaml: voice_topics` (a list of search topics) — missing → `DEFAULT_TOPICS[slug]`, else the
-product name. `team.yaml: cycle.voice_every_h` (default 168).
+product name. `team.yaml: cycle.voice_every_h` (default 84, twice a week).
 Files: `products/<slug>/voice/<YYYY-MM-DD>.json` (the report) and `.md` (summary + pains, for people).
 """
 from __future__ import annotations
@@ -20,7 +20,7 @@ log = logging.getLogger("team.voice")
 
 ROLE = "voice"
 SCHEMA = "voice-report"
-EVERY_H_DEFAULT = 168
+EVERY_H_DEFAULT = 84               # twice a week (owner 08.11; was weekly)
 RETRY_H = 24                       # a run that failed or is still going is not started again for this long
 ATTEMPT_FILE = "last-attempt"      # products/<slug>/voice/last-attempt: ISO time of the last start
 CYCLE_FILE = "voice-cycle"         # data/voice-cycle: the cycle id that already ran one voice run (one product per cycle)
@@ -104,7 +104,7 @@ def _recent_attempt(product_dir: Path, now: datetime) -> bool:
 
 
 def claim_cycle(data_dir: Path, cycle_id: str) -> bool:
-    """One voice run per dispatcher cycle across all products, so the weekly runs spread over hours instead of
+    """One voice run per dispatcher cycle across all products, so the runs spread over hours instead of
     stretching one hourly cycle past the next. True when this cycle had none yet (and now has one)."""
     f = Path(data_dir) / CYCLE_FILE
     try:

@@ -447,6 +447,23 @@ class Cycle:
 
     # triage: PO ------------------------------------------------------------------------------------
 
+    DEV_IDLE_FILE = "dev-idle-po"         # products/<slug>/dev-idle-po: ISO time the PO was last woken for an idle developer
+
+    def dev_idle_due(self, now: datetime | None = None) -> bool:
+        """The developer has nothing ready: wake the PO for defect/quality work at most every `cycle.dev_idle_po_every_h`."""
+        every = float(self.st.cycle.get("dev_idle_po_every_h", 6) or 0)
+        if every <= 0:
+            return False
+        try:
+            prev = datetime.fromisoformat((self.p.dir / self.DEV_IDLE_FILE).read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return True
+        return (now or datetime.now(timezone.utc)) - prev >= timedelta(hours=every)
+
+    def mark_dev_idle(self, now: datetime | None = None) -> None:
+        (self.p.dir / self.DEV_IDLE_FILE).write_text((now or datetime.now(timezone.utc)).isoformat(timespec="seconds"), encoding="utf-8")
+        log.info("%s: developer idle, PO woken for defect/quality work", self.p.slug)
+
     def phase_triage(self) -> None:
         from . import deputy
         try:
@@ -458,14 +475,18 @@ class Cycle:
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])
         idle = not active
-        if not new_obs and not qs and not idle:
+        dev_idle = not any(str(t.get("role") or "") == "developer" for t in active)
+        dev_wake = dev_idle and self.dev_idle_due()
+        if not new_obs and not qs and not idle and not dev_wake:
             log.info("%s: triage skipped (nothing new, team busy)", self.p.slug)
             return
         latest = self.p.dir / "metrics" / "latest.md"
         prompt = prompts.po_prompt(self.p, self.store, cycle_id=self.cycle_id, observations=new_obs[:25], questions=qs,
                                    metrics_md=latest.read_text(encoding="utf-8") if latest.exists() else "",
                                    spent_today=self.store.spent_today(), cap=self.p.daily_cap,
-                                   max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle)
+                                   max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle, dev_idle=dev_idle)
+        if dev_wake:
+            self.mark_dev_idle()
         work = self.p.work_dir / self.cycle_id / "po"
         rr = self.role_run("po", prompt, "po-decision", cwd=work, label="po", cap=2.0, allowed_tools=[], max_turns=8)
         if rr is None or not (rr.ok and rr.structured):

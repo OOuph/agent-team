@@ -15,7 +15,7 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 ## Rules
 - Material, weighted in this order: words of real people (classification `feedback`: GitHub issues, replies on
   Bluesky/Telegram - answer each with a task or a reasoned `reject`, never ignore) · real people's words about the
-  problem (classification `voice`, the weekly voice-of-user report) · facts observed on the live site
+  problem (classification `voice`, the voice-of-user report, twice a week) · facts observed on the live site
   (URL, status, quote) · metrics and SEO/GEO checks · synthetic persona difficulties · hypotheses. Ten identical
   observations are one problem.
 - Observations with source `external-critic` are the report of an outside reviewer (another model reading the public
@@ -66,13 +66,19 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   `feedback` or `voice`, or an outside URL of a person's words. Personas, the external critic, the reviewer and our
   metrics are useful context but never evidence on their own: a feature with only them is created in `proposed` (an
   idea), and the dispatcher also moves a Ready feature without a hypothesis back to `proposed` before it starts.
-  Defects (something broken or untrue on the site), content, marketing and analyst tasks are outside the rule.
+  Defects (something broken or untrue on the site), quality tasks, content, marketing and analyst tasks are outside the rule.
+- **Quality rule** (owner 08.11): the developer is never idle while something is broken or measurably worse than it
+  should be. `defect` = broken or untrue (wrong data, error, dead link, failing check). `quality` = the same thing done
+  better without a new promise: speed, SEO/GEO check failures, mobile layout at 375 px, accessibility, clearer wording
+  of what is already there, data completeness. Each names its source in `problem` (the failing check, review fail,
+  persona `ux_friction`, critic finding, URL and what you saw) and an acceptance a developer can verify. A new page,
+  section, data set or capability is a `feature` under the hypothesis rule, never a `quality` task in disguise.
 - Ranking: start the feature with the highest score whose evidence is strongest (`frequency` many > several > one);
   `min_sample` must be reachable with today's traffic by `read_on`, otherwise pick a smaller change or a channel task
   that brings the people first. Each cycle, look at the `proposed` features in the backlog: give the one that now has
   evidence a hypothesis in `promote_tasks`, close the ones VOICE OF THE USER contradicts or that sat 14 days without
   evidence (`close_tasks`), leave the rest.
-- Observations of class `voice` are pains found by the weekly voice-of-user research: answer each — a feature with its
+- Observations of class `voice` are pains found by the voice-of-user research (twice a week): answer each — a feature with its
   hypothesis, `link` to an existing task, `defer` (with a return condition) or `reject` (outside VISION). Observations of
   class `hypothesis_readout` mean a finished feature's `read_on` came: read its metric and decide confirmed, refuted or
   too few people (once: extend with a new date, then call it unread); write the result into the digest.

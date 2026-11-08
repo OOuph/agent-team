@@ -102,6 +102,7 @@
       "enum": [
        "feature",
        "defect",
+       "quality",
        "research",
        "content",
        "marketing",

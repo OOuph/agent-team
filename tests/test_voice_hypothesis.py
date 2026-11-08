@@ -162,3 +162,33 @@ def test_schemas_and_phase_order():
     s = json.loads((cyc.SCHEMAS / "po-decision.schema.json").read_text(encoding="utf-8"))
     assert "hypothesis" in s["properties"]["ready_tasks"]["items"]["properties"] and "promote_tasks" in s["properties"]
     json.loads((cyc.SCHEMAS / "voice-report.schema.json").read_text(encoding="utf-8"))
+
+
+def test_quality_type_outside_rule_and_po_woken_for_idle_developer(tmp_path: Path):
+    from team import store as S
+    assert "quality" in S.TASK_TYPES
+    s = json.loads((cyc.SCHEMAS / "po-decision.schema.json").read_text(encoding="utf-8"))
+    assert "quality" in s["properties"]["ready_tasks"]["items"]["properties"]["type"]["enum"]
+    assert hypothesis.check({"type": "quality", "created_by": "po", "state": "ready"}, voice_ids=set(), observations={},
+                            site_bases=[], today=date.today()) == []
+    st = _settings(tmp_path)
+    p = _product(st)
+    calls = []
+
+    class R(FakeRunner):
+        def run(self, role, prompt, schema, **kw):
+            calls.append((role, prompt))
+            return RunResult(True, {"ready_tasks": [], "digest_md": "d"}, {}, 0.1, 1, None)
+
+    cy = Cycle(st, p, R(), "c1")
+    cy.store.create_task(title="post", type_="content", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po",
+                         state="ready", role="marketer")
+    cy.phase_triage()                                            # only a marketer task: the developer is idle → PO woken
+    assert [c[0] for c in calls] == ["po"] and "developer has no ready work" in calls[0][1]
+    Cycle(st, p, R(), "c2").phase_triage()                       # within 6 h: not woken again
+    assert len(calls) == 1
+    old = datetime.now(timezone.utc) - timedelta(hours=7)
+    (p.dir / Cycle.DEV_IDLE_FILE).write_text(old.isoformat(), encoding="utf-8")
+    Cycle(st, p, R(), "c3").phase_triage()
+    assert len(calls) == 2
+    assert voice.EVERY_H_DEFAULT == 84

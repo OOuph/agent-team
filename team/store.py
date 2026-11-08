@@ -25,7 +25,7 @@ log = logging.getLogger("team.store")
 TASK_STATES = ("proposed", "ready", "claimed", "in_progress", "review", "accepted", "released", "measured", "done",
                "blocked", "waiting_owner", "rejected", "deferred")
 TERMINAL = ("done", "rejected")
-TASK_TYPES = ("feature", "defect", "research", "content", "marketing", "ops")
+TASK_TYPES = ("feature", "defect", "quality", "research", "content", "marketing", "ops")
 PRIORITIES = ("P0", "P1", "P2", "P3")
 TRANSITIONS: dict[str, tuple[str, ...]] = {
     "proposed": ("ready", "rejected", "deferred"),
