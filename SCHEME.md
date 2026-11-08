@@ -34,7 +34,7 @@
 |---|---|---|
 | collect | снимает истёкшие лизы; забирает `/_team/metrics.json` сайта; **собирает обратную связь** (GitHub Issues, ответы/упоминания Bluesky) в наблюдения и **отвечает людям** (роль support, в рамках VISION); раз в N циклов — персоны; раз в 12 ч — программная SEO-проверка | persona |
 | review | задачи `released` (после паузы на деплой) → reviewer → `accepted` / `in_progress` (fail, ≤ 2) / `blocked` + вопрос PO | reviewer |
-| triage | при новых наблюдениях, вопросах к PO или простое команды → PO | po |
+| triage | при новых наблюдениях, вопросах к PO, простое команды или **простое разработчика** (нет его задач; не чаще раза в `cycle.dev_idle_po_every_h` = 6 ч, PO ставит дефекты и задачи качества) → PO; в начале фазы — карточки `hypothesis_readout` для фич, чей `read_on` наступил | po |
 | execute | одна задача: developer (повтор задачи продолжает существующую ветку `task/<id>` с коммитами прошлой попытки, слив в неё base; при конфликте слияния — слияние с приоритетом стороны прошлой попытки, коммит прошлой попытки остаётся в истории ветки) → коммит → **merge в main + push** → droplet публикует ≤ 5 мин → `released`; marketer → черновики (`team-publish` в режиме черновика) → editor → при revise одна доработка маркетолога → editor → диспетчер публикует одобренное (текст поста — в таблицу `posts`) → `accepted`; marketer с `plan: true` → пишет `marketing-plan.md` в рабочей папке → диспетчер копирует в `products/<slug>/` → `accepted` без поста (файла нет или < 200 символов → вопрос PO); analyst-задача → `done` | developer / marketer / analyst |
 | measure | каждые 6 ч (`measure_every_h`): analyst по метрикам, эффект задач → `measured` → `done` | analyst |
 | geo | раз в 168 ч: geo-probe | geo-probe |
