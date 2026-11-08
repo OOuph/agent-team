@@ -28,7 +28,7 @@ from .store import Store, parse_ts
 log = logging.getLogger("team.friction")
 
 KINDS = ("run_failed", "tool_denied", "phase_error", "budget_stop", "task_blocked", "lease_expired", "no_commit",
-         "review_fail", "review_inconclusive", "owner_wait", "env_error", "reported")
+         "review_fail", "review_inconclusive", "owner_wait", "env_error", "reported", "rollback")
 REPORTED_KINDS = ("missing_tool", "denied_permission", "unclear_instruction", "schema_mismatch", "missing_data", "environment", "other")
 OWNER_WAIT_H = 24
 SUMMARY_MAX = 300
@@ -206,3 +206,42 @@ def collect_all(st: Settings, products: list[Product]) -> int:
     if n:
         log.info("friction: %d new records (%d total)", n, len(reg.records))
     return n
+
+
+def check_rollback(st: Settings, repo_dir: Path) -> dict[str, Any] | None:
+    """Cycle start: compare the checkout HEAD with the HEAD recorded at the previous cycle (``data/framework/last-head``).
+
+    If the new HEAD is a proper ancestor of the recorded one the code was rolled back (watchdog -> last-good): append one
+    friction record of kind ``rollback`` listing the dropped commits (hash + subject). A fast-forward, no change or an
+    unrelated history writes no record. Always records the current HEAD. Never raises."""
+    from . import gitops
+    try:
+        cur = gitops.head(repo_dir)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("rollback check: no HEAD: %s", exc)
+        return None
+    d = register_dir(st)
+    d.mkdir(parents=True, exist_ok=True)
+    f = d / "last-head"
+    prev = f.read_text(encoding="utf-8").strip() if f.exists() else ""
+    rec = None
+    try:
+        if prev and prev != cur \
+                and _is_ancestor(repo_dir, cur, prev):
+            out = gitops.git(repo_dir, "log", "--format=%h %s", f"{cur}..{prev}")
+            dropped = [ln for ln in out.splitlines() if ln.strip()]
+            body = "; ".join(dropped)
+            summary = (f"code rolled back {prev[:8]} -> {cur[:8]}; dropped {len(dropped)} commit(s): {body}")
+            rec = _rec("framework", "rollback", summary, fp=f"{prev}:{cur}")
+            rec["dropped"] = dropped
+            Register(d).add([rec])
+    except Exception as exc:  # noqa: BLE001
+        log.warning("rollback check failed: %s", exc)
+    f.write_text(cur + "\n", encoding="utf-8")
+    return rec
+
+
+def _is_ancestor(repo_dir: Path, a: str, b: str) -> bool:
+    """True when a is an ancestor of b (a != b)."""
+    import subprocess
+    return subprocess.run(["git", "merge-base", "--is-ancestor", a, b], cwd=str(repo_dir), capture_output=True).returncode == 0

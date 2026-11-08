@@ -70,6 +70,9 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
     if phases and any(p not in PHASES for p in phases):
         sys.exit(f"phases: {PHASES}")
     rc = 0
+    if a.product == "all" and not phases and not a.dry_run:
+        from . import friction as _fr
+        _fr.check_rollback(st, Path(__file__).resolve().parent.parent)
     for p in _products(st, a.product):
         (p.runs_dir / cycle_id).mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
