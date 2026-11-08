@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, hypothesis, prompts, publish, voice
+from . import geo, gitops, hypothesis, prompts, prfacts, publish, voice
 from .config import Product, Settings
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
@@ -738,6 +738,7 @@ class Cycle:
     def release_as_pull_request(self, t: dict[str, Any], repo: Path, res: dict[str, Any]) -> bool:
         """repo.mode: pr — the tests of the repository are the reviewer; a green branch becomes a pull request the owner merges
         (waiting_owner → accepted once merged). Used for the framework's own repository: nothing lands there without a human."""
+        test_output: str | None = None
         if self.p.test_cmd:
             # the test suite never gets the dispatcher's secrets: a test that posts would post for real (Demo $25, 02.11)
             test_env = {k: v for k, v in os.environ.items() if not k.startswith(("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"))}
@@ -746,6 +747,7 @@ class Cycle:
                 cp = subprocess.run(self.p.test_cmd, shell=True, cwd=str(repo), capture_output=True, text=True, timeout=900, env=test_env)
             except subprocess.TimeoutExpired:
                 cp = None
+            test_output = (cp.stdout + "\n" + cp.stderr) if cp else None
             if cp is None or cp.returncode != 0:
                 tail = (cp.stdout + cp.stderr)[-600:] if cp else "tests timed out"
                 attempts = int(t.get("attempts") or 0) + 1
@@ -759,9 +761,13 @@ class Cycle:
         tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
             gitops.push_branch(repo, t["id"])
+            facts, mism = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
+            if mism:
+                self.store.event("pr.claim_mismatch", t["id"], "dispatcher", {"text": f"developer summary names files not in the git diff: {', '.join(mism[:8])}"})
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
                     "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +
+                    "\n\n" + facts +
                     "\n\n_Opened by the agent-team dispatcher for task " + t["id"] + "; tests passed on the branch. A human merges._")
             url = gitops.open_pull_request(self.p.repo_url, t["id"], self.p.repo_branch, f"{t['id']}: {t.get('title', '')}", body)
         except gitops.GitError as exc:
@@ -786,6 +792,10 @@ class Cycle:
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url} ({why})", force=True, pr_url=url, assignee_run=None)
             return True
         ok, note = self.canary(repo, str(fw.get("canary_product") or ""))
+        try:
+            gitops.update_pull_request_body(url, prfacts.with_canary(body, ("passed" if ok else "FAILED") + f": {note[:200]}"))
+        except gitops.GitError as exc:
+            log.warning("could not write the canary result into %s: %s", url, gitops.redact(str(exc)))
         if not ok:
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}; canary failed: {note[:200]}", force=True, pr_url=url, assignee_run=None)
             gitops.comment_pull_request(url, f"Canary cycle failed, left for a human:\n\n```\n{note[:1500]}\n```")

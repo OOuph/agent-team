@@ -63,6 +63,9 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
                             run_id=e.get("subject"), fp=str(e.get("subject"))))
         elif k == "phase.error":
             out.append(_rec(slug, "phase_error", f"phase {e.get('subject')}: {d.get('text') or d}", ts=ts, fp=f"{e.get('subject')}:{ts}"))
+        elif k == "pr.claim_mismatch":
+            out.append(_rec(slug, "reported", f"dispatcher: [other] claim vs git diff MISMATCH {e.get('subject')}: {d.get('text')}", ts=ts, task=str(e.get("subject")),
+                            fp=f"mismatch:{e.get('subject')}"))
         elif k == "budget.stop":
             out.append(_rec(slug, "budget_stop", f"budget stop: {d}", ts=ts, fp=str(ts)))
     for rj in p.runs_dir.glob("*/*/run.json"):
