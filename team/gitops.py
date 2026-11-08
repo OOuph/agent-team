@@ -270,6 +270,11 @@ def changed_files(repo_dir: Path, base: str = "main") -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def diff_stat(repo_dir: Path, base: str = "main") -> str:
+    ref = f"origin/{base}" if has_remote(repo_dir) else base
+    return git(repo_dir, "diff", "--stat", f"{ref}...HEAD", check=False)
+
+
 def tests_modified_or_deleted(repo_dir: Path, base: str = "main") -> list[str]:
     """Files under tests/ that the branch modifies, renames or deletes (pure additions are not listed)."""
     ref = f"origin/{base}" if has_remote(repo_dir) else base
@@ -295,6 +300,11 @@ def _pr_parts(pr_url: str) -> tuple[str, str]:
 def comment_pull_request(pr_url: str, body: str) -> None:
     repo, num = _pr_parts(pr_url)
     _gh("POST", f"/repos/{repo}/issues/{num}/comments", {"body": body[:60000]})
+
+
+def update_pull_request_body(pr_url: str, body: str) -> None:
+    repo, num = _pr_parts(pr_url)
+    _gh("PATCH", f"/repos/{repo}/pulls/{num}", {"body": body[:60000]})
 
 
 def merge_pull_request(pr_url: str, method: str = "merge") -> str:
