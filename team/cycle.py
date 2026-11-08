@@ -735,6 +735,7 @@ class Cycle:
         fw = dict(self.st.raw.get("framework") or {})
         touched = gitops.changed_files(repo, self.p.repo_branch)
         protected = [f for f in touched if any(f == pp or f.startswith(pp.rstrip("/") + "/") for pp in fw.get("protected_paths") or [])]
+        tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
             gitops.push_branch(repo, t["id"])
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
@@ -757,8 +758,10 @@ class Cycle:
                 return True
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
-        if not fw.get("auto_merge") or protected:
-            why = f"protected files {', '.join(protected[:5])}" if protected else "auto_merge off"
+        no_reason = bool(tests_changed) and not gitops.has_tests_change_reason(body)
+        if not fw.get("auto_merge") or protected or no_reason:
+            why = (f"protected files {', '.join(protected[:5])}" if protected else
+                   f"tests edited/deleted without a 'tests-change-reason: F-xxxx' line: {', '.join(tests_changed[:5])}" if no_reason else "auto_merge off")
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url} ({why})", force=True, pr_url=url, assignee_run=None)
             return True
         ok, note = self.canary(repo, str(fw.get("canary_product") or ""))

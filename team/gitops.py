@@ -270,6 +270,21 @@ def changed_files(repo_dir: Path, base: str = "main") -> list[str]:
     return [ln.strip() for ln in out.splitlines() if ln.strip()]
 
 
+def tests_modified_or_deleted(repo_dir: Path, base: str = "main") -> list[str]:
+    """Files under tests/ that the branch modifies, renames or deletes (pure additions are not listed)."""
+    ref = f"origin/{base}" if has_remote(repo_dir) else base
+    out = git(repo_dir, "diff", "--name-only", "--diff-filter=MDRT", f"{ref}...HEAD", "--", "tests/", check=False)
+    return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("tests/")]
+
+
+TESTS_REASON_RE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?tests-change-reason:[ \t]*F-\d{4,}\b")
+
+
+def has_tests_change_reason(body: str) -> bool:
+    """The PR body has a line 'tests-change-reason: F-xxxx ...' (T-0058); a line without an F-id does not count."""
+    return bool(TESTS_REASON_RE.search(body or ""))
+
+
 def _pr_parts(pr_url: str) -> tuple[str, str]:
     m = re.search(r"github\.com/([^/]+/[^/]+)/pull/(\d+)", pr_url)
     if not m:
