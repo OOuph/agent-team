@@ -633,3 +633,38 @@ def test_marketer_fetch_apex_and_www(tmp_path: Path, monkeypatch):
     assert rc("agent-team-diary", "https://www.formachines.ai/errata/") == 0
     assert rc("luz-amanha", "https://www.threads.com/") == 0
     assert rc("luz-amanha", "https://notthreads.com/") == 3
+
+
+def _tests_gate(tmp_path, monkeypatch, tests_changed, summary):
+    """T-0058: run release_as_pull_request with auto_merge on; returns (state, merged?)."""
+    st = _settings(tmp_path)
+    st.raw.setdefault("framework", {})["auto_merge"] = True
+    p = _product(st)
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    t = cy.store.create_task(title="t", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="test")
+    cy.store.transition(t["id"], "ready", "po")
+    merged = []
+    monkeypatch.setattr(gitops, "push_branch", lambda repo, tid: "abc")
+    monkeypatch.setattr(gitops, "changed_files", lambda repo, base: ["team/x.py"])
+    monkeypatch.setattr(gitops, "tests_modified_or_deleted", lambda repo, base: tests_changed)
+    monkeypatch.setattr(gitops, "open_pull_request", lambda *a, **k: "https://github.com/o/r/pull/1")
+    monkeypatch.setattr(gitops, "merge_pull_request", lambda url: merged.append(url) or "deadbeef00")
+    monkeypatch.setattr(gitops, "update_running_checkout", lambda *a, **k: None)
+    monkeypatch.setattr(cy, "canary", lambda repo, product: (True, "ok"))
+    cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": summary})
+    return cy.store.task(t["id"])["state"], bool(merged)
+
+
+def test_tests_gate_changed_without_reason_goes_to_human(tmp_path: Path, monkeypatch):
+    assert _tests_gate(tmp_path, monkeypatch, ["tests/test_a.py"], "s") == ("waiting_owner", False)
+    # malformed reason (no F-id) counts as missing
+    assert _tests_gate(tmp_path / "b", monkeypatch, ["tests/test_a.py"], "tests-change-reason: because") == ("waiting_owner", False)
+
+
+def test_tests_gate_changed_with_reason_merges_normally(tmp_path: Path, monkeypatch):
+    assert _tests_gate(tmp_path, monkeypatch, ["tests/test_a.py"], "s\ntests-change-reason: F-0123 flaky assertion") == ("done", True)
+
+
+def test_tests_gate_no_tests_change_unchanged(tmp_path: Path, monkeypatch):
+    # also the case of a PR that only adds new test files: tests_modified_or_deleted lists no additions
+    assert _tests_gate(tmp_path, monkeypatch, [], "s") == ("done", True)

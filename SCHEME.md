@@ -153,6 +153,7 @@ IndexNow. Telegram: три публичных канала + приватный 
    делаем») в списке только пара отката — `run-cycle.sh` и `watchdog.sh`: это то, что отменяет плохое самослияние, без
    них автоматизация теряет страховку. Всё остальное (`store.py`, `runner.py`, `config.py`, `publish.py`, `team.yaml`,
    `build-site.sh`, `deploy/`, `bin/`) сливается само после тестов и канарейки; до 03.11 ждало человека.
+   **Ворота тестов** (T-0058): PR, который изменяет или удаляет файл в `tests/` (добавление новых файлов не считается), сливается сам только если в теле PR есть строка `tests-change-reason: F-xxxx …` с id записи регистра; иначе (или если id нет) задача уходит в `waiting_owner`, PR ждёт человека (`gitops.tests_modified_or_deleted`, `gitops.has_tests_change_reason`, `Cycle.release_as_pull_request`).
 4. **Сторож вне диспетчера** — `watchdog.sh` в cron каждые 30 минут, в запретном списке: если за 2 часа ни один цикл
    не завершился, нет STOP и нет идущего цикла → `git reset --hard` на `data/framework/last-good` (пишется `run-cycle.sh`
    после каждого удачного цикла), запись `watchdog_rollback` в регистр, сообщение владельцу в Telegram, запуск цикла.

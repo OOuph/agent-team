@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-08
+
+- T-0058: auto-merge gate: a PR that modifies or deletes a file under `tests/` and has no `tests-change-reason: F-xxxx ...` line in its body is not self-merged (`waiting_owner`); pure additions of test files and PRs without `tests/` changes are unchanged (voice P6: the loop must not edit tests to go green). `team/cycle.py`, `team/gitops.py`, test.
+
 ## 2026-11-07
 
 - T-0057: PO card: the runtime-file rule extends to anything under gitignored paths (`data/`, e.g. `data/framework/retro/`): no acceptance needs a committed file there, deliverables go to tracked paths; also for retro-originated tasks in `agent-team` (F-0127, F-0122). Card only.
