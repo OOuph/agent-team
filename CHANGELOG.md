@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-08
 
+- T-0059: developer card: if the PR edits or deletes anything under `tests/`, the result summary carries a line of its own `tests-change-reason: F-xxxx <reason>`, so the T-0058 gate finds it in the PR body (OBS-0108, F-0127). Card, SCHEME.md.
 - T-0058: auto-merge gate: a PR that modifies or deletes a file under `tests/` and has no `tests-change-reason: F-xxxx ...` line in its body is not self-merged (`waiting_owner`); pure additions of test files and PRs without `tests/` changes are unchanged (voice P6: the loop must not edit tests to go green). `team/cycle.py`, `team/gitops.py`, test.
 
 ## 2026-11-07
