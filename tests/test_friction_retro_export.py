@@ -160,7 +160,18 @@ def test_retro_spend_section(tmp_path: Path) -> None:
     billing._path(st).write_text(json.dumps({"spend": {"2026-11-07": 4.5, "2026-11-06": 1.0, "2026-10-01": 9.0}}), encoding="utf-8")
     md, ok = retro.spend_section(st, now=now, cap=5.0)
     assert ok
-    assert "| 2026-11-07 | $4.50 | $5.00 | 90 % | OVER 80% |" in md
-    assert "| 2026-11-06 | $1.00 | $5.00 | 20 % |  |" in md
+    assert "| 2026-11-07 | $4.50 | $5.00 | 90 % | $0.00 | OVER 80% |" in md
+    assert "| 2026-11-06 | $1.00 | $5.00 | 20 % | $0.00 |  |" in md
     assert "2026-11-05 | n/a" in md and "2026-10-01" not in md
     assert "over 80 % of the cap: 1" in md
+
+
+def test_retro_cap_is_sum_of_product_budgets(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    for slug, b in (("a", 10), ("b", 20)):
+        d = st.products_dir / slug
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "product.yaml").write_text(f"slug: {slug}\nbudget_usd_per_day: {b}\n", encoding="utf-8")
+    assert retro.team_cap_usd(st) == 30.0
+    st.raw.setdefault("framework", {})["spend_cap_usd"] = 7
+    assert retro.team_cap_usd(st) == 7.0

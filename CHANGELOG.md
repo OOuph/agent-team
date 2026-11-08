@@ -10,6 +10,10 @@ the PR, a human merges.
 - T-0059: developer card: if the PR edits or deletes anything under `tests/`, the result summary carries a line of its own `tests-change-reason: F-xxxx <reason>`, so the T-0058 gate finds it in the PR body (OBS-0108, F-0127). Card, SCHEME.md.
 - T-0058: auto-merge gate: a PR that modifies or deletes a file under `tests/` and has no `tests-change-reason: F-xxxx ...` line in its body is not self-merged (`waiting_owner`); pure additions of test files and PRs without `tests/` changes are unchanged (voice P6: the loop must not edit tests to go green). `team/cycle.py`, `team/gitops.py`, test.
 
+## 2026-11-08
+
+- Retro spend section: the cap is now the sum of the products' `budget_usd_per_day` (was a hardcoded $5 compared with the whole team's spend, so every day was flagged OVER 80 %); a credits column shows real money against the $100 daily cap. VISION of `agent-team` states $10 a day (decision 26). The voice-of-user report of 07.11 that quoted "$5 a day" is corrected.
+
 ## 2026-11-07
 
 - T-0057: PO card: the runtime-file rule extends to anything under gitignored paths (`data/`, e.g. `data/framework/retro/`): no acceptance needs a committed file there, deliverables go to tracked paths; also for retro-originated tasks in `agent-team` (F-0127, F-0122). Card only.

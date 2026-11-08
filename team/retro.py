@@ -100,8 +100,22 @@ def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], exis
     ])
 
 
-SPEND_CAP_USD = 5.0        # VISION.md: $5 a day for the framework; override with framework.retro.spend_cap_usd
 SPEND_WARN_SHARE = 0.8
+
+
+def team_cap_usd(st: Settings) -> float:
+    """The ledger counts the whole team, so the cap is the sum of every product's `budget_usd_per_day` (product.yaml);
+    `framework.spend_cap_usd` in team.yaml overrides it."""
+    over = _cfg(st).get("spend_cap_usd")
+    if over:
+        return float(over)
+    total = 0.0
+    for d in st.product_dirs():
+        try:
+            total += float((yaml.safe_load((d / "product.yaml").read_text(encoding="utf-8")) or {}).get("budget_usd_per_day") or 0)
+        except (OSError, yaml.YAMLError, TypeError, ValueError) as e:
+            log.warning("retro: cannot read the budget of %s: %s", d, e)
+    return total
 
 
 def spend_section(st: Settings, now: datetime | None = None, cap: float | None = None, days: int = 7) -> tuple[str, bool]:
@@ -109,23 +123,27 @@ def spend_section(st: Settings, now: datetime | None = None, cap: float | None =
     days over 80 % flagged. Returns (markdown, data_available). No ledger data → 'spend: n/a', never invented numbers."""
     from . import billing
     now = now or datetime.now(timezone.utc)
-    cap = float(cap if cap is not None else (_cfg(st).get("spend_cap_usd") or SPEND_CAP_USD))
-    ledger = billing.load(st).get("spend")
+    cap = float(cap if cap is not None else team_cap_usd(st))
+    state = billing.load(st)
+    ledger = state.get("spend")
+    credits = state.get("credit_spend") if isinstance(state.get("credit_spend"), dict) else {}
     if not isinstance(ledger, dict) or not ledger:
         return "## Spend\n\nspend: n/a (no per-day spend record readable in the billing ledger)\n", False
-    lines = ["## Spend", "", f"Spend per day (UTC) vs the ${cap:.2f} daily cap; days over {int(SPEND_WARN_SHARE * 100)} % are flagged.", "",
-             "| day | spend | cap | share | flag |", "|---|---|---|---|---|"]
+    lines = ["## Spend", "", f"Whole-team spend per day (UTC, USD-equivalent) vs the ${cap:.2f} cap (sum of the product budgets); "
+             f"days over {int(SPEND_WARN_SHARE * 100)} % are flagged. Credits = real money, capped at ${billing.daily_cap(st):.0f} a day; "
+             "the rest ran inside the subscription.", "",
+             "| day | spend | cap | share | credits | flag |", "|---|---|---|---|---|---|"]
     over = 0
     for i in range(days - 1, -1, -1):
         d = (now - timedelta(days=i)).strftime("%Y-%m-%d")
         if d not in ledger:
-            lines.append(f"| {d} | n/a | ${cap:.2f} | n/a | |")
+            lines.append(f"| {d} | n/a | ${cap:.2f} | n/a | n/a | |")
             continue
         usd = float(ledger[d])
         share = usd / cap if cap > 0 else 0.0
         flag = "OVER 80%" if share > SPEND_WARN_SHARE else ""
         over += bool(flag)
-        lines.append(f"| {d} | ${usd:.2f} | ${cap:.2f} | {share * 100:.0f} % | {flag} |")
+        lines.append(f"| {d} | ${usd:.2f} | ${cap:.2f} | {share * 100:.0f} % | ${float(credits.get(d, 0.0)):.2f} | {flag} |")
     lines += ["", f"Days over {int(SPEND_WARN_SHARE * 100)} % of the cap: {over}.", ""]
     return "\n".join(lines), True
 
