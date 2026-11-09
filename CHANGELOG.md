@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-09
+
+- T-0063: marketer card: a thread of replies on one channel counts as one post for the daily limit; no link to a dev.to article whose URL is not yet known (link the product page or omit); the AI label is mentioned in one line only (added by team-publish) (F-0126, F-0130, F-0121). Card, SCHEME.md.
+
 ## 2026-11-08
 
 - T-0062: retro report starts with `## Owner digest` (≤ 12 lines): PRs merged in 24 h, PRs waiting for a human (protected files / tests changed without reason), rollbacks to last-good, spend today vs cap; `none` for empty, `unknown` for unreadable sources (voice:2026-11-07:P3; F-0127, rollback records F-kind `rollback`). `team/retro.py`, SCHEME.md, test.
