@@ -458,3 +458,18 @@ def test_graphemes_clusters():
     assert len(graphemes("🇵🇹🇷🇺")) == 2
     assert len(graphemes("👍🏽")) == 1
     assert len(graphemes("1️⃣")) == 1
+
+
+def test_reply_passes_at_cap_but_post_refused(monkeypatch):
+    monkeypatch.setenv("TEAM_PUBLISH_MAX_PER_DAY", "2")
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"bluesky": 2}))
+    monkeypatch.delenv("TEAM_PUBLISH_REPLY_COUNTS", raising=False)
+    assert publish._daily_limit_error("bluesky", None, "at://x/y/z") is None
+    assert "daily limit" in publish._daily_limit_error("bluesky", None)
+
+
+def test_reply_has_own_cap(monkeypatch):
+    monkeypatch.setenv("TEAM_PUBLISH_MAX_PER_DAY", "2")
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"bluesky": 2}))
+    monkeypatch.setenv("TEAM_PUBLISH_REPLY_COUNTS", json.dumps({"bluesky": 10}))
+    assert "replies" in publish._daily_limit_error("bluesky", None, "at://x/y/z")

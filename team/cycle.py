@@ -900,6 +900,7 @@ class Cycle:
         env = {"TEAM_PUBLISH_LEDGER": str(ledger), "TEAM_PUBLISH_DISCLOSURES": json.dumps(disc_map, ensure_ascii=False),
                "TEAM_PUBLISH_MAX_PER_DAY": str(self.st.publish.get("max_posts_per_channel_per_day", 2)),
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
+               "TEAM_PUBLISH_REPLY_COUNTS": json.dumps({c: self.store.posts_today(c + ":reply") for c in channels}),
                "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
         mkt_tools = ["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]
@@ -1021,7 +1022,8 @@ class Cycle:
             text = str(r.get("final_text") or "").strip() or None
             res = publish.publish_draft(Path(d["_path"]), text=text, dry_run=bool(self.st.publish.get("dry_run")))
             if res.ok and not res.dry_run:
-                self.store.record_post(str(res.channel), str(res.post_id or ""), str(res.url or ""), t["id"], text=text or str(d.get("text") or ""))
+                # replies are booked under "<channel>:reply": they do not consume the daily post cap (T-0071)
+                self.store.record_post(str(res.channel) + (":reply" if d.get("reply_to") else ""), str(res.post_id or ""), str(res.url or ""), t["id"], text=text or str(d.get("text") or ""))
                 posted += 1
             elif not res.ok:
                 self.store.event("post.error", t["id"], "dispatcher", {"channel": d.get("channel"), "error": str(res.error)[:200]})

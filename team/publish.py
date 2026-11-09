@@ -54,6 +54,7 @@ THREADS_API = "https://graph.threads.net/v1.0"
 THREADS_MAX_CHARS = 500
 THREADS_PUBLISH_RETRIES = 4           # a fresh container may answer "not ready" for a few seconds
 THREADS_RETRY_SLEEP_S = 3
+DEFAULT_MAX_REPLIES_PER_DAY = 10     # replies (--reply-to) have their own cap, outside the daily post cap
 THREADS_LOOKUP_LIMIT = 100           # reply_to by link: our own recent posts are searched by permalink
 THREADS_REFRESH_URL = "https://graph.threads.net/refresh_access_token"
 X_API = "https://api.x.com/2/tweets"
@@ -667,12 +668,14 @@ def publish_draft(path: Path, *, text: str | None = None, dry_run: bool = False)
                 target=d.get("target"), reply_to=d.get("reply_to"))
 
 
-def append_ledger(path: Path, res: PostResult, target: str | None, text: str) -> None:
+def append_ledger(path: Path, res: PostResult, target: str | None, text: str, reply_to: str | None = None) -> None:
     """Append one JSON line (the dispatcher's journal) to ``path``, creating parent dirs."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
     row = {"ts": utcnow_iso(), "channel": res.channel, "target": target, "ok": res.ok, "post_id": res.post_id,
            "url": res.url, "error": res.error, "dry_run": res.dry_run, "sha256": sha256_text(text)}
+    if reply_to:
+        row["reply"] = True
     with path.open("a", encoding="utf-8") as f:
         f.write(json.dumps(row, ensure_ascii=False) + "\n")
     log.debug("ledger appended %s", path)
@@ -703,9 +706,11 @@ def _with_src(url: str | None, channel: str) -> str | None:
     return f"{url}{sep}src={channel}"
 
 
-def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
+def _daily_limit_error(channel: str, ledger: Path | None, reply_to: str | None = None) -> str | None:
     """The dispatcher's daily cap per channel: TEAM_PUBLISH_MAX_PER_DAY, plus posts already booked today
-    (TEAM_PUBLISH_COUNTS, a JSON object channel → count) and the ok lines of this run's ledger. Final for today."""
+    (TEAM_PUBLISH_COUNTS, a JSON object channel → count) and the ok lines of this run's ledger. Final for today.
+    Replies (reply_to set) are exempt from this cap and not counted in it; they have their own cap
+    (TEAM_PUBLISH_MAX_REPLIES_PER_DAY, default 10) over TEAM_PUBLISH_REPLY_COUNTS and the ledger's reply lines."""
     raw = os.environ.get("TEAM_PUBLISH_MAX_PER_DAY")
     if not raw:
         return None
@@ -713,9 +718,15 @@ def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
         cap = int(raw)
     except ValueError:
         return None
+    if reply_to:
+        try:
+            cap = int(os.environ.get("TEAM_PUBLISH_MAX_REPLIES_PER_DAY") or DEFAULT_MAX_REPLIES_PER_DAY)
+        except ValueError:
+            cap = DEFAULT_MAX_REPLIES_PER_DAY
     n = 0
     try:
-        n += int((json.loads(os.environ.get("TEAM_PUBLISH_COUNTS") or "{}") or {}).get(channel, 0))
+        counts_env = "TEAM_PUBLISH_REPLY_COUNTS" if reply_to else "TEAM_PUBLISH_COUNTS"
+        n += int((json.loads(os.environ.get(counts_env) or "{}") or {}).get(channel, 0))
     except (ValueError, TypeError):
         pass
     if ledger and ledger.exists():
@@ -725,10 +736,12 @@ def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
                 e = json.loads(ln)
             except json.JSONDecodeError:
                 continue
-            if e.get("channel") == channel and e.get("ok") and not e.get("dry_run") and str(e.get("ts", "")).startswith(today):
+            if e.get("channel") == channel and e.get("ok") and not e.get("dry_run") and bool(e.get("reply")) == bool(reply_to) \
+                    and str(e.get("ts", "")).startswith(today):
                 n += 1
     if n >= cap:
-        return f"daily limit reached for {channel}: {n} of {cap} posts today; no more posts until tomorrow"
+        kind = "replies" if reply_to else "posts"
+        return f"daily limit reached for {channel}: {n} of {cap} {kind} today; no more {kind} until tomorrow"
     return None
 
 # ---- CLI --------------------------------------------------------------------------------------
@@ -767,7 +780,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     disclosure = args.disclosure if args.disclosure != DEFAULT_DISCLOSURE else _disclosure_for(args.channel)
     url = _with_src(args.url, args.channel)
-    limit_err = _daily_limit_error(args.channel, args.ledger)
+    limit_err = _daily_limit_error(args.channel, args.ledger, args.reply_to)
     if limit_err:
         res = PostResult(False, args.channel, None, None, limit_err, args.dry_run)
     elif os.environ.get(DRAFT_DIR_ENV):
@@ -780,7 +793,7 @@ def main(argv: list[str] | None = None) -> int:
                    disclosure=disclosure, dry_run=args.dry_run, target=args.target, reply_to=args.reply_to)
     if args.ledger:
         try:
-            append_ledger(args.ledger, res, args.target, text)
+            append_ledger(args.ledger, res, args.target, text, args.reply_to)
         except OSError as e:
             log.error("ledger write failed: %s", e)
     print(res.to_json())
