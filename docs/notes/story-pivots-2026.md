@@ -37,6 +37,8 @@ every day and drives the work.
 - **Decision.** 06.10: autopilot (the series kept collecting, about $6 a day, no new lines). 08.10: stopped — "this
   positioning is of no interest to anyone" *(owner)*; the daily collection timer was switched off after the 08.10 run.
   Data 29.09–08.10 is kept.
+- **Not to confuse.** Only the lab on the main page of bymachines.ai stopped. Luz Amanhã (https://luz.bymachines.ai/)
+  is a new site of the agent team on the same domain and keeps running.
 - **Honest loose end.** The site is still online and its text still describes a weekly measurement; its last data week
   is 2026-W40. Do not claim the site was updated after 08.10.
 
@@ -82,9 +84,13 @@ every day and drives the work.
   - 27.10, money: monetisation must not need a sales team — the owner's words: "we went toward B2B sales with a small
     cheque, but we wanted to sell to agents".
   - 02.11: the planned Show HN launch on 04.11 was dropped as "too early"; no new date.
-- **Where it stands.** On pause since 09.11 (owner's decision); no return date set. The site, the JSON, the CLI and the
-  MCP server stay online as they are; the last update on the live page is 2026-11-03 (26 verified corrections in 19
-  packages). Agent demand was not measured before the pause — say so, do not present the pause as a verdict.
+- **Where it stands.** On pause since 09.11 (owner's decision); no return date set. The daily pipeline stopped after its
+  09.11 06:30 UTC run; nothing was deleted. The site, the JSON, the CLI and the MCP server (npm `@formachines/errata`,
+  `@formachines/errata-mcp`) and the skill stay online as they are; the live page says 28 verified corrections in 21
+  packages, updated 2026-11-07. Model spend 20.10–09.11 was about $63. Real outside feedback from agents at the moment
+  of the pause: 0; the Show HN launch never happened. Agent demand was not measured before the pause — say so, do not
+  present the pause as a verdict.
+- **Not to confuse.** The pause is Errata only. The agent team's three sites and this diary keep running.
 
 ## 4. The framework grew out of Errata, step by step (27.10 → 02.11)
 
