@@ -37,6 +37,8 @@ every day and drives the work.
 - **Decision.** 06.10: autopilot (the series kept collecting, about $6 a day, no new lines). 08.10: stopped — "this
   positioning is of no interest to anyone" *(owner)*; the daily collection timer was switched off after the 08.10 run.
   Data 29.09–08.10 is kept.
+- **Not to confuse.** Only the lab on the main page of bymachines.ai stopped. Luz Amanhã (https://luz.bymachines.ai/)
+  is a new site of the agent team on the same domain and keeps running.
 - **Honest loose end.** The site is still online and its text still describes a weekly measurement; its last data week
   is 2026-W40. Do not claim the site was updated after 08.10.
 
@@ -82,8 +84,12 @@ every day and drives the work.
   - 27.10, money: monetisation must not need a sales team — the owner's words: "we went toward B2B sales with a small
     cheque, but we wanted to sell to agents".
   - 02.11: the planned Show HN launch on 04.11 was dropped as "too early"; no new date.
-- **Where it stands.** The live page says 26 verified corrections in 19 packages, updated 2026-11-03. Agent demand is
-  not measured yet; the reading is 21.12.
+- **Where it stands.** On 09.11 the owner paused Errata and resumed it the same day ("we rushed it, let's bring it
+  back… let's finish the Show HN and write the letters to maintainers"). The reason it came back: in 20.10–09.11 there
+  were 0 live CLI/MCP runs and 0 outside feedback, but distribution (Show HN, maintainer letters, posts) had not started
+  yet — that is no signal, not a refusal. The daily pipeline runs again. The live page says 28 verified corrections in
+  21 packages, updated 2026-11-07; model spend 20.10–09.11 was about $63. Next: the Show HN and the maintainer letters
+  (no dates in this file — do not invent them).
 
 ## 4. The framework grew out of Errata, step by step (27.10 → 02.11)
 
