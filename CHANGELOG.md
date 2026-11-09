@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-09
 
+- T-0077: marketer card: top shell rule now names Edit as denied and says to fix a draft by rewriting it with Write (F-0154, F-0149, F-0147, F-0129, F-0148).
 - T-0075: marketer card: engagement of earlier posts is not observable with team-fetch/team-publish; say "engagement not observable" in the summary, no friction (F-0153, F-0143). Card.
 - T-0073: PO card: a dev.to task names a dated page `/d/<date>/` or a findings page with `?src=devto` as canonical, never the site root; PO fixes open dev.to acceptance (T-0052) instead of the marketer asking the owner (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138). Card, SCHEME.md.
 - T-0066: marketer card: dev.to canonical must be unique per article (dated page `/d/<date>/` or findings page with `?src=devto`, never the site root twice; 422 otherwise) (F-0140, F-0138, F-0139). Card, SCHEME.md.
