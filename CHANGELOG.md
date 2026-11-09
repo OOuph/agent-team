@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-09
 
+- T-0071: `team-publish`: replies (`--reply-to`) are exempt from the daily post cap and not counted in `TEAM_PUBLISH_COUNTS` (booked as `<channel>:reply`); own cap of 10 replies per channel per day (F-0142, F-0141). `team/publish.py`, `team/cycle.py`, SCHEME.md.
 - T-0066: marketer card: dev.to canonical must be unique per article (dated page `/d/<date>/` or findings page with `?src=devto`, never the site root twice; 422 otherwise) (F-0140, F-0138, F-0139). Card, SCHEME.md.
 - T-0065: analyst card: no network tool; curl or any fetch of any URL (not only metrics.json) is denied; live-site checks go to `friction` or a `need_hypothesis` observation for the reviewer (F-0097, F-0133). Card.
 - T-0064: PO card: acceptance field names are checked against the task's own constraints (e.g. no-rename); on conflict the task text says which wins (example T-0077) (F-0134, F-0132). Card, SCHEME.md.
