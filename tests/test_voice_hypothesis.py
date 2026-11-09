@@ -185,9 +185,9 @@ def test_quality_type_outside_rule_and_po_woken_for_idle_developer(tmp_path: Pat
                          state="ready", role="marketer")
     cy.phase_triage()                                            # only a marketer task: the developer is idle → PO woken
     assert [c[0] for c in calls] == ["po"] and "developer has no ready work" in calls[0][1]
-    Cycle(st, p, R(), "c2").phase_triage()                       # within 6 h: not woken again
+    Cycle(st, p, R(), "c2").phase_triage()                       # within 12 h: not woken again
     assert len(calls) == 1
-    old = datetime.now(timezone.utc) - timedelta(hours=7)
+    old = datetime.now(timezone.utc) - timedelta(hours=13)
     (p.dir / Cycle.DEV_IDLE_FILE).write_text(old.isoformat(), encoding="utf-8")
     Cycle(st, p, R(), "c3").phase_triage()
     assert len(calls) == 2

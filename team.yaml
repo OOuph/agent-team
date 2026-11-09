@@ -48,7 +48,7 @@ cycle:
   seo_every_h: 12                 # programmatic SEO/GEO page checks
   geo_every_h: 168                # weekly control questions to AI search
   voice_every_h: 84               # voice-of-user research per product twice a week (owner 08.11; team/voice.py)
-  dev_idle_po_every_h: 6          # developer has nothing ready: the PO is woken this often to queue defect/quality work (owner 08.11)
+  dev_idle_po_every_h: 12         # developer has nothing ready: the PO is woken this often to queue defect/quality work (owner 08.11; 12 h since 09.11)
   voice_cap_usd: 3.0
   max_ready: 3
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low

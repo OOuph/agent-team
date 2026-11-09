@@ -451,7 +451,7 @@ class Cycle:
 
     def dev_idle_due(self, now: datetime | None = None) -> bool:
         """The developer has nothing ready: wake the PO for defect/quality work at most every `cycle.dev_idle_po_every_h`."""
-        every = float(self.st.cycle.get("dev_idle_po_every_h", 6) or 0)
+        every = float(self.st.cycle.get("dev_idle_po_every_h", 12) or 0)
         if every <= 0:
             return False
         try:
