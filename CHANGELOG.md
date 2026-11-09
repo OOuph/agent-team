@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-09
 
+- T-0079: editor card: top shell rule now says no double quotes or `=` in `--grep` and `&` in a URL is denied (use one query parameter or `--json-path`/`--tag`), matching reviewer.md (F-0156, F-0144). Card.
 - T-0077: marketer card: top shell rule now names Edit as denied and says to fix a draft by rewriting it with Write (F-0154, F-0149, F-0147, F-0129, F-0148).
 - T-0075: marketer card: engagement of earlier posts is not observable with team-fetch/team-publish; say "engagement not observable" in the summary, no friction (F-0153, F-0143). Card.
 - T-0073: PO card: a dev.to task names a dated page `/d/<date>/` or a findings page with `?src=devto` as canonical, never the site root; PO fixes open dev.to acceptance (T-0052) instead of the marketer asking the owner (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138). Card, SCHEME.md.
