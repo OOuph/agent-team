@@ -123,6 +123,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   criteria require must not conflict with the task's rules (e.g. "no rename" against "an object named `sample`"). If
   they conflict, state in the task text which one wins. Example: T-0077 (F-0134) demanded an object named `sample`
   while forbidding renames; the developer could not satisfy both and the task stalled.
+- dev.to tasks (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138): the canonical URL must be unique per article (dev.to
+  answers 422 for a repeated one). A task for a dev.to post names a dated page `/d/<date>/` or a specific findings page
+  with `?src=devto` as canonical, never the site root. When you see an open dev.to task (e.g. T-0052) whose acceptance
+  names the root as canonical, fix its acceptance in the same run; do not ask the owner about a canonical 422.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
