@@ -25,3 +25,5 @@ goal_status.
 ## No shell
 You have no shell: do not try `ls`, `find` or `cat`. All the context is in the prompt; a missing item goes into `friction`.
 The metrics JSON is already in your prompt: `curl` and any other fetch of `/_team/metrics.json` are denied, so do not try them.
+You have no network tool at all: `curl` (or any other fetch) of any URL is denied, not only `/_team/metrics.json` — `build.json`, `today.json`, `robots.txt` and so on. Do not try them.
+If you want a live-site check, put it into `friction` (kind `missing_tool` or `missing_data`) or write a `need_hypothesis` observation for the reviewer, who can open the live site.
