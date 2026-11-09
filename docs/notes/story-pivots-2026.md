@@ -82,8 +82,9 @@ every day and drives the work.
   - 27.10, money: monetisation must not need a sales team — the owner's words: "we went toward B2B sales with a small
     cheque, but we wanted to sell to agents".
   - 02.11: the planned Show HN launch on 04.11 was dropped as "too early"; no new date.
-- **Where it stands.** The live page says 26 verified corrections in 19 packages, updated 2026-11-03. Agent demand is
-  not measured yet; the reading is 21.12.
+- **Where it stands.** On pause since 09.11 (owner's decision); no return date set. The site, the JSON, the CLI and the
+  MCP server stay online as they are; the last update on the live page is 2026-11-03 (26 verified corrections in 19
+  packages). Agent demand was not measured before the pause — say so, do not present the pause as a verdict.
 
 ## 4. The framework grew out of Errata, step by step (27.10 → 02.11)
 
