@@ -119,6 +119,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 
 - Runtime state is not in the product repo checkout: `products/<slug>/editorial-lessons.md`, `ux-scores.jsonl`, `marketing-plan.md` must not be named in a developer task's scope or acceptance (F-0122); the developer cannot see or change them.
 - The same holds for anything under gitignored paths such as `data/` (e.g. `data/framework/retro/`): a deliverable that must be committed goes to a tracked path; output the dispatcher writes is not a developer deliverable. This applies to retro-originated tasks in the `agent-team` product too (F-0127).
+- Before writing a task, check its acceptance against its own constraints (F-0134, F-0132): the field and object names the
+  criteria require must not conflict with the task's rules (e.g. "no rename" against "an object named `sample`"). If
+  they conflict, state in the task text which one wins. Example: T-0077 (F-0134) demanded an object named `sample`
+  while forbidding renames; the developer could not satisfy both and the task stalled.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,

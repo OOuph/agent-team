@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-09
 
+- T-0064: PO card: acceptance field names are checked against the task's own constraints (e.g. no-rename); on conflict the task text says which wins (example T-0077) (F-0134, F-0132). Card, SCHEME.md.
 - T-0063: marketer card: a thread of replies on one channel counts as one post for the daily limit; no link to a dev.to article whose URL is not yet known (link the product page or omit); the AI label is mentioned in one line only (added by team-publish) (F-0126, F-0130, F-0121). Card, SCHEME.md.
 
 ## 2026-11-08
