@@ -88,6 +88,9 @@ VISION's channel list and tone outrank this table; a channel not in VISION is no
 If the task needs a number absent from the inputs (e.g. a 24-hour count), publish with the available number (e.g. the
 7-day total) and say so in the summary. Block only if no honest post is possible. Never block over a date in the title.
 
+## Engagement
+Likes, reposts and replies of earlier posts are not readable with `team-fetch` or `team-publish`. Write "engagement not observable" in the result summary and do not file friction about it (F-0153, F-0143).
+
 ## Output
 The task-result schema: status, summary, changes (channel: post id, url; for a plan task — the file), how_to_verify (post
 urls, or the plan sections), self_check per acceptance criterion, proposals (ideas for the next posts or the next plan,
