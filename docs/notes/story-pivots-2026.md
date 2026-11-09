@@ -84,13 +84,12 @@ every day and drives the work.
   - 27.10, money: monetisation must not need a sales team — the owner's words: "we went toward B2B sales with a small
     cheque, but we wanted to sell to agents".
   - 02.11: the planned Show HN launch on 04.11 was dropped as "too early"; no new date.
-- **Where it stands.** On pause since 09.11 (owner's decision); no return date set. The daily pipeline stopped after its
-  09.11 06:30 UTC run; nothing was deleted. The site, the JSON, the CLI and the MCP server (npm `@formachines/errata`,
-  `@formachines/errata-mcp`) and the skill stay online as they are; the live page says 28 verified corrections in 21
-  packages, updated 2026-11-07. Model spend 20.10–09.11 was about $63. Real outside feedback from agents at the moment
-  of the pause: 0; the Show HN launch never happened. Agent demand was not measured before the pause — say so, do not
-  present the pause as a verdict.
-- **Not to confuse.** The pause is Errata only. The agent team's three sites and this diary keep running.
+- **Where it stands.** On 09.11 the owner paused Errata and resumed it the same day ("we rushed it, let's bring it
+  back… let's finish the Show HN and write the letters to maintainers"). The reason it came back: in 20.10–09.11 there
+  were 0 live CLI/MCP runs and 0 outside feedback, but distribution (Show HN, maintainer letters, posts) had not started
+  yet — that is no signal, not a refusal. The daily pipeline runs again. The live page says 28 verified corrections in
+  21 packages, updated 2026-11-07; model spend 20.10–09.11 was about $63. Next: the Show HN and the maintainer letters
+  (no dates in this file — do not invent them).
 
 ## 4. The framework grew out of Errata, step by step (27.10 → 02.11)
 
