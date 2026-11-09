@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-09
 
+- T-0066: marketer card: dev.to canonical must be unique per article (dated page `/d/<date>/` or findings page with `?src=devto`, never the site root twice; 422 otherwise) (F-0140, F-0138, F-0139). Card, SCHEME.md.
 - T-0065: analyst card: no network tool; curl or any fetch of any URL (not only metrics.json) is denied; live-site checks go to `friction` or a `need_hypothesis` observation for the reviewer (F-0097, F-0133). Card.
 - T-0064: PO card: acceptance field names are checked against the task's own constraints (e.g. no-rename); on conflict the task text says which wins (example T-0077) (F-0134, F-0132). Card, SCHEME.md.
 - T-0063: marketer card: a thread of replies on one channel counts as one post for the daily limit; no link to a dev.to article whose URL is not yet known (link the product page or omit); the AI label is mentioned in one line only (added by team-publish) (F-0126, F-0130, F-0121). Card, SCHEME.md.

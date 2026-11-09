@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import yaml
@@ -36,7 +37,7 @@ def test_friction_collects_signals_and_dedupes(tmp_path: Path) -> None:
     s.event("phase.error", "execute", "dispatcher", "KeyError")
     rd = p.runs_dir / "c1" / "dev"
     rd.mkdir(parents=True)
-    (rd / "run.json").write_text(json.dumps({"run_id": "r4", "role": "developer", "denials": [{"tool_name": "WebFetch", "tool_input": {"url": "https://x.example/" + "a" * 100}}, {"tool_name": "Bash", "tool_input": {"command": "curl x"}}], "finished": "2026-11-02T10:00:00+00:00"}), encoding="utf-8")
+    (rd / "run.json").write_text(json.dumps({"run_id": "r4", "role": "developer", "denials": [{"tool_name": "WebFetch", "tool_input": {"url": "https://x.example/" + "a" * 100}}, {"tool_name": "Bash", "tool_input": {"command": "curl x"}}], "finished": (datetime.now(timezone.utc) - timedelta(days=1)).isoformat()}), encoding="utf-8")
     recs = friction.collect_product(p, s)
     kinds = sorted(r["kind"] for r in recs)
     assert kinds == ["phase_error", "reported", "reported", "review_inconclusive", "run_failed", "task_blocked", "tool_denied"]
