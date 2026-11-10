@@ -481,8 +481,10 @@ class Cycle:
             log.info("%s: triage skipped (nothing new, team busy)", self.p.slug)
             return
         latest = self.p.dir / "metrics" / "latest.md"
+        gsc_md = self.p.dir / "metrics" / "gsc.md"               # owner 10.11: Search Console next to the log metrics
         prompt = prompts.po_prompt(self.p, self.store, cycle_id=self.cycle_id, observations=new_obs[:25], questions=qs,
-                                   metrics_md=latest.read_text(encoding="utf-8") if latest.exists() else "",
+                                   metrics_md=(latest.read_text(encoding="utf-8") if latest.exists() else "")
+                                   + ("\n\n" + gsc_md.read_text(encoding="utf-8")[:3000] if gsc_md.exists() else ""),
                                    spent_today=self.store.spent_today(), cap=self.p.daily_cap,
                                    max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle, dev_idle=dev_idle,
                                    channel_caps=self.channel_caps())
@@ -1165,6 +1167,9 @@ class Cycle:
     def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]
         metrics = [("digest", prompts.metrics_digest(files))]     # ops 04.11: compact per-day view, not cut raw files
+        gsc_md = self.p.dir / "metrics" / "gsc.md"
+        if gsc_md.exists():
+            metrics.append(("Google Search Console (team gsc, daily)", gsc_md.read_text(encoding="utf-8")))
         since = (_now() - timedelta(hours=72)).isoformat()
         accepted = [t for t in self.store.tasks(["accepted", "measured", "done", "released"]) if (t.get("accepted_at") or t.get("released_at") or "") >= since]
         posts = [{"day": r[0], "channel": r[1], "url": r[3], "ts": r[5]} for r in self.store.db.execute("SELECT * FROM posts ORDER BY ts DESC LIMIT 20")]

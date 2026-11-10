@@ -75,6 +75,13 @@ framework:                        # self-improvement: friction register → retr
     - DEPUTY.md                   # the owner's mandate for the deputy role: his words, not the loop's
   max_usd_per_run: 2.0
 
+gsc:                              # owner 10.11: Google Search Console via a service account (restricted user), `team gsc` daily
+  enabled: true
+  key_file: secrets/gsc.json      # outside git (secrets/ is ignored); the owner copies it to the server
+  days: 28
+  inspect_per_day: 20             # URL Inspection: quota is 2,000/day per property; 20 per product keeps a weekly rotation
+  reinspect_days: 7
+
 deputy:                           # decision 27 (04–10.11), kept by the owner 10.11: open owner questions are answered by the deputy role
   enabled: true
   after_h: 1                      # the owner gets this long to answer himself; then the deputy answers by DEPUTY.md

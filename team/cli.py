@@ -199,6 +199,11 @@ def cmd_export(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_gsc(st: C.Settings, a: argparse.Namespace) -> int:
+    from . import gsc
+    return gsc.run_all(st, [p for p in _products(st, a.product) if p.host or p.site_base])
+
+
 def cmd_friction(st: C.Settings, a: argparse.Namespace) -> int:
     from . import friction
     friction.collect_all(st, _products(st, "all"))
@@ -283,6 +288,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("export-public"); s.add_argument("--product", default="all"); s.add_argument("--out"); s.add_argument("--days", type=int, default=14)
     s.set_defaults(fn=cmd_export)
     s = sub.add_parser("lesson"); s.add_argument("product"); s.add_argument("--text", required=True); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_lesson)
+    s = sub.add_parser("gsc"); s.add_argument("--product", default="all"); s.set_defaults(fn=cmd_gsc)
     s = sub.add_parser("friction"); s.add_argument("--days", type=int, default=7); s.add_argument("--out"); s.set_defaults(fn=cmd_friction)
     s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     s = sub.add_parser("report"); s.add_argument("--product", default="all"); s.add_argument("--hours", type=float, default=12.0)
