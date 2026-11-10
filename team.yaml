@@ -75,7 +75,7 @@ framework:                        # self-improvement: friction register → retr
     - DEPUTY.md                   # the owner's mandate for the deputy role: his words, not the loop's
   max_usd_per_run: 2.0
 
-deputy:                           # owner away 04–10.11 (decision 27): questions to the owner are answered by the deputy role
+deputy:                           # decision 27 (04–10.11), kept by the owner 10.11: open owner questions are answered by the deputy role
   enabled: true
   after_h: 1                      # the owner gets this long to answer himself; then the deputy answers by DEPUTY.md
 

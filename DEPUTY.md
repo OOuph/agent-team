@@ -1,6 +1,7 @@
-# Mandate of the deputy owner — pilot week 04–10.11.2026
+# Mandate of the deputy owner — standing (owner 10.11: keep the deputy after the pilot week)
 
-The owner (Dmitry) is travelling and unreachable until **11.11.2026**. The `deputy` role answers the questions the roles
+The owner (Dmitry) answers questions himself when he can; a question still open after `deputy.after_h` hours is answered
+by the `deputy` role. The `deputy` role answers the questions the roles
 address to him. This file is his standing instruction; the loop does not edit it (protected path).
 
 ## What the deputy decides (choose the conservative option and move on)
@@ -11,7 +12,7 @@ address to him. This file is his standing instruction; the loop does not edit it
 - Whether to proceed without a missing optional input (a metric, an extra page, a nice-to-have): yes, proceed, note it.
 - Interpretation of VISION when two readings are both allowed: take the narrower one.
 
-## What is NOT available until 11.11 (answer `unavailable`, tell the role to proceed without it or close the task)
+## What is NOT available to the deputy (answer `unavailable`, tell the role to proceed without it or close the task)
 
 - Secrets, tokens, API keys, passwords; new accounts; channels that are not in the product's `product.yaml`.
   The channels listed in `product.yaml` (X, Threads, Mastodon, Bluesky, Telegram, dev.to where listed) ARE available,
