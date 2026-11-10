@@ -1,7 +1,7 @@
 """Facts block for the PR body, computed by the dispatcher from git and the test run, never from the developer's text (T-0060).
 
 The developer's summary is a claim; this block is the checkpoint a reviewer can verify (F-0127-class claim-vs-reality evidence,
-voice 2026-11-07 P2). If the files the developer names are not in the diff, a MISMATCH line is added.
+voice 2026-11-07 P2). If the files the developer lists in `changes` are not in the diff, a MISMATCH line is added.
 """
 from __future__ import annotations
 
@@ -26,7 +26,8 @@ def parse_test_counts(output: str) -> dict[str, int] | None:
 
 
 def claimed_files(summary: str, changes: list[str] | None) -> list[str]:
-    text = _URL_RE.sub(" ", "\n".join([str(summary or ""), *[str(c) for c in changes or []]]))
+    """Paths from the structured `changes` list only; the free-text summary may name files as context (T-0084)."""
+    text = _URL_RE.sub(" ", "\n".join(str(c) for c in changes or []))
     seen: list[str] = []
     for m in _PATH_RE.finditer(text):
         p = m.group(1)
@@ -59,7 +60,7 @@ def render(diff_stat: str, diff_files: list[str], test_output: str | None, claim
     lines += ["", f"**Canary:** {canary}"]
     bad = mismatches(claimed, diff_files)
     if bad:
-        lines += ["", "**MISMATCH:** the developer's summary names files that are not in the diff: " + ", ".join(f"`{b}`" for b in bad)]
+        lines += ["", "**MISMATCH:** the developer's `changes` list names files that are not in the diff: " + ", ".join(f"`{b}`" for b in bad)]
     return "\n".join(lines)
 
 

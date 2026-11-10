@@ -16,9 +16,14 @@ def test_block_lists_diff_and_counts_not_claims():
 
 
 def test_mismatch_when_summary_names_file_not_in_diff():
-    md, bad = prfacts.build("", ["team/a.py"], OUT, {"summary": "Changed team/a.py and team/ghost.py (see https://x.io/z/other.py)", "changes": []})
+    md, bad = prfacts.build("", ["team/a.py"], OUT, {"summary": "Changed team/a.py", "changes": ["team/a.py", "team/ghost.py (see https://x.io/z/other.py)"]})
     assert bad == ["team/ghost.py"]
     assert "MISMATCH" in md and "`team/ghost.py`" in md
+
+
+def test_prose_file_in_summary_only_gives_no_mismatch():
+    md, bad = prfacts.build("", ["team/a.py"], OUT, {"summary": "Read po.md and article.md for context; edited team/a.py", "changes": ["team/a.py"]})
+    assert bad == [] and "MISMATCH" not in md
 
 
 def test_canary_result_replaces_pending():

@@ -763,7 +763,7 @@ class Cycle:
             gitops.push_branch(repo, t["id"])
             facts, mism = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
             if mism:
-                self.store.event("pr.claim_mismatch", t["id"], "dispatcher", {"text": f"developer summary names files not in the git diff: {', '.join(mism[:8])}"})
+                self.store.event("pr.claim_mismatch", t["id"], "dispatcher", {"text": f"developer `changes` list names files not in the git diff: {', '.join(mism[:8])}"})
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
                     "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +
