@@ -251,6 +251,16 @@ class Store:
     def ask(self, *, from_: str, to: str, question: str, task_id: str | None = None, options: list[str] | None = None,
             blocks: list[str] | None = None) -> dict[str, Any]:
         norm = " ".join(question.lower().split())[:300]
+        if task_id:
+            # T-0091: a repeated block of the same task links to its still-open question instead of opening a second one
+            for prev in self.questions(["open"]):
+                if prev.get("to") == to and task_id in (prev.get("blocks") or []):
+                    self.event("question.repeat", prev["id"], from_, {"to": to, "question": question[:200], "task": task_id})
+                    try:
+                        self.transition(task_id, "waiting_owner" if to == "owner" else "blocked", from_, f"question {prev['id']} (repeat)", blocked_by=prev["id"])
+                    except ValueError:
+                        pass
+                    return prev
         for prev in self.questions(["open", "answered"]):
             if prev.get("to") == to and " ".join(str(prev.get("question", "")).lower().split())[:300] == norm \
                     and str(prev.get("created") or "") >= _iso_hours_ago(QUESTION_DEDUPE_H):
