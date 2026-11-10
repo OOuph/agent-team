@@ -123,10 +123,16 @@ def sitemap_urls(site_base: str, fetch: Callable[[str], str] | None = None, cap:
 
 
 def pick_for_inspection(urls: list[str], state: dict[str, Any], n: int, reinspect_days: int, now: datetime) -> list[str]:
-    """Never-inspected URLs first (in sitemap order, home page first), then the oldest inspections past ``reinspect_days``."""
+    """A random sample (owner 10.11: sitemap order gave the alphabet's first pages, not the site): never-inspected URLs
+    first, then inspections older than ``reinspect_days``. The seed is the date, so a rerun on the same day picks the
+    same URLs (no double spend of the quota)."""
+    import random
+    rnd = random.Random(now.strftime("%Y-%m-%d"))
     cutoff = (now - timedelta(days=reinspect_days)).isoformat()
     fresh = [u for u in urls if u not in state]
-    stale = sorted((u for u in urls if u in state and str(state[u].get("checked") or "") < cutoff), key=lambda u: state[u].get("checked") or "")
+    stale = [u for u in urls if u in state and str(state[u].get("checked") or "") < cutoff]
+    rnd.shuffle(fresh)
+    rnd.shuffle(stale)
     return (fresh + stale)[:max(0, n)]
 
 
@@ -198,7 +204,11 @@ def gsc_md(d: dict[str, Any]) -> str:
     t, ins = d.get("totals") or {}, d.get("inspection") or {}
     lines = [f"# Google Search Console — {d['host']} ({d['start']} … {d['end']}, data lags 2–3 days)", "",
              f"Clicks from Google: {t.get('clicks', 0)} · impressions: {t.get('impressions', 0)} (days with impressions: {sum(1 for r in d.get('by_date') or [] if r.get('impressions'))})",
-             "", f"## Index (URL Inspection, sample of the sitemap: {ins.get('inspected', 0)} of {ins.get('sitemap_urls', 0)} URLs checked)"]
+             "", f"## Index (URL Inspection, random sample of the sitemap: {ins.get('inspected', 0)} of {ins.get('sitemap_urls', 0)} URLs checked)"]
+    n_ins = int(ins.get("inspected") or 0)
+    n_idx = int((ins.get("coverage") or {}).get("Submitted and indexed", 0)) + int((ins.get("coverage") or {}).get("Indexed, not submitted in sitemap", 0))
+    if n_ins:
+        lines.append(f"In Google's index: {n_idx} of {n_ins} checked ({round(100 * n_idx / n_ins)} %)")
     for k, v in sorted((ins.get("coverage") or {}).items(), key=lambda kv: -kv[1]):
         lines.append(f"- {k}: {v}")
     if ins.get("not_indexed_examples"):

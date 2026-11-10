@@ -19,7 +19,11 @@ def test_property_for_picks_most_specific():
 def test_pick_new_first_then_stale():
     now = datetime(2026, 11, 10, tzinfo=timezone.utc)
     state = {"a": {"checked": "2026-11-01T00:00:00+00:00"}, "b": {"checked": "2026-11-09T00:00:00+00:00"}}
-    assert gsc.pick_for_inspection(["a", "b", "c", "d"], state, 3, 7, now) == ["c", "d", "a"]
+    picked = gsc.pick_for_inspection(["a", "b", "c", "d"], state, 3, 7, now)
+    assert sorted(picked[:2]) == ["c", "d"] and picked[2] == "a"            # new first, then stale; fresh "b" skipped
+    assert picked == gsc.pick_for_inspection(["a", "b", "c", "d"], state, 3, 7, now)   # same day → same sample
+    urls = [f"u{i}" for i in range(1000)]
+    assert gsc.pick_for_inspection(urls, {}, 50, 7, now) != urls[:50]       # not sitemap order
 
 
 def test_collect_writes_md_and_filters_host(tmp_path: Path):
