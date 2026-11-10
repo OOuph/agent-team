@@ -668,3 +668,34 @@ def test_tests_gate_changed_with_reason_merges_normally(tmp_path: Path, monkeypa
 def test_tests_gate_no_tests_change_unchanged(tmp_path: Path, monkeypatch):
     # also the case of a PR that only adds new test files: tests_modified_or_deleted lists no additions
     assert _tests_gate(tmp_path, monkeypatch, [], "s") == ("done", True)
+
+
+def test_blocked_task_not_leased_while_question_open(tmp_path: Path, monkeypatch):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="x", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    q = s.ask(from_="developer", to="po", question="which file?", task_id=t["id"])
+    assert s.task(t["id"])["state"] == "blocked"
+    s.transition(t["id"], "ready", "po", "re-opened", blocked_by=q["id"])      # PO re-opens, question unanswered
+    cy = Cycle(st, p, FakeRunner(), "c1")
+    started = []
+    monkeypatch.setattr(cy, "execute_task", lambda t: started.append(t["id"]) or True)
+    cy.phase_execute()
+    assert started == []
+    s.answer(q["id"], "a.html", "po")
+    cy.phase_execute()
+    assert started == [t["id"]]
+    s.close()
+
+
+def test_repeated_block_does_not_open_second_question(tmp_path: Path):
+    p = _product(_settings(tmp_path))
+    s = Store(p.dir)
+    t = s.create_task(title="x", type_="defect", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    q1 = s.ask(from_="developer", to="po", question="which file?", task_id=t["id"])
+    s.transition(t["id"], "ready", "po", "re-opened")
+    q2 = s.ask(from_="developer", to="po", question="a differently worded question", task_id=t["id"])
+    assert q1["id"] == q2["id"] and len(s.questions()) == 1
+    assert s.task(t["id"])["state"] == "blocked" and s.task(t["id"])["blocked_by"] == q1["id"]
+    s.close()
