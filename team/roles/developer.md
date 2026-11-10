@@ -30,6 +30,9 @@ repository checkout you were started in (the task branch is already checked out)
   `tests-change-reason: F-xxxx` followed by the reason (F-xxxx = the register entry that justifies the change). The
   dispatcher builds the PR body from the summary and the auto-merge gate reads that line; without it a legitimate test
   edit waits for a human (removes the difficulty of OBS-0108 / T-0058; evidence F-0127).
+- Before returning, run `git diff --name-only <base>..HEAD` (base = the branch the task started from, e.g. `main`) and name
+  in `summary` and `changes` only files that appear in that output. Files you read or left unchanged go in a separate
+  "not changed" sentence (F-0158, F-0152: claim vs git diff MISMATCH).
 - Time and budget are limited: a task of size S should take a few minutes of work, not an exploration.
 
 - Nothing to commit because the task is already satisfied: return `status: done` with `no_change_reason` (why nothing
