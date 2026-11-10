@@ -592,6 +592,8 @@ class Cycle:
                 continue        # this role's seat for the cycle is taken
             if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
                 continue        # a run is on it (lease alive); stale leases are handled in collect
+            if t.get("state") == "ready" and self.open_question_blocks(t):
+                continue        # T-0091: re-opened while its question is still unanswered: not leased again
             nb = parse_ts(t.get("not_before"))
             if nb and _now() < nb:
                 continue        # scheduled for later (daily posts): the PO set not_before
@@ -613,6 +615,11 @@ class Cycle:
                 continue
             if self.execute_task(t):
                 used[key] = used.get(key, 0) + 1
+
+    def open_question_blocks(self, t: dict[str, Any]) -> bool:
+        """T-0091: True while the question the task was blocked on (`blocked_by`) is still open."""
+        qid = str(t.get("blocked_by") or "")
+        return qid.startswith("Q-") and any(q["id"] == qid for q in self.store.questions(["open"]))
 
     def guard_no_commit_loop(self, t: dict[str, Any]) -> bool:
         """T-0046: the single check for «never run the developer on a task with ≥2 no-commit records», whatever state (ready,
