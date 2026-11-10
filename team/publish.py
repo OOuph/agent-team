@@ -367,7 +367,7 @@ def _devto(text: str, title: str | None, url: str | None, tags: list[str] | None
         data = _call_json(http, "POST", DEVTO_API, payload, {"api-key": key}, [key], "devto")
     except PublishError as e:
         msg = str(e)
-        if not url or "HTTP 422" not in msg or "canonical_url" not in msg:
+        if not url or "HTTP 422" not in msg or not re.search(r"canonical[ _]url", msg.lower()):
             raise
         # canonical already used by another article: retry once with a unique, dated suffix
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
