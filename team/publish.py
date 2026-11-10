@@ -363,7 +363,17 @@ def _devto(text: str, title: str | None, url: str | None, tags: list[str] | None
         _print_dry_run("devto", payload)
         return PostResult(True, "devto", None, None, None, True)
     key = _require(env, SECRET_KEYS["devto"])["DEVTO_API_KEY"]
-    data = _call_json(http, "POST", DEVTO_API, payload, {"api-key": key}, [key], "devto")
+    try:
+        data = _call_json(http, "POST", DEVTO_API, payload, {"api-key": key}, [key], "devto")
+    except PublishError as e:
+        msg = str(e)
+        if not url or "HTTP 422" not in msg or "canonical_url" not in msg:
+            raise
+        # canonical already used by another article: retry once with a unique, dated suffix
+        day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        article["canonical_url"] = f"{url}{'&' if '?' in url else '?'}src=devto&d={day}"
+        print(f"devto: canonical taken, retrying with canonical_url={article['canonical_url']}", file=sys.stderr)
+        data = _call_json(http, "POST", DEVTO_API, payload, {"api-key": key}, [key], "devto")
     pid = data.get("id")
     return PostResult(True, "devto", str(pid) if pid is not None else None, data.get("url"), None, False)
 

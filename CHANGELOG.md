@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-10
+
+- T-0082: `team-publish` devto: on a 422 mentioning canonical_url, retries once with `?src=devto&d=<YYYY-MM-DD UTC>` (or `&`) appended and prints the canonical used; other 422s still fail (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138). Code, SCHEME.md.
+
 ## 2026-11-09
 
 - T-0081: marketer card: on a site-root or repeated dev.to canonical, or a 422, use `/d/<date>/?src=devto`, note it in the task-result, no question to the owner and no block (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138). Card.

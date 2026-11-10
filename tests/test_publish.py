@@ -159,6 +159,34 @@ def test_devto_payload():
     assert art["body_markdown"].startswith(f"*{DISC}*\n\n# Body")
 
 
+class SeqHttp:
+    def __init__(self, answers):
+        self.answers, self.calls = list(answers), []
+
+    def __call__(self, method, url, headers, body, timeout):
+        self.calls.append(json.loads(body))
+        status, data = self.answers.pop(0)
+        return status, json.dumps(data).encode()
+
+
+def test_devto_canonical_taken_retries_with_suffix():
+    http = SeqHttp([(422, {"error": "Canonical url has already been taken"}) , (201, {"id": 5, "url": "https://dev.to/x"})])
+    http.answers[0] = (422, {"error": "canonical_url has already been taken"})
+    r = post("devto", "b", title="T", url="https://site/p", disclosure=DISC, env={"DEVTO_API_KEY": "K"}, http=http)
+    assert r.ok and len(http.calls) == 2
+    import re
+    assert re.search(r"\?src=devto&d=\d{4}-\d{2}-\d{2}$", http.calls[1]["article"]["canonical_url"])
+    http2 = SeqHttp([(422, {"error": "canonical_url taken"}), (201, {"id": 6})])
+    r = post("devto", "b", title="T", url="https://site/p?a=1", disclosure=DISC, env={"DEVTO_API_KEY": "K"}, http=http2)
+    assert r.ok and "?a=1&src=devto&d=" in http2.calls[1]["article"]["canonical_url"]
+
+
+def test_devto_other_422_not_retried():
+    http = SeqHttp([(422, {"error": "Title is too long"}), (201, {"id": 5})])
+    r = post("devto", "b", title="T", url="https://site/p", disclosure=DISC, env={"DEVTO_API_KEY": "K"}, http=http)
+    assert not r.ok and len(http.calls) == 1
+
+
 def test_devto_requires_title():
     r = post("devto", "x", disclosure=DISC, env={"DEVTO_API_KEY": "K"}, http=FakeHttp())
     assert not r.ok and "title" in r.error
