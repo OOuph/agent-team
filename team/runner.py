@@ -241,6 +241,8 @@ def denial_hint(denial: Any) -> str:
         if re.search(r"<<|>|\btee\b|\bcat\b", cmd):
             return "Use the Write tool to create files, not shell redirects or heredocs. " + SHELL_RULE
         return SHELL_RULE
+    if d.get("tool_name") == "Edit":
+        return "Edit is not available to this role; rewrite the whole file with Write."
     return ""
 
 
