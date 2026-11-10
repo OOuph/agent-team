@@ -61,6 +61,9 @@ class RunResult:
     limit_info: dict[str, Any] | None = None      # last rate_limit_info of the stream (plan window, credits)
 
 
+PROMPT_WARN_BYTES = 200_000
+
+
 class Runner:
     def __init__(self, claude_cfg: dict[str, Any], roles: dict[str, dict[str, Any]]):
         self.cfg, self.roles = claude_cfg, roles
@@ -76,7 +79,7 @@ class Runner:
         agent_def = {k: v for k, v in rdef.items() if not k.startswith("_")}
         model = model or str(self.cfg.get("models", {}).get(role) or agent_def.get("model") or "sonnet")
         agent_def["model"] = model
-        argv = [self.binary, "-p", prompt, "--output-format", "stream-json", "--verbose",
+        argv = [self.binary, "-p", "--output-format", "stream-json", "--verbose",
                 "--agents", json.dumps({role: agent_def}), "--agent", role, "--model", model,
                 "--max-turns", str(max_turns or self.cfg.get("max_turns", 60)), "--max-budget-usd", f"{max_usd:.2f}",
                 "--permission-mode", "default"]
@@ -109,16 +112,27 @@ class Runner:
         inactivity_s = int(inactivity_s or self.cfg.get("inactivity_s", 300))
         log.info("run %s: role=%s model=%s auth=%s cap=$%.2f turns=%s cwd=%s prompt=%d chars", run_id, role, model, auth, max_usd,
                  max_turns or self.cfg.get("max_turns"), cwd, len(prompt))
+        if len(prompt.encode("utf-8", errors="replace")) > PROMPT_WARN_BYTES:
+            log.error("run %s: prompt is %d bytes (> %d); sent on stdin", run_id, len(prompt.encode("utf-8", errors="replace")), PROMPT_WARN_BYTES)
         t0 = time.time()
         events: list[dict[str, Any]] = []
         killed_reason: str | None = None
         try:
-            proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
                                     encoding="utf-8", errors="replace", bufsize=1)
         except FileNotFoundError:
             return RunResult(False, None, None, 0.0, 0, f"{self.binary}: not found")
         last = time.time()
         stderr_buf: list[str] = []
+
+        def _feed_prompt() -> None:           # the prompt travels on stdin, never in argv (E2BIG, F-0162)
+            try:
+                proc.stdin.write(prompt)
+                proc.stdin.close()
+            except (BrokenPipeError, OSError, ValueError):
+                pass
+
+        threading.Thread(target=_feed_prompt, daemon=True).start()
 
         def _drain_err() -> None:
             for ln in proc.stderr or []:
