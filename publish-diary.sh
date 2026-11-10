@@ -15,7 +15,7 @@ if [ ! -d "$REPO/.git" ]; then
 fi
 git -C "$REPO" checkout -q main && git -C "$REPO" pull -q --ff-only origin main
 mkdir -p "$REPO/data/public"
-rsync -a --delete --exclude "$DIARY_SLUG" data/public/ "$REPO/data/public/"
+rsync -a --delete data/public/ "$REPO/data/public/"   # the diary is a product too and shows its own tasks (owner 10.11; the exclusion had no recorded reason)
 ( cd "$REPO" && TELEGRAM_URL="${DIARY_TELEGRAM_URL:-https://t.me/formachines_team}" python3 build.py )
 if [ -n "$(git -C "$REPO" status --porcelain)" ]; then
   git -C "$REPO" add -A && git -C "$REPO" commit -q -m "diary: $(date -u +%Y-%m-%dT%H:%MZ) rebuild from public export" && git -C "$REPO" push -q origin main

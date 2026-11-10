@@ -76,7 +76,7 @@ class Runner:
         agent_def = {k: v for k, v in rdef.items() if not k.startswith("_")}
         model = model or str(self.cfg.get("models", {}).get(role) or agent_def.get("model") or "sonnet")
         agent_def["model"] = model
-        argv = [self.binary, "-p", prompt, "--output-format", "stream-json", "--verbose",
+        argv = [self.binary, "-p", "--output-format", "stream-json", "--verbose",
                 "--agents", json.dumps({role: agent_def}), "--agent", role, "--model", model,
                 "--max-turns", str(max_turns or self.cfg.get("max_turns", 60)), "--max-budget-usd", f"{max_usd:.2f}",
                 "--permission-mode", "default"]
@@ -113,10 +113,21 @@ class Runner:
         events: list[dict[str, Any]] = []
         killed_reason: str | None = None
         try:
-            proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-                                    encoding="utf-8", errors="replace", bufsize=1)
+            # the prompt goes through stdin, not argv: argv is capped by the OS (issues #147/#149, "Argument list too long")
+            proc = subprocess.Popen(argv, cwd=str(cwd), env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
+                                    stderr=subprocess.PIPE, text=True, encoding="utf-8", errors="replace", bufsize=1)
         except FileNotFoundError:
             return RunResult(False, None, None, 0.0, 0, f"{self.binary}: not found")
+
+        def _feed() -> None:
+            try:
+                if proc.stdin:
+                    proc.stdin.write(prompt)
+                    proc.stdin.close()
+            except (BrokenPipeError, OSError) as exc:
+                log.warning("run %s: writing the prompt to stdin failed: %s", run_id, exc)
+
+        threading.Thread(target=_feed, daemon=True).start()
         last = time.time()
         stderr_buf: list[str] = []
 

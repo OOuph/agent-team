@@ -307,13 +307,42 @@ def update_pull_request_body(pr_url: str, body: str) -> None:
     _gh("PATCH", f"/repos/{repo}/pulls/{num}", {"body": body[:60000]})
 
 
-def merge_pull_request(pr_url: str, method: str = "merge") -> str:
-    """Merge via the API (the dispatcher never force-pushes main). Returns the merge sha."""
+AUTO_MERGE_LABEL = "auto-merged"          # owner 10.11: an automatic merge is visible from outside (label + commit text)
+
+
+def merge_pull_request(pr_url: str, method: str = "merge", *, auto: bool = False) -> str:
+    """Merge via the API (the dispatcher never force-pushes main). Returns the merge sha.
+
+    ``auto=True``: the dispatcher merged without a human (tests + canary) — the merge commit says so and the PR gets the
+    ``auto-merged`` label, so "merged without a human" can be checked on GitHub, where every merge shows the owner's token."""
     repo, num = _pr_parts(pr_url)
-    r = _gh("PUT", f"/repos/{repo}/pulls/{num}/merge", {"merge_method": method})
+    body: dict = {"merge_method": method}
+    if auto:
+        body["commit_message"] = "Merged automatically by the agent-team dispatcher (tests and canary passed, no human review)."
+    r = _gh("PUT", f"/repos/{repo}/pulls/{num}/merge", body)
     if not r.get("merged"):
         raise GitError(f"merge refused: {r.get('message')}")
+    if auto:
+        try:
+            _gh("POST", f"/repos/{repo}/issues/{num}/labels", {"labels": [AUTO_MERGE_LABEL]})
+        except GitError as exc:
+            log.warning("could not label %s as %s: %s", pr_url, AUTO_MERGE_LABEL, redact(str(exc)))
     return str(r.get("sha") or "")
+
+
+def closes_lines(links: list[str] | None, repo_url: str) -> list[str]:
+    """"Closes #N" for every link to an issue of the same repository: GitHub then closes the friction issue on merge
+    (owner 10.11: 75 of 76 friction issues stayed open although merged PRs had fixed 60 of them)."""
+    try:
+        repo = _gh_repo(repo_url).lower()
+    except GitError:
+        return []
+    out: list[str] = []
+    for l in links or []:
+        m = re.search(r"github\.com/([^/]+/[^/#?]+)/issues/(\d+)", str(l))
+        if m and m.group(1).lower() == repo and f"Closes #{m.group(2)}" not in out:
+            out.append(f"Closes #{m.group(2)}")
+    return out
 
 
 def update_running_checkout(root: Path, branch: str = "main") -> str | None:

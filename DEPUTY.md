@@ -13,7 +13,11 @@ address to him. This file is his standing instruction; the loop does not edit it
 
 ## What is NOT available until 11.11 (answer `unavailable`, tell the role to proceed without it or close the task)
 
-- Secrets, tokens, API keys, passwords; new accounts; new channels (Threads, Mastodon, X, Reddit, HN — none this week).
+- Secrets, tokens, API keys, passwords; new accounts; channels that are not in the product's `product.yaml`.
+  The channels listed in `product.yaml` (X, Threads, Mastodon, Bluesky, Telegram, dev.to where listed) ARE available,
+  within the caps in `team.yaml` `publish.channel_caps`. Reddit and Hacker News are posted by the owner by hand only.
+  (Owner 10.11: the earlier line "Threads, Mastodon, X — none this week" was wrong from 03.11, when those channels
+  were connected; tasks closed because of it are not reopened, their slots have passed.)
 - Money: budgets, caps, paid services, domains, servers.
 - Changes to VISION goals, promises, audience, tone sections, or the list of allowed channels.
 - Anything legal (terms, licences, data handling beyond what `/legal/` already says) and anything public that speaks

@@ -768,6 +768,7 @@ class Cycle:
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
                     "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +
+                    "".join("\n" + l for l in gitops.closes_lines(t.get("links"), self.p.repo_url)) +
                     "\n\n" + facts +
                     "\n\n_Opened by the agent-team dispatcher for task " + t["id"] + "; tests passed on the branch. A human merges._")
             url = gitops.open_pull_request(self.p.repo_url, t["id"], self.p.repo_branch, f"{t['id']}: {t.get('title', '')}", body)
@@ -802,7 +803,7 @@ class Cycle:
             gitops.comment_pull_request(url, f"Canary cycle failed, left for a human:\n\n```\n{note[:1500]}\n```")
             return True
         try:
-            sha = gitops.merge_pull_request(url)
+            sha = gitops.merge_pull_request(url, auto=True)
             gitops.update_running_checkout(self.st.root, self.p.repo_branch)
         except gitops.GitError as exc:
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}; merge failed: {gitops.redact(str(exc))[:200]}", force=True, pr_url=url, assignee_run=None)

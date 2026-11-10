@@ -648,7 +648,7 @@ def _tests_gate(tmp_path, monkeypatch, tests_changed, summary):
     monkeypatch.setattr(gitops, "changed_files", lambda repo, base: ["team/x.py"])
     monkeypatch.setattr(gitops, "tests_modified_or_deleted", lambda repo, base: tests_changed)
     monkeypatch.setattr(gitops, "open_pull_request", lambda *a, **k: "https://github.com/o/r/pull/1")
-    monkeypatch.setattr(gitops, "merge_pull_request", lambda url: merged.append(url) or "deadbeef00")
+    monkeypatch.setattr(gitops, "merge_pull_request", lambda url, **kw: merged.append(url) or "deadbeef00")
     monkeypatch.setattr(gitops, "update_running_checkout", lambda *a, **k: None)
     monkeypatch.setattr(cy, "canary", lambda repo, product: (True, "ok"))
     cy.release_as_pull_request(cy.store.task(t["id"]), tmp_path, {"summary": summary})
