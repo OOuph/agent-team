@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-10
 
+- T-0083: `denial_hint` for a denied `Edit` now says to rewrite the whole file with Write (F-0154, F-0149, F-0147, F-0129, F-0148). Code.
 - T-0082: `team-publish` devto: on a 422 mentioning canonical_url, retries once with `?src=devto&d=<YYYY-MM-DD UTC>` (or `&`) appended and prints the canonical used; other 422s still fail (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138). Code, SCHEME.md.
 
 ## 2026-11-09
