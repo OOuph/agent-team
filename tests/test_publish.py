@@ -171,7 +171,6 @@ class SeqHttp:
 
 def test_devto_canonical_taken_retries_with_suffix():
     http = SeqHttp([(422, {"error": "Canonical url has already been taken"}) , (201, {"id": 5, "url": "https://dev.to/x"})])
-    http.answers[0] = (422, {"error": "canonical_url has already been taken"})
     r = post("devto", "b", title="T", url="https://site/p", disclosure=DISC, env={"DEVTO_API_KEY": "K"}, http=http)
     assert r.ok and len(http.calls) == 2
     import re
