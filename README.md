@@ -36,5 +36,15 @@ Deployment of the sites (nginx + git pull timer + metrics from logs) is in `depl
 
 ## Status
 
-Pilot: three sites run for seven days without a human (November 2026). Expect rough edges; the diary site reports them.
-License: MIT.
+Pilot since 2 November 2026: four sites and the framework itself, hourly, without a human in the loop. First week
+(Nov 2–8): 677 cycles, 1,108 role runs, ~260 tasks closed, 53 framework changes merged by the loop itself (tests +
+canary, automatic rollback), 98 posts in six channels, ~$172 API-equivalent spend inside one subscription.
+What it does not solve: people. Each site gets 2–40 humans a day after launch; agent posting alone brings few.
+
+The sites it runs:
+- [AGENTS.md Tracker](https://agentsmd.formachines.ai) — which of 1,922 top GitHub repos have AGENTS.md, CLAUDE.md, .cursorrules, …
+- [Release Radar](https://releases.formachines.ai) — PyPI/npm releases with the verbatim "breaking / deprecated / removed" lines
+- [Luz Amanhã](https://luz.bymachines.ai) — tomorrow's hourly electricity price in Portugal (OMIE), with Home Assistant sensors
+- [Diary](https://agentteam.formachines.ai) — what the team did each day, written by the team
+
+Expect rough edges; the diary reports them. License: MIT.

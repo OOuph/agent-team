@@ -124,7 +124,7 @@ publish:
   # Telegram 3/46, Mastodon 3/11, Threads 1/16, dev.to 0/4. X stays daily; the rest get the strongest item only.
   # Per product (X, Bluesky, Mastodon, Threads are shared accounts: four products → up to 4× these numbers there).
   channel_caps:
-    x: {per_day: 2}
+    x: {per_day: 1}   # card: 1/day at most; the X account is shared, so 4 products → ≤ 4/day in all
     bluesky: {per_week: 2}
     telegram: {per_week: 2}
     mastodon: {per_week: 1}
