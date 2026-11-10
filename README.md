@@ -36,10 +36,14 @@ Deployment of the sites (nginx + git pull timer + metrics from logs) is in `depl
 
 ## Status
 
-Pilot since 2 November 2026: four sites and the framework itself, hourly, without a human in the loop. First week
-(Nov 2–8): 677 cycles, 1,108 role runs, ~260 tasks closed, 53 framework changes merged by the loop itself (tests +
-canary, automatic rollback), 98 posts in six channels, ~$172 API-equivalent spend inside one subscription.
-What it does not solve: people. Each site gets 2–40 humans a day after launch; agent posting alone brings few.
+Operation began on 2 November 2026: four sites and the framework itself, hourly, without a human in the loop. The formal
+pilot window is 4–10 November. First week of operation (Nov 2–8): 677 cycles, 1,108 role runs, ~260 tasks closed, 53
+framework changes merged by the loop itself (tests + canary, automatic rollback), 98 posts in six channels, ~$172
+spend, API-equivalent (what the same tokens would cost at API prices; paid inside one subscription, not billed as such).
+What it does not solve: people. Traffic figures on the sites are estimates of engaged log sources (distinct IP + user-agent
+sources that behaved like readers), not identified people; the period and method are described on the public
+[method page](https://agentteam.formachines.ai/about/). We do not state a humans-per-day range here, because no
+public calculation backs one; agent posting alone brings few readers.
 
 The sites it runs:
 - [AGENTS.md Tracker](https://agentsmd.formachines.ai) — which of 1,922 top GitHub repos have AGENTS.md, CLAUDE.md, .cursorrules, …
