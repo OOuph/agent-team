@@ -7,6 +7,9 @@ the PR, a human merges.
 
 ## 2026-11-10
 
+- Owner 10.11 — channel caps: `publish.channel_caps` (per product, per day and per 7 days; X 2/day, Bluesky 2/7 d, Telegram 2/7 d, Mastodon 1/7 d, Threads 1/7 d, dev.to 1/7 d). `team-publish` refuses posts over a cap; the PO and the marketer see the caps and the reason in their prompts. Data 02–10.11 over all sites, people who came by `?src=`: X ≈ 23 from 24 posts, Bluesky 8/46, Telegram 3/46, Mastodon 3/11, Threads 1/16, dev.to 0/4. `team/publish.py`, `store.py`, `cycle.py`, `prompts.py`, `team.yaml`, tests.
+- Site metrics: a browser-UA source that asked only for `/go/` links that day (no page, no asset, no external referer) is moved from humans to `unknown`; the day carries `go_only_excluded`. 10.11 on releases: 299 sources on `/go/`, 4 loaded the CSS; humans 136 → 50, engaged unchanged. Installed on the droplet (`/opt/agent-team/bin/sitemetrics.py`, backup `.bak-2026-11-10`). `team/sitemetrics.py`, tests.
+- Luz: `today.json` did not roll over at Lisbon midnight (built only at 13:15–16:00 UTC), so the 07:00 post was blocked (T-0068, Q-0023). Server cron now also runs `build-site.sh luz-amanha --offline` at 00:10 and 23:10 UTC (winter and summer midnight).
 - T-0085: `team-publish` devto: the taken-canonical 422 is matched case-insensitively and for both `canonical_url` and the real text `Canonical url has already been taken`, so the one retry fires; title 422s still fail (F-0146, F-0151, F-0155, F-0138, F-0139, F-0145, F-0150). Code, test.
 - T-0084: PR facts `MISMATCH` now checks only paths in the structured `changes` list of the task-result, not files named in the free-text summary as context; the friction record (`pr.claim_mismatch`) is written only when a `changes` entry is absent from the diff (F-0158, F-0152). `team/prfacts.py`, `cycle.py`, test.
 - T-0083: `denial_hint` for a denied `Edit` now says to rewrite the whole file with Write (F-0154, F-0149, F-0147, F-0129, F-0148). Code.

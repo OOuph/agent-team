@@ -36,7 +36,8 @@ def _tail(s: str, n: int) -> str:
 
 
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
-              metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False) -> str:
+              metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
+              channel_caps: dict[str, Any] | None = None) -> str:
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
@@ -44,7 +45,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     answered = [q for q in store.questions(["answered"]) if q.get("to") == "owner" and str(q.get("answered") or "") >= _hours_ago(72)][-8:]
     answered_txt = "\n\n".join(_y({k: q.get(k) for k in ("id", "question", "answer", "answered_by", "answered")}) for q in answered) or "(none)"
     fw_txt = framework_context(product)
-    mkt_txt = po_marketing_block(product, store)
+    mkt_txt = po_marketing_block(product, store, caps=channel_caps)
     return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
             f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
             + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
@@ -340,13 +341,34 @@ def feedback_cards(store: Store, days: int = MEMORY_DAYS) -> list[dict[str, Any]
     return out[-12:]
 
 
-def marketing_memory(product: Product, store: Store) -> dict[str, Any]:
-    """Everything the marketer (and the PO) should remember between runs; roles have no memory of their own."""
+def marketing_memory(product: Product, store: Store, caps: dict[str, Any] | None = None) -> dict[str, Any]:
+    """Everything the marketer (and the PO) should remember between runs; roles have no memory of their own.
+    `caps` — the owner's per-channel caps (publish.channel_caps), shown so plans do not book slots the publisher refuses."""
     pp = plan_path(product)
     age = plan_age_days(product)
     return {"recent_posts": store.recent_posts(MEMORY_DAYS), "channels": channel_report(product, store),
             "feedback": feedback_cards(store), "plan_md": pp.read_text(encoding="utf-8") if pp.exists() else "",
-            "plan_age_days": round(age, 1) if age is not None else None}
+            "plan_age_days": round(age, 1) if age is not None else None, "caps": caps or {}}
+
+
+def caps_block(caps: dict[str, Any]) -> str:
+    """The owner's per-channel caps (publish.channel_caps) as a prompt section; empty when there are none."""
+    lines = []
+    for ch, c in sorted((caps or {}).items()):
+        c = c or {}
+        bits = []
+        if c.get("per_day") is not None:
+            bits.append(f"{c['per_day']}/day")
+        if c.get("per_week") is not None:
+            bits.append(f"{c['per_week']}/7 days")
+        if bits:
+            lines.append(f"- {ch}: {', '.join(bits)}")
+    if not lines:
+        return ""
+    return ("# OWNER'S CHANNEL CAPS (binding; the publisher refuses posts over them)\n" + "\n".join(lines)
+            + "\nWhy (owner 10.11, all sites 02–10.11): X brought ~23 people from 24 posts; Bluesky 8 from 46, Telegram 3 "
+              "from 46, Mastodon 3 from 11, Threads 1 from 16, dev.to 0 from 4. Put the daily slots into X; on the "
+              "capped channels post only the strongest item of the week. Do not book slots over a cap.")
 
 
 def memory_block(memory: dict[str, Any], *, for_plan: bool) -> str:
@@ -363,6 +385,9 @@ def memory_block(memory: dict[str, Any], *, for_plan: bool) -> str:
                  + ("\n".join(tbl) if rows else "(no channels, no posts, no metrics yet)")
                  + "\nRule: no human visits after two weeks of posting → post less often there; visits or replies → more often "
                    "(within the daily limit); no posts yet → try. A verdict is a number, not a mood: cite it when you follow it.")
+    cb = caps_block(memory.get("caps") or {})
+    if cb:
+        parts.append(cb)
     parts.append(f"# WHAT PEOPLE SAID (feedback, last {MEMORY_DAYS} days)\n" + (_y(fb) if fb else "(no replies, issues or owner words)"))
     if for_plan:
         parts.append("# PREVIOUS PLAN" + (f" (written {age} days ago)" if age is not None else "") + "\n"
@@ -374,12 +399,12 @@ def memory_block(memory: dict[str, Any], *, for_plan: bool) -> str:
     return "\n\n".join(parts)
 
 
-def po_marketing_block(product: Product, store: Store) -> str:
+def po_marketing_block(product: Product, store: Store, caps: dict[str, Any] | None = None) -> str:
     """What the PO sees to run the channels: the plan (or its absence), what went out, visits by channel. Empty for a
     product without channels."""
     if not (product.raw.get("channels") or {}):
         return ""
-    m = marketing_memory(product, store)
+    m = marketing_memory(product, store, caps=caps)
     age = m.get("plan_age_days")
     plan = str(m.get("plan_md") or "").strip()
     if not plan:
@@ -395,7 +420,8 @@ def po_marketing_block(product: Product, store: Store) -> str:
     tbl = ["| channel | posts 14 d | human sources by ?src= | engaged | verdict |", "|---|---|---|---|---|"]
     tbl += [f"| {r['channel']} | {r['posts']} | {r['human_sources']} | {r['engaged']} | {r['verdict']} |" for r in rows]
     posts = m.get("recent_posts") or []
-    return (head + "\n\n## Channels (visits by ?src=, last 14 days)\n" + ("\n".join(tbl) if rows else "(none)")
+    cb = caps_block(m.get("caps") or {})
+    return (head + ("\n\n" + cb if cb else "") + "\n\n## Channels (visits by ?src=, last 14 days)\n" + ("\n".join(tbl) if rows else "(none)")
             + f"\n\n## Published in the last {MEMORY_DAYS} days\n"
             + (_y([{k: p.get(k) for k in ("day", "channel", "url", "task", "text")} for p in posts]) if posts else "(nothing)"))
 

@@ -334,7 +334,7 @@ def test_other_hosts_are_ignored_and_status_buckets(tmp_path: Path):
     assert d["status"] == {"2xx": 2, "3xx": 1, "4xx": 1, "5xx": 1}
     assert res["parse"]["parsed"] == 6
     assert set(res) == {"host", "generated", "window", "targets", "parse", "days", "totals"}
-    assert set(d) == {"requests_raw", "status", "classes", "humans", "agents", "crawlers", "scanners", "targets",
+    assert set(d) == {"requests_raw", "status", "classes", "humans", "go_only_excluded", "agents", "crawlers", "scanners", "targets",
                       "top_pages", "referers", "by_src"}
     assert d["by_src"] == {} and res["totals"]["by_src"] == {}
     assert "## Sources by src" not in sm.to_markdown(res)
@@ -495,3 +495,26 @@ def test_proxy_pool_detected():
     rot = sm.find_rotating(pool + isp)
     assert {("87.81.224.10", "2026-11-04"), ("87.81.229.10", "2026-11-04")} <= rot
     assert not any(ip.startswith("81.193.") for ip, _ in rot)
+
+
+# ---------------------------------------------------------------------------------------------------- /go/-only sources (10.11)
+
+def test_go_only_browser_sources_are_not_people(tmp_path):
+    lines = [
+        # a person: page, stylesheet, then a vote
+        line("198.51.100.1", CHROME, "/"), line("198.51.100.1", CHROME, "/style.css"),
+        line("198.51.100.1", CHROME, "/go/vote/abc/up/"),
+        # crawler networks with browser UAs: only vote links, no page, no asset
+        line("192.0.2.11", CHROME, "/go/vote/abc/up/"), line("192.0.2.12", CHROME, "/go/vote/def/down/"),
+        line("192.0.2.13", IPHONE, "/go/abc/"),
+    ]
+    log = write_log(tmp_path / "access.log", lines)
+    out = sm.run([log], HOST, targets=["/go/", "/go/vote/"])
+    d = out["days"]["2026-11-03"] if isinstance(out["days"], dict) else out["days"][0]
+    assert d["humans"]["sources"] == 1 and d["humans"]["engaged"] == 1
+    assert d["go_only_excluded"] == 3
+    assert d["classes"]["unknown"]["sources"] == 3
+    assert d["targets"]["/go/"]["human"]["sources"] == 1
+    assert d["targets"]["/go/"]["unknown"]["sources"] == 3
+    assert d["targets"]["/go/vote/"]["human"]["requests"] == 1
+    assert d["targets"]["/go/vote/"]["unknown"]["requests"] == 2

@@ -63,6 +63,7 @@ log = logging.getLogger("team.sitemetrics")
 # ----------------------------------------------------------------------------------------------------------------
 
 CLASSES: tuple[str, ...] = ("own", "crawler", "scanner", "agent", "human", "unknown")
+GO_PREFIX = "/go/"   # the site's redirect and vote links; a source that asks only for these is not a person (see _finalize_clickers)
 
 DEFAULT_OWN_UA_PREFIXES: tuple[str, ...] = ("agent-team/",)
 LOOPBACK_IPS: frozenset[str] = frozenset({"127.0.0.1", "::1", "::ffff:127.0.0.1"})
@@ -664,6 +665,10 @@ class _Day:
     src_sources: dict[str, set[Source]] = field(default_factory=dict)            # src -> sources (all classes)
     src_human: dict[str, set[Source]] = field(default_factory=dict)              # src -> human sources
     src_engaged: dict[str, set[Source]] = field(default_factory=dict)            # src -> engaged human sources
+    human_beyond_go: set[Source] = field(default_factory=set)                    # human sources that asked for more than /go/
+    human_req: Counter = field(default_factory=Counter)                          # human source -> requests
+    human_target_req: Counter = field(default_factory=Counter)                   # (target, human source) -> requests
+    clickers: int = 0                                                            # human-UA sources that only hit /go/
 
 
 class Aggregator:
@@ -711,6 +716,9 @@ class Aggregator:
             d.agent_requests[name] += 1
         elif cls == "human":
             d.human_pages[rec.path] += 1
+            d.human_req[src] += 1
+            if not rec.path.startswith(GO_PREFIX):
+                d.human_beyond_go.add(src)
             if ext_ref or (rec.status < 400 and is_asset(rec.path)):
                 d.engaged.add(src)
         if ext_ref and cls != "own":
@@ -724,8 +732,34 @@ class Aggregator:
             if target_matches(rec.path, t):
                 d.target_requests[t][cls] += 1
                 d.target_sources[t][cls].add(src)
+                if cls == "human":
+                    d.human_target_req[(t, src)] += 1
 
     # -- output --------------------------------------------------------------------------------------------------
+
+    def _finalize_clickers(self) -> None:
+        """A browser-UA source that asked only for /go/ links that day — no page, no asset, no external referer — is not a
+        person: a human reaches /go/ from a page of the site and loads its stylesheet. Seen 10.11 on releases: 299 sources
+        on /go/, 4 of them loaded the CSS (crawler networks with browser UAs walking the vote links). Moved to `unknown`."""
+        for day, d in self.days.items():
+            bad = d.class_sources["human"] - d.human_beyond_go - d.engaged
+            if not bad:
+                continue
+            d.clickers = len(bad)
+            n = sum(d.human_req[s] for s in bad)
+            d.class_sources["human"] -= bad
+            d.class_sources["unknown"] |= bad
+            d.class_requests["human"] -= n
+            d.class_requests["unknown"] += n
+            for t in self.targets:
+                moved = sum(d.human_target_req[(t, s)] for s in bad)
+                d.target_sources[t]["human"] -= bad
+                d.target_sources[t]["unknown"] |= {s for s in bad if d.human_target_req[(t, s)]}
+                d.target_requests[t]["human"] -= moved
+                d.target_requests[t]["unknown"] += moved
+            for k in list(d.src_human):
+                d.src_human[k] -= bad
+            self.history.get(day, set()).difference_update(bad)
 
     def _finalize_returns(self) -> None:
         seen: set[Source] = set()
@@ -747,6 +781,7 @@ class Aggregator:
             "classes": {c: {"requests": d.class_requests.get(c, 0), "sources": len(d.class_sources[c])} for c in CLASSES},
             "humans": {"requests": d.class_requests.get("human", 0), "sources": len(d.class_sources["human"]),
                        "engaged": len(d.engaged), "returns": d.returns},
+            "go_only_excluded": d.clickers,   # browser-UA sources that hit only /go/ that day: moved from humans to unknown
             "agents": {"requests": d.class_requests.get("agent", 0), "sources": len(d.class_sources["agent"]),
                        "by_family": _sorted_counter(d.agent_requests)},
             "crawlers": {"requests": d.class_requests.get("crawler", 0), "sources": len(d.class_sources["crawler"]),
@@ -772,6 +807,7 @@ class Aggregator:
                 t.class_sources[c] |= d.class_sources[c]
             t.engaged |= d.engaged
             t.returns += d.returns
+            t.clickers += d.clickers
             t.crawler_requests.update(d.crawler_requests)
             t.social_preview += d.social_preview
             t.agent_requests.update(d.agent_requests)
@@ -797,6 +833,7 @@ class Aggregator:
         return out
 
     def result(self, stats: ParseStats | None = None) -> dict[str, Any]:
+        self._finalize_clickers()
         self._finalize_returns()
         self._finalize_src()
         days = sorted(self.days)

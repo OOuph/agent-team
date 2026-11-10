@@ -713,21 +713,43 @@ def _with_src(url: str | None, channel: str) -> str | None:
     return f"{url}{sep}src={channel}"
 
 
-def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
-    """The dispatcher's daily cap per channel: TEAM_PUBLISH_MAX_PER_DAY, plus posts already booked today
-    (TEAM_PUBLISH_COUNTS, a JSON object channel → count) and the ok lines of this run's ledger. Final for today."""
+def _channel_caps(channel: str) -> tuple[int | None, int | None]:
+    """Caps for one channel: per day and per 7 days. TEAM_PUBLISH_CAPS (JSON channel → {per_day, per_week}, owner 10.11)
+    overrides TEAM_PUBLISH_MAX_PER_DAY, the default daily cap for every channel."""
+    day = week = None
     raw = os.environ.get("TEAM_PUBLISH_MAX_PER_DAY")
-    if not raw:
-        return None
+    if raw:
+        try:
+            day = int(raw)
+        except ValueError:
+            day = None
     try:
-        cap = int(raw)
-    except ValueError:
-        return None
-    n = 0
+        c = (json.loads(os.environ.get("TEAM_PUBLISH_CAPS") or "{}") or {}).get(channel) or {}
+    except (ValueError, TypeError, AttributeError):
+        c = {}
+    if isinstance(c, dict):
+        if c.get("per_day") is not None:
+            day = int(c["per_day"])
+        if c.get("per_week") is not None:
+            week = int(c["per_week"])
+    return day, week
+
+
+def _booked(env_key: str, channel: str) -> int:
     try:
-        n += int((json.loads(os.environ.get("TEAM_PUBLISH_COUNTS") or "{}") or {}).get(channel, 0))
-    except (ValueError, TypeError):
-        pass
+        return int((json.loads(os.environ.get(env_key) or "{}") or {}).get(channel, 0))
+    except (ValueError, TypeError, AttributeError):
+        return 0
+
+
+def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
+    """The dispatcher's caps per channel: per day (TEAM_PUBLISH_MAX_PER_DAY or TEAM_PUBLISH_CAPS) and per 7 days
+    (TEAM_PUBLISH_CAPS), counting posts already booked (TEAM_PUBLISH_COUNTS today, TEAM_PUBLISH_COUNTS_WEEK for the last
+    7 days) plus the ok lines of this run's ledger. Final until the window frees up."""
+    cap_day, cap_week = _channel_caps(channel)
+    if cap_day is None and cap_week is None:
+        return None
+    run_today = run_all = 0
     if ledger and ledger.exists():
         today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         for ln in ledger.read_text(encoding="utf-8").splitlines():
@@ -735,10 +757,19 @@ def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
                 e = json.loads(ln)
             except json.JSONDecodeError:
                 continue
-            if e.get("channel") == channel and e.get("ok") and not e.get("dry_run") and str(e.get("ts", "")).startswith(today):
-                n += 1
-    if n >= cap:
-        return f"daily limit reached for {channel}: {n} of {cap} posts today; no more posts until tomorrow"
+            if e.get("channel") == channel and e.get("ok") and not e.get("dry_run"):
+                run_all += 1
+                if str(e.get("ts", "")).startswith(today):
+                    run_today += 1
+    if cap_day is not None:
+        n = _booked("TEAM_PUBLISH_COUNTS", channel) + run_today
+        if n >= cap_day:
+            return f"daily limit reached for {channel}: {n} of {cap_day} posts today; no more posts until tomorrow"
+    if cap_week is not None:
+        n = _booked("TEAM_PUBLISH_COUNTS_WEEK", channel) + run_all
+        if n >= cap_week:
+            return (f"weekly limit reached for {channel}: {n} of {cap_week} posts in the last 7 days; "
+                    "this channel brought almost no people (owner 10.11) — put the effort into a channel with room")
     return None
 
 # ---- CLI --------------------------------------------------------------------------------------

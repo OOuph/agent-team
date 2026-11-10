@@ -343,6 +343,11 @@ class Store:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         return int(self.db.execute("SELECT COUNT(*) FROM posts WHERE day=? AND channel=?", (day, channel)).fetchone()[0])
 
+    def posts_last_days(self, channel: str, days: int = 7) -> int:
+        """Posts on `channel` in the last `days` calendar days, today included (the weekly cap's window)."""
+        since = (datetime.now(timezone.utc) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
+        return int(self.db.execute("SELECT COUNT(*) FROM posts WHERE day>=? AND channel=?", (since, channel)).fetchone()[0])
+
     def record_post(self, channel: str, post_id: str, url: str, task_id: str | None, text: str | None = None) -> None:
         self.db.execute("INSERT INTO posts(day, channel, post_id, url, task_id, ts, text) VALUES(?,?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel, post_id, url, task_id, utcnow(), (text or "")[:4000]))

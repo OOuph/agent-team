@@ -485,3 +485,39 @@ def test_graphemes_clusters():
     assert len(graphemes("🇵🇹🇷🇺")) == 2
     assert len(graphemes("👍🏽")) == 1
     assert len(graphemes("1️⃣")) == 1
+
+
+# ---- channel caps (owner 10.11) ---------------------------------------------------------------
+def _clear_caps(monkeypatch):
+    for k in ("TEAM_PUBLISH_MAX_PER_DAY", "TEAM_PUBLISH_CAPS", "TEAM_PUBLISH_COUNTS", "TEAM_PUBLISH_COUNTS_WEEK"):
+        monkeypatch.delenv(k, raising=False)
+
+
+def test_caps_default_daily_still_applies(monkeypatch):
+    _clear_caps(monkeypatch)
+    monkeypatch.setenv("TEAM_PUBLISH_MAX_PER_DAY", "2")
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 2}))
+    assert "daily limit" in publish._daily_limit_error("x", None)
+    assert publish._daily_limit_error("bluesky", None) is None
+
+
+def test_caps_weekly_blocks_and_counts_this_run(monkeypatch, tmp_path):
+    _clear_caps(monkeypatch)
+    monkeypatch.setenv("TEAM_PUBLISH_MAX_PER_DAY", "2")
+    monkeypatch.setenv("TEAM_PUBLISH_CAPS", json.dumps({"bluesky": {"per_week": 2}, "x": {"per_day": 3}}))
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS_WEEK", json.dumps({"bluesky": 1}))
+    assert publish._daily_limit_error("bluesky", None) is None
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_text(json.dumps({"channel": "bluesky", "ok": True, "ts": "2020-01-01T00:00:00Z"}) + "\n")
+    assert "weekly limit" in publish._daily_limit_error("bluesky", ledger)
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 2}))
+    assert publish._daily_limit_error("x", None) is None          # per-channel per_day overrides the default 2
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 3}))
+    assert "daily limit" in publish._daily_limit_error("x", None)
+
+
+def test_caps_block_in_prompt():
+    from team import prompts
+    txt = prompts.caps_block({"x": {"per_day": 2}, "mastodon": {"per_week": 1}})
+    assert "- x: 2/day" in txt and "- mastodon: 1/7 days" in txt
+    assert prompts.caps_block({}) == ""
