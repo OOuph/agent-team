@@ -197,7 +197,7 @@ def gsc_md(d: dict[str, Any]) -> str:
         return f"# Google Search Console — {d.get('host')}\n\n{d.get('error')}\n"
     t, ins = d.get("totals") or {}, d.get("inspection") or {}
     lines = [f"# Google Search Console — {d['host']} ({d['start']} … {d['end']}, data lags 2–3 days)", "",
-             f"Clicks from Google: {t.get('clicks', 0)} · impressions: {t.get('impressions', 0)} (days with data: {len(d.get('by_date') or [])})",
+             f"Clicks from Google: {t.get('clicks', 0)} · impressions: {t.get('impressions', 0)} (days with impressions: {sum(1 for r in d.get('by_date') or [] if r.get('impressions'))})",
              "", f"## Index (URL Inspection, sample of the sitemap: {ins.get('inspected', 0)} of {ins.get('sitemap_urls', 0)} URLs checked)"]
     for k, v in sorted((ins.get("coverage") or {}).items(), key=lambda kv: -kv[1]):
         lines.append(f"- {k}: {v}")
@@ -205,7 +205,7 @@ def gsc_md(d: dict[str, Any]) -> str:
         lines += ["", "Not indexed (examples):"] + [f"- {x['url']} — {x['coverage']}" for x in ins["not_indexed_examples"]]
     if d.get("by_date"):
         lines += ["", "## By day (date · clicks · impressions · avg position)"]
-        lines += [f"- {r['date']} · {r['clicks']} · {r['impressions']} · {r['position']}" for r in d["by_date"][-14:]]
+        lines += [f"- {r['date']} · {r['clicks']} · {r['impressions']} · {r['position']}" for r in d["by_date"][-14:] if r.get("impressions")]
     if d.get("pages"):
         lines += ["", "## Top pages (page · clicks · impressions · position)"]
         lines += [f"- {r['page']} · {r['clicks']} · {r['impressions']} · {r['position']}" for r in d["pages"]]
