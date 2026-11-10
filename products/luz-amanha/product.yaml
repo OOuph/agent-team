@@ -14,6 +14,10 @@ channels:
   threads: '@formachines'
   telegram: '@luz_amanha'
   bluesky: formachines.bsky.social
+# Owner 10.11: the site promises a Telegram post every day (07:00 and ~14:05 UTC) — a product feature, not marketing,
+# so Luz's own Telegram channel keeps the daily cap instead of the weekly one from team.yaml.
+channel_caps:
+  telegram: {per_day: 2}
 targets:
 - /tomorrow.json
 - /go/telegram/

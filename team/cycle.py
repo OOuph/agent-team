@@ -485,7 +485,7 @@ class Cycle:
                                    metrics_md=latest.read_text(encoding="utf-8") if latest.exists() else "",
                                    spent_today=self.store.spent_today(), cap=self.p.daily_cap,
                                    max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle, dev_idle=dev_idle,
-                                   channel_caps=self.st.publish.get("channel_caps"))
+                                   channel_caps=self.channel_caps())
         if dev_wake:
             self.mark_dev_idle()
         work = self.p.work_dir / self.cycle_id / "po"
@@ -888,7 +888,7 @@ class Cycle:
         ledger = self.run_dir / f"mkt-{t['id']}" / "ledger.jsonl"
         from . import editorial
         lessons = editorial.read_lessons(self.p)
-        memory = prompts.marketing_memory(self.p, self.store, caps=self.st.publish.get("channel_caps"))      # posts of the week, visits by channel, feedback, the plan
+        memory = prompts.marketing_memory(self.p, self.store, caps=self.channel_caps())      # posts of the week, visits by channel, feedback, the plan
         if is_plan_task(t):
             return self.exec_marketing_plan(t, run_id, work, channels, lessons, memory)
         series = editorial.series_mode(self.st, t)                 # owner 04.11: the daily series is edited very critically
@@ -901,7 +901,7 @@ class Cycle:
         env = {"TEAM_PUBLISH_LEDGER": str(ledger), "TEAM_PUBLISH_DISCLOSURES": json.dumps(disc_map, ensure_ascii=False),
                "TEAM_PUBLISH_MAX_PER_DAY": str(self.st.publish.get("max_posts_per_channel_per_day", 2)),
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
-               "TEAM_PUBLISH_CAPS": json.dumps(self.st.publish.get("channel_caps") or {}),
+               "TEAM_PUBLISH_CAPS": json.dumps(self.channel_caps() or {}),
                "TEAM_PUBLISH_COUNTS_WEEK": json.dumps({c: self.store.posts_last_days(c, 7) for c in channels}),
                "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
@@ -928,6 +928,14 @@ class Cycle:
             return True
         self.store.transition(t["id"], "accepted", "dispatcher", f"posted {posted} (editor-approved)", force=True, accepted_at=utcnow())
         return True
+
+    def channel_caps(self) -> dict:
+        """Owner's per-channel caps: `publish.channel_caps` in team.yaml, overridden per channel by the product's own
+        `channel_caps` (e.g. Luz promises a daily Telegram post on its site, so its Telegram is not capped weekly)."""
+        caps = {k: dict(v or {}) for k, v in (self.st.publish.get("channel_caps") or {}).items()}
+        for k, v in (self.p.raw.get("channel_caps") or {}).items():
+            caps[k] = dict(v or {})
+        return caps
 
     def exec_marketing_plan(self, t: dict[str, Any], run_id: str, work: Path, channels: dict[str, Any], lessons: list[str],
                             memory: dict[str, Any]) -> bool:
@@ -1006,7 +1014,7 @@ class Cycle:
             notes = [{"draft": n, "issues": r.get("issues"), "scores": r.get("scores")} for n, r in revise]
             drafts_dir2 = work / f"drafts-{round_no + 1}"
             prompt2 = prompts.marketer_prompt(self.p, t, channels, [], lessons=lessons if series else editorial.read_lessons(self.p),
-                                              editor_notes=notes, memory=prompts.marketing_memory(self.p, self.store, caps=self.st.publish.get("channel_caps")))
+                                              editor_notes=notes, memory=prompts.marketing_memory(self.p, self.store, caps=self.channel_caps()))
             rr2 = self.role_run("marketer", prompt2, "task-result", cwd=work, label=f"mkt-{t['id']}-rev{round_no}",
                                 cap=float(series["marketer_cap"]) if series else 1.0,
                                 env_extra={**env, "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir2)}, allowed_tools=mkt_tools,
