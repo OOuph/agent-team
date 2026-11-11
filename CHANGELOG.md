@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-11
 
+- T-0096: reviewer card: the path form `python3 -m unittest <path>.py` is denied; use `discover -s <dir> -t .` or the dotted module form; tests that need to write go into limits as `not observable: read-only checkout` (F-0182, F-0179). `team/roles/reviewer.md`.
 - T-0095: voice card: «No shell» also names shell loops and pipes as denied (F-0176, F-0178). `team/roles/voice.md`.
 - T-0093: voice card: `gh search` / `gh api` are denied (no Bash); GitHub issues via `WebSearch` with `site:github.com` and `WebFetch` on issue or `api.github.com` URLs; a denied command is not retried (F-0176, F-0178). `team/roles/voice.md`.
 - T-0092: voice card: «No shell» section — only WebSearch/WebFetch; no Bash, gh or curl; GitHub issues via WebFetch; unreachable sources go into the report limits (F-0176, F-0178). `team/roles/voice.md`.
