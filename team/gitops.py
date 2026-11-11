@@ -115,15 +115,30 @@ def readonly_checkout(repo_dir: Path, sha: str, dest: Path) -> Path:
     git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
     git(dest, "checkout", "--quiet", "--detach", sha)
     git(dest, "remote", "remove", "origin", check=False)
+    # Files lose every write bit; directories stay traversable and owner-writable (0755) except `.git` (0555), so a test that
+    # copies the tree with shutil.copytree gets a copy it can write into (F-0179, F-0180). The reviewer has no write tool
+    # and only a fixed list of test commands, so the checkout itself is not changed; tests write into scratch_env()'s TMPDIR.
     for r, ds, fs in os.walk(dest):
         for n in fs:
             fp = os.path.join(r, n)
             if not os.path.islink(fp):
                 os.chmod(fp, stat.S_IMODE(os.lstat(fp).st_mode) & ~0o222)
+    for r, ds, fs in os.walk(dest):
         for n in ds:
-            os.chmod(os.path.join(r, n), 0o555)
-    os.chmod(dest, 0o555)
+            if n == ".git" and r == str(dest):
+                for rr, dd, ff in os.walk(os.path.join(r, n)):
+                    for d in dd:
+                        os.chmod(os.path.join(rr, d), 0o555)
+                os.chmod(os.path.join(r, n), 0o555)
     return dest
+
+
+def scratch_env(checkout: Path) -> dict[str, str]:
+    """Environment for the allowed test commands in a read-only checkout: a writable TMPDIR next to it (outside the tree),
+    no .pyc, no pytest cache in the tree."""
+    scratch = checkout.parent / "scratch"
+    scratch.mkdir(parents=True, exist_ok=True)
+    return {"TMPDIR": str(scratch), "PYTHONDONTWRITEBYTECODE": "1", "PYTEST_ADDOPTS": "-p no:cacheprovider"}
 
 
 def head(repo_dir: Path) -> str:
