@@ -117,6 +117,13 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   (a daily data check, "Check: ...") is NOT a developer task. Give it `role: analyst` (or type `check`), or name the exact
   file the developer must change. A developer task that expects zero commits is a defect of the task.
 
+- **Stuck goals** (owner 11.11, Luz T-0117 → T-0130: seven runs asked the same OMIE URL, the common file was there all
+  along). When you re-create a goal that stalled (a defect re-opened, a task "replaces T-…"), put the earlier ids into
+  `continues`: the dispatcher counts failed attempts over the whole chain. After 3 failures the task appears under
+  STUCK GOALS; answer it in `replans` — a diagnosis and exactly 3 alternatives that differ in substance from «already
+  tried», at least one changing the data source or the framing (another file or provider, a fallback, dropping the
+  unreachable part). Do not re-create the stuck task instead. The dispatcher runs the 3 probes; a working one comes back
+  to you as a question — then create ONE implementation task with `continues`; if none works, the owner decides.
 - Runtime state is not in the product repo checkout: `products/<slug>/editorial-lessons.md`, `ux-scores.jsonl`, `marketing-plan.md` must not be named in a developer task's scope or acceptance (F-0122); the developer cannot see or change them.
 - The same holds for anything under gitignored paths such as `data/` (e.g. `data/framework/retro/`): a deliverable that must be committed goes to a tracked path; output the dispatcher writes is not a developer deliverable. This applies to retro-originated tasks in the `agent-team` product too (F-0127).
 - Before writing a task, check its acceptance against its own constraints (F-0134, F-0132): the field and object names the

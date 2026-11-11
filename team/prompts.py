@@ -23,7 +23,7 @@ def _y(obj: Any) -> str:
 
 def _task_brief(t: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "repo_only", "not_before", "blocked_by", "problem", "scope",
-            "acceptance", "negative_cases", "observations", "links", "review_fails", "created")
+            "acceptance", "negative_cases", "observations", "links", "continues", "probe_of", "review_fails", "created")
     out = {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
     if t.get("hypothesis"):
         from . import hypothesis
@@ -37,7 +37,7 @@ def _tail(s: str, n: int) -> str:
 
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
               metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
-              channel_caps: dict[str, Any] | None = None) -> str:
+              channel_caps: dict[str, Any] | None = None, stuck_md: str = "") -> str:
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
@@ -54,6 +54,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
                "in `problem`; if nothing is broken or measurably improvable, say so in the digest and invent no feature."
                if dev_idle and not idle else "")
             + "\n\n# VISION\n" + product.vision()
+            + (("\n\n" + stuck_md) if stuck_md else "")
             + "\n\n# BACKLOG (open tasks)\n" + (_y([_task_brief(t) for t in tasks]) if tasks else "(empty)")
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
@@ -121,7 +122,13 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
     rev = ("\n\n# REVIEW THAT FAILED (fix this first)\n" + _y({k: review.get(k) for k in ("verdict", "first_failure", "criteria", "summary")})) if review else ""
     tests = (f"Tests: run `{product.test_cmd}` from the checkout root before reporting done (it creates its own venv; "
              "the checkout has no .venv). A task is not done while that command fails.\n\n") if product.test_cmd else ""
-    return (f"# TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
+    probe = ("# PROBE (stuck-goal replan): answer one question, do not implement\n"
+             f"Task {task.get('probe_of')} failed several times. This run tests ONE alternative approach: run the check in the "
+             "acceptance (commands, fetches, comparisons in a scratch directory), do not change or commit product code; nothing "
+             "you do here is merged. Report `done` with one self_check per criterion: `met: true` only when the evidence shows the "
+             "approach gives what the goal needs, `met: false` with the output that rules it out. A clear «does not work» is a "
+             "good result.\n\n") if task.get("probe_of") else ""
+    return (probe + f"# TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
             f"You are in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
             "# TASK\n" + _y(_task_brief(task)) + prev + rev
             + "\n\n# VISION\n" + product.vision()

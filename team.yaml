@@ -82,6 +82,11 @@ gsc:                              # owner 10.11: Google Search Console via a ser
   inspect_per_day: 50             # URL Inspection, random sample (owner 10.11): quota is 2,000/day per property, we use ≤ 150 on formachines.ai
   reinspect_days: 7
 
+replan:                           # owner 11.11: a goal stuck N times → the PO gives 3 alternatives → probes → the owner (team/replan.py)
+  threshold: 3                    # failed attempts (partial/blocked/error/no commit) over the chain of tasks of one goal
+  probe_budget_usd: 1.5           # cap per probe run
+  tried_max: 8                    # lines of «already tried» shown to the PO and the owner
+
 deputy:                           # decision 27 (04–10.11), kept by the owner 10.11: open owner questions are answered by the deputy role
   enabled: true
   after_h: 1                      # the owner gets this long to answer himself; then the deputy answers by DEPUTY.md

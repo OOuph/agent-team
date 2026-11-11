@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, hypothesis, prompts, prfacts, publish, voice
+from . import geo, gitops, hypothesis, prompts, prfacts, publish, replan, voice
 from .config import Product, Settings
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
@@ -471,13 +471,15 @@ class Cycle:
         except Exception as exc:  # noqa: BLE001
             log.exception("%s: deputy failed: %s", self.p.slug, exc)
         self.hand_over_readouts()
+        self.settle_replans()
+        stuck_md = replan.prompt_block(self.store, self.replan_cfg())
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])
         idle = not active
         dev_idle = not any(str(t.get("role") or "") == "developer" for t in active)
         dev_wake = dev_idle and self.dev_idle_due()
-        if not new_obs and not qs and not idle and not dev_wake:
+        if not new_obs and not qs and not idle and not dev_wake and not stuck_md:
             log.info("%s: triage skipped (nothing new, team busy)", self.p.slug)
             return
         latest = self.p.dir / "metrics" / "latest.md"
@@ -487,7 +489,7 @@ class Cycle:
                                    + ("\n\n" + gsc_md.read_text(encoding="utf-8")[:3000] if gsc_md.exists() else ""),
                                    spent_today=self.store.spent_today(), cap=self.p.daily_cap,
                                    max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle, dev_idle=dev_idle,
-                                   channel_caps=self.channel_caps())
+                                   channel_caps=self.channel_caps(), stuck_md=stuck_md)
         if dev_wake:
             self.mark_dev_idle()
         work = self.p.work_dir / self.cycle_id / "po"
@@ -543,6 +545,9 @@ class Cycle:
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
                                    not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer",
                                    depends_on=[str(x) for x in (rt.get("depends_on") or [])])
+            if rt.get("continues"):                   # owner 11.11: the chain of one goal, for the stuck-goal counter
+                new["continues"] = [str(x) for x in rt["continues"]][:5]
+                self.store.save_task(new)
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
@@ -555,7 +560,10 @@ class Cycle:
                     held.append(f"{new['id']} → proposed: {'; '.join(problems)[:160]}")
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
+        replan_notes = self.apply_replans(res.get("replans") or [])
         digest = res.get("digest_md", "")
+        if replan_notes:
+            digest += "\n\n_Перепланирование застрявших целей: " + "; ".join(replan_notes) + "._"
         if skipped:
             digest += "\n\n_Диспетчер не создал дубли (задача уже открыта): " + "; ".join(skipped) + "._"
         if held:
@@ -609,10 +617,119 @@ class Cycle:
                     "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
                     "detail": "PO: set not_before on this task (or fix the title)."})
                 continue
-            if self.guard_no_commit_loop(t):
+            if self.guard_replan(t) or self.guard_no_commit_loop(t):
                 continue
             if self.execute_task(t):
                 used[key] = used.get(key, 0) + 1
+
+    # stuck goals: replan with 3 alternatives, probe them, then the owner (owner 11.11, team/replan.py) ----------------
+
+    def replan_cfg(self) -> dict[str, Any]:
+        return replan.settings(self.st.raw.get("replan"))
+
+    def guard_replan(self, t: dict[str, Any]) -> bool:
+        """True = the task was stopped before a run: its goal failed `replan.threshold` times over the task chain, so the
+        PO replans it (first time) or the owner gets it (stuck again after a replan)."""
+        rp = t.get("replan") or {}
+        if rp.get("state") == "exhausted" and t.get("state") == "ready":
+            # the owner (or the deputy) answered: the developer gets the answer and no further automatic replan
+            q = self.store.questions()
+            ans = next((x for x in q if x.get("id") == rp.get("question")), None)
+            t["replan"] = {**rp, "state": "owner"}
+            if ans and ans.get("answer"):
+                t["scope"] = f"{t.get('scope') or ''}\n\nOWNER'S ANSWER ({ans.get('answered_by')}) after the replan: {ans['answer']}"[:3000]
+            self.store.save_task(t)
+            return False
+        cfg = self.replan_cfg()
+        what = replan.needs_attention(self.store, t, int(cfg["threshold"]))
+        if what is None:
+            return False
+        n = replan.chain_failures(self.store, t)
+        if what == "replan":
+            self.store.transition(t["id"], "blocked", "dispatcher", f"stuck: {n} failed attempts on this goal; the PO replans it with 3 alternatives",
+                                  force=True, assignee_run=None, replan={"state": "asked", "at": utcnow(), "failures": n})
+            self.store.event("task.replan_asked", t["id"], "dispatcher", {"failures": n})
+        else:
+            self.escalate_stuck(t, f"stuck again after a replan on this chain ({n} failed attempts)", n)
+        return True
+
+    def escalate_stuck(self, t: dict[str, Any], why: str, n: int, probes: list[dict[str, Any]] | None = None) -> None:
+        rp = dict(t.get("replan") or {})
+        lines = "\n".join(f"- {x}" for x in replan.tried(self.store, t, int(self.replan_cfg()["tried_max"])))
+        ptxt = "\n".join(f"- {p['id']} {p.get('title')}: {_short_text((p.get('results') or [{}])[-1].get('summary'), 200)}" for p in probes or [])
+        question = (f"Task {t['id']} ({_short_text(t.get('title'), 120)}) is stuck: {why}. "
+                    + (f"PO diagnosis: {_short_text(rp.get('diagnosis'), 300)} " if rp.get("diagnosis") else "")
+                    + (f"Probes that did not work:\n{ptxt}\n" if ptxt else "")
+                    + f"Tried:\n{lines}\nDecide: a direction for the developer, a different source, or close the goal.")
+        t = self.store.transition(t["id"], "blocked", "dispatcher", f"stuck: {why}", force=True, assignee_run=None,
+                                  replan={**rp, "state": "exhausted", "failures": n, "at": utcnow()})
+        q = self.store.ask(from_="dispatcher", to="owner", question=question, task_id=t["id"])
+        t = self.store.task(t["id"]) or t
+        t["replan"] = {**t.get("replan", {}), "question": q["id"]}
+        self.store.save_task(t)
+        self.store.event("task.replan_exhausted", t["id"], "dispatcher", {"question": q["id"]})
+
+    def apply_replans(self, items: list[dict[str, Any]]) -> list[str]:
+        """The PO's `replans`: three alternatives per stuck task become three probe tasks (developer, no commit)."""
+        cfg, notes = self.replan_cfg(), []
+        for rp in items or []:
+            t = self.store.task(str(rp.get("task_id")))
+            if not t or (t.get("replan") or {}).get("state") != "asked":
+                continue
+            problems = replan.validate(rp)
+            if problems:
+                notes.append(f"{t['id']}: замена не принята ({'; '.join(problems)})")
+                continue
+            ids = []
+            for i, a in enumerate(rp["alternatives"][:3]):
+                pt = self.store.create_task(
+                    title=f"Probe {i + 1}/3 for {t['id']}: {a.get('title') or a.get('approach')}"[:140], type_="research",
+                    problem=f"Stuck goal {t['id']}: {_short_text(t.get('problem'), 400)}\nPO diagnosis: {_short_text(rp.get('diagnosis'), 300)}",
+                    scope=(f"PROBE, not an implementation. Approach: {_short_text(a.get('approach'), 400)}\nHow it differs from what was tried: "
+                           f"{_short_text(a.get('differs_from_tried'), 300)}\nRun the check, do not change or commit product code."),
+                    acceptance=[f"The check answers whether this approach gives what {t['id']} needs: {_short_text(a.get('probe_check'), 240)}",
+                                "Evidence: the exact command or URL and the output that decides it"],
+                    goal=str(t.get("goal") or ""), created_by="po", priority=str(t.get("priority") or "P1"), size="XS", role="developer",
+                    state="ready", budget_usd=float(cfg["probe_budget_usd"]), links=[t["id"]], note=f"replan probe for {t['id']}")
+                pt["probe_of"] = t["id"]
+                self.store.save_task(pt)
+                ids.append(pt["id"])
+            t["replan"] = {**t["replan"], "state": "probing", "diagnosis": _short_text(rp.get("diagnosis"), 600),
+                           "alternatives": rp["alternatives"][:3], "probes": ids}
+            self.store.save_task(t)
+            self.store.event("task.replan_probing", t["id"], "po", {"probes": ids})
+            notes.append(f"{t['id']} застряла → пробы {', '.join(ids)}")
+        return notes
+
+    def finish_probe(self, t: dict[str, Any], res: dict[str, Any]) -> bool:
+        works = replan.probe_verdict(res)
+        self.store.transition(t["id"], "done", "dispatcher", f"probe {'works' if works else 'does not work'}: {_short_text(res.get('summary'), 300)}",
+                              force=True, assignee_run=None, probe_works=works)
+        return True
+
+    def settle_replans(self) -> None:
+        """Stuck tasks whose probes all finished: a working probe → the PO creates the implementation task; none → the owner."""
+        for t in self.store.tasks(["blocked", "waiting_owner"]):
+            rp = t.get("replan") or {}
+            if rp.get("state") != "probing":
+                continue
+            probes = [p for p in (self.store.task(i) for i in rp.get("probes") or []) if p]
+            if any(p.get("state") not in ("done", "rejected", "accepted", "blocked", "waiting_owner") for p in probes):
+                continue
+            works = [p for p in probes if p.get("probe_works")]
+            if not works:
+                self.escalate_stuck(t, "none of the 3 probes of the PO's replan worked", int(rp.get("failures") or 0), probes)
+                continue
+            best = works[0]
+            ev = _short_text((best.get("results") or [{}])[-1].get("summary"), 500)
+            t["replan"] = {**rp, "state": "done", "winner": best["id"]}
+            self.store.save_task(t)
+            self.store.transition(t["id"], "rejected", "dispatcher", f"replanned: probe {best['id']} works; the PO creates the implementation task", force=True)
+            self.store.ask(from_="dispatcher", to="po", question=(
+                f"Stuck goal {t['id']} ({_short_text(t.get('title'), 120)}): probe {best['id']} worked — {_short_text(best.get('scope'), 300)} "
+                f"Evidence: {ev} Create ONE implementation task (role developer) for this approach with `continues: [\"{t['id']}\"]`, "
+                f"keeping the original acceptance: {'; '.join(_short_text(a, 120) for a in t.get('acceptance') or [])}"))
+            self.store.event("task.replan_done", t["id"], "dispatcher", {"winner": best["id"]})
 
     def guard_no_commit_loop(self, t: dict[str, Any]) -> bool:
         """T-0046: the single check for «never run the developer on a task with ≥2 no-commit records», whatever state (ready,
@@ -635,7 +752,7 @@ class Cycle:
                        "Name the file the developer must change, or make it a check task for the analyst, or close it.", task_id=t["id"], blocks=[t["id"]])
 
     def execute_task(self, t: dict[str, Any]) -> bool:
-        if self.guard_no_commit_loop(t):
+        if self.guard_replan(t) or self.guard_no_commit_loop(t):
             return False
         run_id = f"{self.cycle_id}-exec-{t['id']}"
         if not self.store.claim(t["id"], str(t.get("role")), run_id):
@@ -687,6 +804,8 @@ class Cycle:
         res["run_id"] = run_id
         res["commit"] = gitops.head(repo)
         self.store.add_result(t["id"], res)
+        if replan.is_probe(t):
+            return self.finish_probe(t, res)            # a probe never merges: its answer goes to the stuck task
         for pr in res.get("proposals") or []:
             self.store.add_observation({"title": str(pr)[:140], "classification": "need_hypothesis", "source": "developer", "task": t["id"],
                                         "actual": str(pr)[:400], "url": self.p.site_base, "fingerprint": fingerprint("dev", "proposal", "", str(pr))})

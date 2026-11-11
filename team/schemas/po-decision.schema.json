@@ -287,6 +287,14 @@
         }
        }
       }
+     },
+     "continues": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+       "type": "string"
+      },
+      "description": "ids of earlier tasks this task retries or replaces for the SAME goal (e.g. a defect re-created after it stalled). Required when you re-create a goal: the dispatcher counts failed attempts over the whole chain."
      }
     }
    }
@@ -478,6 +486,70 @@
           "minimum": 1,
           "maximum": 5
          }
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "replans": {
+   "type": "array",
+   "maxItems": 5,
+   "description": "one per task in STUCK GOALS: diagnosis and exactly 3 alternatives (at least one changes the source or framing); the dispatcher turns them into 3 probe tasks",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "diagnosis",
+     "alternatives"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "diagnosis": {
+      "type": "string",
+      "maxLength": 600,
+      "description": "why the tried approach keeps failing: the wrong assumption, a source that changed, a goal not reachable as written"
+     },
+     "alternatives": {
+      "type": "array",
+      "minItems": 3,
+      "maxItems": 3,
+      "items": {
+       "type": "object",
+       "additionalProperties": false,
+       "required": [
+        "title",
+        "approach",
+        "differs_from_tried",
+        "changes_source_or_framing",
+        "probe_check"
+       ],
+       "properties": {
+        "title": {
+         "type": "string",
+         "maxLength": 100
+        },
+        "approach": {
+         "type": "string",
+         "maxLength": 400
+        },
+        "differs_from_tried": {
+         "type": "string",
+         "maxLength": 300,
+         "description": "what is different in substance from every line of «already tried»"
+        },
+        "changes_source_or_framing": {
+         "type": "boolean",
+         "description": "true when the approach uses another data source/file/endpoint/provider, a fallback, or drops the unreachable part of the goal"
+        },
+        "probe_check": {
+         "type": "string",
+         "maxLength": 300,
+         "description": "one cheap check a developer runs in one run without committing (a command, a URL, a value to compare) that decides whether the approach works"
         }
        }
       }

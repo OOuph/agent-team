@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-11
+
+- Owner 11.11 — stuck goals: failures are counted over the chain of tasks that pursue one goal (`continues`, or «replaces/retry of/instead of T-…» in the title or problem), not per task id. At 3 failures the developer does not start; the PO gets a STUCK GOALS block with what was tried and must answer in `replans` with a diagnosis and exactly 3 alternatives (one must change the data source or the framing). The dispatcher runs them as 3 probe tasks (developer, no merge, $1.5 cap each); a working probe goes back to the PO as «create one implementation task with `continues`», none — or a second stall after a replan — goes to the owner (the deputy answers first). Why: Luz T-0117 → T-0129 → T-0130 asked the same OMIE URL seven times; the per-task guards missed it because the PO re-created the goal under new ids and each partial summary differed only by its timestamp. `team/replan.py`, `cycle.py`, `prompts.py`, `roles/po.md`, `schemas/po-decision.schema.json`, `team.yaml`, SCHEME.md, tests.
+
 ## 2026-11-10
 
 - T-0089: developer card: before returning, run `git diff --name-only <base>..HEAD` and list as changed only files in that output; files read or untouched go under "not changed" (F-0158, F-0152). `team/roles/developer.md`.
