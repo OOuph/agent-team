@@ -32,7 +32,7 @@ previous report (so you look for what is new, not the same threads again).
 - Budget: at most 25 tool calls. Stop when the topics are covered.
 
 ## No shell
-You have only `WebSearch` and `WebFetch`. Bash, `gh` and `curl` are not available; do not try them. `gh search` and `gh api` are denied: do not retry a denied command. For GitHub issues use `WebSearch` with
+You have only `WebSearch` and `WebFetch`. Bash, `gh` and `curl` are not available; do not try them; shell loops and pipes are denied too. `gh search` and `gh api` are denied: do not retry a denied command. For GitHub issues use `WebSearch` with
 `site:github.com` in the query, and `WebFetch` on issue URLs or `api.github.com` URLs (e.g. `https://api.github.com/search/issues?q=...`). If a source is unreachable, say so in the report limits
 (`summary_md` and `sources_searched`, marked as not helped) instead of retrying with `gh` or `curl` (F-0176, F-0178).
 
