@@ -38,11 +38,17 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "
                           "Bash(python3 -m unittest tests.* -v)", "Bash(python3 -m unittest -v discover*)",
                           "Bash(python3 -m unittest discover -s * -v)", "Bash(python3 -m unittest discover -s * -t *)",
                           "Bash(python3 -m unittest discover -v -s * -t *)", "Bash(python3 -m unittest -v discover -s *)",
+                          "Bash(python3 -B -m unittest tests.*)", "Bash(python3 -B -m unittest -v tests.*)",
+                          "Bash(python3 -B -m unittest tests.* -v)", "Bash(python3 -B -m unittest discover -s *)",
+                          "Bash(python3 -m unittest */*.py)", "Bash(python3 -m unittest */*.py -v)",
+                          "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
+                          "Bash(python3 -m unittest discover -s * -t * -p *)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 REPO_ONLY_PROMPT = (
     "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
-    "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
+    "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module; also `python3 -B -m unittest tests.<module> -v`), "
+    "`python3 -m unittest <dir>/<file>.py`, `python3 -m unittest <dir>/<file>.py -v`, `python3 -m unittest discover -s <dir> -p <glob>`, "
     "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
     "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
     "A criterion about tests or code gets pass/fail from this checkout.\n")
