@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-11
 
+- T-0099: reviewer allowlist (`REPO_ONLY_REVIEW_TOOLS`), prompt, card and SCHEME: `python3 -B -m unittest tests.<module> -v`, `python3 -m unittest <dir>/<file>.py [-v]` and `discover -s <dir> -p <glob>` are allowed (F-0182, F-0183, F-0184; supersedes the path-form denial of T-0096). `team/cycle.py`.
 - T-0097: voice card: GitHub issue search via `WebSearch` (`site:github.com`) or `WebFetch` on `github.com/search?type=issues&q=...` / `api.github.com`; a missing capability goes into `friction` (F-0178, F-0176). `team/roles/voice.md`.
 - T-0096: reviewer card: the path form `python3 -m unittest <path>.py` is denied; use `discover -s <dir> -t .` or the dotted module form; tests that need to write go into limits as `not observable: read-only checkout` (F-0182, F-0179). `team/roles/reviewer.md`.
 - T-0095: voice card: «No shell» also names shell loops and pipes as denied (F-0176, F-0178). `team/roles/voice.md`.

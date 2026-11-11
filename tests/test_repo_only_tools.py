@@ -34,7 +34,7 @@ def test_flags_in_either_order():
 
 
 def test_every_prompt_command_is_allowed():
-    cmds = [c.replace("<module>", "test_x").replace("<dir>", "tests")
+    cmds = [c.replace("<module>", "test_x").replace("<dir>", "tests").replace("<file>", "test_x").replace("<glob>", "test_*.py")
             for c in re.findall(r"`([^`]+)`", cycle.REPO_ONLY_PROMPT) if c.startswith(("python3", "git"))]
     assert len(cmds) >= 6
     for c in cmds:
@@ -45,3 +45,14 @@ def test_f0095_exact_command_allowed():
     # F-0095/F-0096: the reviewer of luz-amanha T-0042 was denied this exact command
     assert _allowed("python3 -m unittest tests.test_offline_build -v")
     assert _allowed("python3 -m unittest tests.test_offline_build")
+
+
+def test_b_flag_path_form_and_pattern_allowed():
+    for c in ("python3 -B -m unittest tests.test_links -v", "python3 -m unittest mcp/test_release_radar_mcp.py -v",
+              "python3 -m unittest mcp/test_release_radar_mcp.py", "python3 -m unittest discover -s tests -p 'test_*.py'"):
+        assert _allowed(c), c
+
+
+def test_shell_metacharacter_command_still_denied():
+    for c in ("rm -rf /", "cat /etc/passwd", "python3 -c 'import os'", "python3 -m http.server"):
+        assert not _allowed(c), c
