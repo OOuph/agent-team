@@ -45,7 +45,9 @@ REPO_ONLY_PROMPT = (
     "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
     "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
     "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
-    "A criterion about tests or code gets pass/fail from this checkout.\n")
+    "A criterion about tests or code gets pass/fail from this checkout. TMPDIR points to a writable scratch dir outside the "
+    "tree; tests may copy the tree there and write. A failure caused only by read-only permissions goes into `limits` as "
+    "`not observable: read-only checkout`, not into `fail`.\n")
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -390,7 +392,7 @@ class Cycle:
             try:
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
-                env = {"PYTHONDONTWRITEBYTECODE": "1"}
+                env = gitops.scratch_env(work)
                 prompt += REPO_ONLY_PROMPT.format(sha=sha)
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)

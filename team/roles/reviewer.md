@@ -41,6 +41,9 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
   criterion about tests or code is judged from the checkout: tests pass → `pass`, tests fail → `fail` with the failing
   test name; do not write `not observable: repo-only` for what you could run. Without the READ-ONLY CHECKOUT section
   the rule above (raw URLs, `limits`) applies.
+  Your test commands run with a writable `TMPDIR` (a scratch dir outside the tree), `PYTHONDONTWRITEBYTECODE=1` and no
+  pytest cache; tests that copy the tree and write into the copy work. A failure caused only by read-only permissions
+  (writing into the checkout itself) is not a `fail`: put it into `limits` as `not observable: read-only checkout` (F-0179, F-0180).
 - The live site is rebuilt by a daily cron: a build marker newer than the expected commit is normal; compare the
   content the task changed, not the hash. An older marker means the release is not deployed yet.
 - A marker that differs from the expected commit (older or newer) is never by itself a reason for `inconclusive`: say so
