@@ -45,6 +45,20 @@ def mismatches(claimed: list[str], diff_files: list[str]) -> list[str]:
     return out
 
 
+def reconcile_changes(changes: list[str] | None, diff_files: list[str]) -> tuple[list[str], list[str]]:
+    """(kept, dropped): an entry whose named paths are all absent from the git diff is dropped (T-0115).
+    Entries naming no path are kept; the diff is the source of truth."""
+    kept: list[str] = []
+    dropped: list[str] = []
+    for c in changes or []:
+        paths = claimed_files("", [c])
+        if paths and len(mismatches(paths, diff_files)) == len(paths):
+            dropped.append(str(c))
+        else:
+            kept.append(c)
+    return kept, dropped
+
+
 def render(diff_stat: str, diff_files: list[str], test_output: str | None, claimed: list[str], canary: str = "pending") -> str:
     """The markdown section. `canary` is 'pending' at PR open, then the dispatcher edits the PR with the result."""
     lines = [HEADING, "", f"Computed by the dispatcher from `git diff --stat` against the base branch and the test run; not taken from the developer's text.", "",

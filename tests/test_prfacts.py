@@ -30,3 +30,9 @@ def test_canary_result_replaces_pending():
     md, _ = prfacts.build("", [], None, {})
     assert "not run" in md
     assert "**Canary:** passed: ok" in prfacts.with_canary(md, "passed: ok")
+
+
+def test_reconcile_drops_claimed_file_absent_from_diff():
+    kept, dropped = prfacts.reconcile_changes(["team/a.py", "team/ghost.py (new)", "no path here"], ["team/a.py"])
+    assert kept == ["team/a.py", "no path here"]
+    assert dropped == ["team/ghost.py (new)"]

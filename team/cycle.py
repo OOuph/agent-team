@@ -893,9 +893,12 @@ class Cycle:
         tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
             gitops.push_branch(repo, t["id"])
-            facts, mism = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
-            if mism:
-                self.store.event("pr.claim_mismatch", t["id"], "dispatcher", {"text": f"developer `changes` list names files not in the git diff: {', '.join(mism[:8])}"})
+            # the diff is the truth (T-0115): claimed files absent from it are dropped from the stored changes, logged as a warning only
+            kept, dropped = prfacts.reconcile_changes(res.get("changes"), touched)
+            if dropped:
+                log.warning("%s: dropped developer `changes` entries absent from the git diff: %s", t["id"], "; ".join(dropped[:8]))
+                res = {**res, "changes": kept}
+            facts, _ = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
                     "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +
