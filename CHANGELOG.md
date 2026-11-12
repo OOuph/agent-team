@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-12
+
+- T-0109: reviewer allowlist: `-B` variants of the path form, `discover -p/-t` and bare unittest, plus `:*` prefix forms for `tests.<module>` (F-0187, F-0183, F-0184, F-0182; F-0188 is the same `tests.<module> -v` denial: the pattern already existed after T-0099, so the cause is not provable from the repo, and the `:*` forms are a redundant fallback). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, tests.
+
 ## 2026-11-11
 
 - T-0108: PO and marketer cards: a dev.to post task never demands the site root as canonical (name a dated `/d/<date>/` page); `team-publish` retries once on a 422, which the marketer does not report as friction (F-0151, F-0155). `team/roles/po.md`, `team/roles/marketer.md`.

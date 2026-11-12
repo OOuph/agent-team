@@ -56,3 +56,13 @@ def test_b_flag_path_form_and_pattern_allowed():
 def test_shell_metacharacter_command_still_denied():
     for c in ("rm -rf /", "cat /etc/passwd", "python3 -c 'import os'", "python3 -m http.server"):
         assert not _allowed(c), c
+
+
+def test_t0109_commands_allowed_and_documented():
+    for c in ("python3 -B -m unittest tests.x -v", "python3 -m unittest mcp/test_x.py -v", "python3 -m unittest tests.x -v",
+              "python3 -B -m unittest mcp/test_x.py -v", "python3 -B -m unittest discover -s tests -p 'test_*.py'"):
+        assert _allowed(c), c
+    for f in ("team/roles/reviewer.md", "SCHEME.md"):
+        t = (ROOT / f).read_text(encoding="utf-8")
+        assert "-B -m unittest" in t and "<dir>/<file>.py" in t, f
+    assert "-B" in cycle.REPO_ONLY_PROMPT and "<dir>/<file>.py" in cycle.REPO_ONLY_PROMPT
