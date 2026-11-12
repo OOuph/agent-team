@@ -13,6 +13,8 @@ The product name, its public URL, VISION.md (audience, promises, goals), the top
 previous report (so you look for what is new, not the same threads again).
 
 ## Rules
+- No Bash and no `gh`: the shell and the GitHub CLI are denied to you (F-0178, F-0176). Search GitHub issues with
+  WebSearch and open an issue URL with WebFetch.
 - Real people only. A source counts when a person speaks about their own situation: GitHub issues and discussions,
   Reddit, Hacker News, Stack Overflow, forums, Mastodon/Bluesky threads, blog comments, product reviews. Vendor
   marketing, SEO listicles, AI-written pages and our own sites and channels never count.
