@@ -47,6 +47,8 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "
                           "Bash(python3 -m unittest */*.py)", "Bash(python3 -m unittest */*.py -v)",
                           "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
                           "Bash(python3 -m unittest discover -s * -t * -p *)",
+                          "Bash(python3 -B -m unittest -v)", "Bash(python3 -B -m unittest discover)",
+                          "Bash(python3 -B -m unittest discover -v)", "Bash(python3 -m unittest discover -v)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 REPO_ONLY_PROMPT = (
@@ -56,6 +58,22 @@ REPO_ONLY_PROMPT = (
     "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
     "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
     "A criterion about tests or code gets pass/fail from this checkout.\n")
+
+
+def fresh_review_tools() -> list[str]:
+    """T-0111: the allowlist as committed NOW. A long-running dispatcher process keeps the module it imported at start, so a
+    self-merged allowlist change (T-0099, T-0109) would not reach reviewers until restart; re-read the literal from the file."""
+    try:
+        import ast
+        tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+        for n in tree.body:
+            if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "REPO_ONLY_REVIEW_TOOLS" for t in n.targets):
+                v = ast.literal_eval(n.value)
+                if isinstance(v, list) and v and all(isinstance(x, str) for x in v):
+                    return v
+    except Exception as e:
+        log.warning("fresh allowlist unavailable, using the imported one: %s", e)
+    return list(REPO_ONLY_REVIEW_TOOLS)
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -145,7 +163,7 @@ class Cycle:
             self.store.event(f"billing.{kind}", self.p.slug, "dispatcher", {"run": run_id, "line": billing.status_line(self.st)})
         rec = {"run_id": run_id, "role": role, "ok": rr.ok, "error": rr.error, "cost_usd": cost, "cost_reported": rr.cost_usd is not None,
                "num_turns": rr.num_turns, "duration_s": round(rr.duration_s, 1), "session_id": rr.session_id,
-               "denials": rr.denials, "structured": rr.structured, "finished": utcnow()}
+               "denials": rr.denials, "allowed_tools": allowed_tools, "structured": rr.structured, "finished": utcnow()}
         (rd / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
         return rr
@@ -399,7 +417,7 @@ class Cycle:
         if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
             try:
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
-                tools = list(REPO_ONLY_REVIEW_TOOLS)
+                tools = fresh_review_tools()
                 env = {"PYTHONDONTWRITEBYTECODE": "1"}
                 prompt += REPO_ONLY_PROMPT.format(sha=sha)
             except Exception as e:               # no checkout → the old URL-only review

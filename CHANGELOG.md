@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-12
 
+- T-0111: reviewer allowlist denials that persisted after merge (F-0187, F-0188): cause = (a) `python3 -B -m unittest -v` and `discover` bare/`-v` variants were missing (pattern mismatch, now added), (b) the long-running dispatcher keeps the `team.cycle` module imported at start, so a self-merged allowlist is not seen until restart; the reviewer now gets the allowlist re-read from the committed `team/cycle.py` (`fresh_review_tools`). `tool_denied` friction records now carry `denied_commands` and `allowed_tools` (the list in the run). `team/cycle.py`, `team/friction.py`, SCHEME.md, tests.
+
 - T-0109: reviewer allowlist: `-B` variants of the path form, `discover -p/-t` and bare unittest, plus `:*` prefix forms for `tests.<module>` (F-0187, F-0183, F-0184, F-0182; F-0188 is the same `tests.<module> -v` denial: the pattern already existed after T-0099, so the cause is not provable from the repo, and the `:*` forms are a redundant fallback). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, tests.
 
 ## 2026-11-11
