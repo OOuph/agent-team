@@ -22,6 +22,7 @@ import yaml
 log = logging.getLogger("team.runner")
 
 # never available to a role: the dispatcher routes everything through files and the allowed Bash commands
+AGENTS_ARG_MAX = 100_000   # bytes; the kernel limit for a single argv string is 128 KiB
 DISALLOWED_DEFAULT = ["WebFetch", "WebSearch", "Agent", "Task", "TodoWrite", "NotebookEdit", "KillShell", "BashOutput"]
 
 
@@ -76,8 +77,15 @@ class Runner:
         agent_def = {k: v for k, v in rdef.items() if not k.startswith("_")}
         model = model or str(self.cfg.get("models", {}).get(role) or agent_def.get("model") or "sonnet")
         agent_def["model"] = model
+        agents_json = json.dumps({role: agent_def})
+        if len(agents_json.encode("utf-8")) > AGENTS_ARG_MAX:
+            # one argv string is capped at 128 KB (Errno 7): send a stub definition, the role prompt goes ahead of the task on stdin
+            log.warning("run %s: agent definition is %d bytes (> %d): role prompt moved to stdin", run_id, len(agents_json), AGENTS_ARG_MAX)
+            prompt = f"# Role instructions ({role})\n\n{agent_def.get('prompt', '')}\n\n# Task\n\n{prompt}"
+            agent_def = {**agent_def, "prompt": f"You are the {role} role. Your full role instructions are at the start of the user message; follow them."}
+            agents_json = json.dumps({role: agent_def})
         argv = [self.binary, "-p", "--output-format", "stream-json", "--verbose",
-                "--agents", json.dumps({role: agent_def}), "--agent", role, "--model", model,
+                "--agents", agents_json, "--agent", role, "--model", model,
                 "--max-turns", str(max_turns or self.cfg.get("max_turns", 60)), "--max-budget-usd", f"{max_usd:.2f}",
                 "--permission-mode", "default"]
         if schema:
