@@ -42,6 +42,10 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
   criterion about tests or code is judged from the checkout: tests pass → `pass`, tests fail → `fail` with the failing
   test name; do not write `not observable: repo-only` for what you could run. Without the READ-ONLY CHECKOUT section
   the rule above (raw URLs, `limits`) applies.
+- Test commands, no variants (T-0125; F-0198, F-0196, F-0191, F-0190, F-0199, F-0192): use the listed commands verbatim.
+  No `-B` (denied example: `python3 -B -m unittest tests.test_go_pages -v`), no `-p`, no `-m` variants, no path-form
+  arguments, no other extra flags. A denied test command is not retried with variants: record it once in `limits` as
+  `not observable: test not runnable` and judge the rest; do not open friction loops.
 - The live site is rebuilt by a daily cron: a build marker newer than the expected commit is normal; compare the
   content the task changed, not the hash. An older marker means the release is not deployed yet.
 - A marker that differs from the expected commit (older or newer) is never by itself a reason for `inconclusive`: say so
