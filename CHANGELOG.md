@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-12
+
+- T-0103: retro does not create a task that repeats a done task: same normalised title, or same files and evidence ids already cited by it; the skip is logged with the duplicated task id. Open tasks are unaffected (F-0182, F-0183, F-0184, F-0176, F-0178). `team/retro.py`.
+
 ## 2026-11-11
 
 - T-0099: reviewer allowlist (`REPO_ONLY_REVIEW_TOOLS`), prompt, card and SCHEME: `python3 -B -m unittest tests.<module> -v`, `python3 -m unittest <dir>/<file>.py [-v]` and `discover -s <dir> -p <glob>` are allowed (F-0182, F-0183, F-0184; supersedes the path-form denial of T-0096). `team/cycle.py`.
