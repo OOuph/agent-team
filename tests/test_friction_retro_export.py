@@ -176,3 +176,16 @@ def test_retro_cap_is_sum_of_product_budgets(tmp_path: Path) -> None:
     assert retro.team_cap_usd(st) == 30.0
     st.raw.setdefault("framework", {})["spend_cap_usd"] = 7
     assert retro.team_cap_usd(st) == 7.0
+
+
+def test_retro_duplicate_of_done_task() -> None:
+    done = {"id": "T-0099", "state": "done", "title": "[retro] Reviewer allowlist", "scope": "team/cycle.py, team/roles/reviewer.md",
+            "problem": "Friction: F-0182, F-0183. allow unittest"}
+    openq = {**done, "id": "T-0100", "state": "ready"}
+    same_title = {"title": "reviewer  allowlist!", "files": ["x.py"], "evidence": ["F-9"]}
+    same_files = {"title": "other wording", "files": ["team/roles/reviewer.md", "team/cycle.py"], "evidence": ["F-0183"]}
+    differs = {"title": "other wording", "files": ["team/cycle.py"], "evidence": ["F-0190"]}
+    assert retro.duplicate_of(same_title, [done]) == "T-0099"
+    assert retro.duplicate_of(same_files, [done]) == "T-0099"
+    assert retro.duplicate_of(differs, [done]) is None
+    assert retro.duplicate_of(same_title, [openq]) is None
