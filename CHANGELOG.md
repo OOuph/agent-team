@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-11
 
+- T-0108: PO and marketer cards: a dev.to post task never demands the site root as canonical (name a dated `/d/<date>/` page); `team-publish` retries once on a 422, which the marketer does not report as friction (F-0151, F-0155). `team/roles/po.md`, `team/roles/marketer.md`.
+
 - T-0105: runner keeps the `--agents` argument under 100 KB; a larger role definition is replaced by a stub and the role prompt is prepended to the stdin prompt, instead of Errno 7 (F-0162, F-0164, F-0165, F-0173). `team/runner.py`, SCHEME.md, tests.
 - T-0099: reviewer allowlist (`REPO_ONLY_REVIEW_TOOLS`), prompt, card and SCHEME: `python3 -B -m unittest tests.<module> -v`, `python3 -m unittest <dir>/<file>.py [-v]` and `discover -s <dir> -p <glob>` are allowed (F-0182, F-0183, F-0184; supersedes the path-form denial of T-0096). `team/cycle.py`.
 - T-0097: voice card: GitHub issue search via `WebSearch` (`site:github.com`) or `WebFetch` on `github.com/search?type=issues&q=...` / `api.github.com`; a missing capability goes into `friction` (F-0178, F-0176). `team/roles/voice.md`.

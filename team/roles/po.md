@@ -132,7 +132,7 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   while forbidding renames; the developer could not satisfy both and the task stalled.
 - dev.to tasks (F-0155, F-0151, F-0146, F-0150, F-0145, F-0139, F-0138): the canonical URL must be unique per article (dev.to
   answers 422 for a repeated one). A task for a dev.to post names a dated page `/d/<date>/` or a specific findings page
-  with `?src=devto` as canonical, never the site root. When you see an open dev.to task (e.g. T-0052) whose acceptance
+  with `?src=devto` as canonical, never the site root. A post task's acceptance must not demand the bare site root as canonical, even once (F-0151, F-0155). When you see an open dev.to task (e.g. T-0052) whose acceptance
   names the root as canonical, fix its acceptance in the same run; do not ask the owner about a canonical 422.
 
 ## Output
