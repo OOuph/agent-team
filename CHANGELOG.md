@@ -26,6 +26,9 @@ the PR, a human merges.
 - T-0113: voice card: rule at the top of Rules — shell and `gh` are denied, read GitHub issues via WebSearch/WebFetch (F-0178, F-0176). `team/roles/voice.md`.
 - T-0120: reviewer allowlist: explicit test for `python3 -B -m unittest tests.<module> -v`, `python3 -m unittest <dir>/<file>.py [-v]` (path form); added `-B` variants of bare/`-v`/`discover [-v]`; `python3 -c` and `python3 -m pip` stay denied (F-0187, F-0183, F-0184, F-0182, F-0188). `team/cycle.py`, SCHEME.md, tests.
 - T-0109: reviewer allowlist: `-B` variants of the path form, `discover -p/-t` and bare unittest, plus `:*` prefix forms for `tests.<module>` (F-0187, F-0183, F-0184, F-0182; F-0188 is the same `tests.<module> -v` denial: the pattern already existed after T-0099, so the cause is not provable from the repo, and the `:*` forms are a redundant fallback). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, tests.
+## 2026-11-12
+
+- T-0103: retro does not create a task that repeats a done task: same normalised title, or same files and evidence ids already cited by it; the skip is logged with the duplicated task id. Open tasks are unaffected (F-0182, F-0183, F-0184, F-0176, F-0178). `team/retro.py`.
 
 ## 2026-11-11
 
