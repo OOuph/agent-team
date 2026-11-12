@@ -66,3 +66,11 @@ def test_t0109_commands_allowed_and_documented():
         t = (ROOT / f).read_text(encoding="utf-8")
         assert "-B -m unittest" in t and "<dir>/<file>.py" in t, f
     assert "-B" in cycle.REPO_ONLY_PROMPT and "<dir>/<file>.py" in cycle.REPO_ONLY_PROMPT
+
+
+def test_t0120_forms_allowed_and_escape_hatches_denied():
+    for c in ("python3 -B -m unittest tests.test_links -v", "python3 -m unittest mcp/test_x.py",
+              "python3 -m unittest mcp/test_x.py -v", "python3 -B -m unittest -v", "python3 -B -m unittest discover -v -s tests"):
+        assert _allowed(c), c
+    for c in ("python3 -c 'print(1)'", "python3 -m pip install x", "python3 -B -c 'x'"):
+        assert not _allowed(c), c
