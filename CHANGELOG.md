@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-12
 
+- T-0113: voice card: rule at the top of Rules — shell and `gh` are denied, read GitHub issues via WebSearch/WebFetch (F-0178, F-0176). `team/roles/voice.md`.
 - T-0109: reviewer allowlist: `-B` variants of the path form, `discover -p/-t` and bare unittest, plus `:*` prefix forms for `tests.<module>` (F-0187, F-0183, F-0184, F-0182; F-0188 is the same `tests.<module> -v` denial: the pattern already existed after T-0099, so the cause is not provable from the repo, and the `:*` forms are a redundant fallback). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, tests.
 
 ## 2026-11-11
