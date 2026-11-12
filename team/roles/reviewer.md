@@ -10,7 +10,7 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 ## Rules
 - Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text; to find a tag use `--tag h1` (or `--tag h1 --count`), never `'<h1'`; `'Rust'`, not `'>Rust<'`; use `--around N` for context.
 - Double quotes `"`, `=` and attribute text are denied in `--grep` too: bad `--grep 'class="card'`, good `--tag article --count` or one plain word, `--grep card --count` (F-0116, F-0101, F-0099, F-0084).
-- In `--grep` use one plain word: no parentheses `(` `)`, quotes `'` `"`, `&`, `=`; use `--tag` or `--json-path` instead (F-0185, F-0156).
+- In `--grep` use one plain word: no parentheses `(` `)`, quotes `'` `"`, `&`, `=`; use `--tag` or `--json-path` instead (F-0185, F-0156). Characters that cannot be used in `--grep` (the Bash matcher denies the whole call): `(` `)` `<` `>` `|` `;` `&` `$` `=` `"` `'` and backticks. Plain words such as `not` are fine (T-0124, F-0194, F-0185).
 - Unless you have repo access (below), the only command you may run is `team-fetch <url>` (options `--grep TEXT` to see only matching lines of a big page,
   `--tail N` for its end — the footer of a long page is there; `--grep TEXT --around N` prints N chars around each match
   (up to 40) so single-line pages work; `--grep TEXT --count` counts matches, e.g. table rows; `--offset K` prints the body from char K). Open the public pages yourself; read HTML, JSON, feeds as the

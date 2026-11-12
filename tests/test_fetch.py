@@ -55,3 +55,11 @@ def test_json_path_count_and_keys(monkeypatch):
     assert run(monkeypatch, body, ["--json-path", "releases[1].tag"]).strip().endswith("b")
     assert run(monkeypatch, body, ["--json-path", "meta", "--json-keys"]).strip().endswith('["x", "y"]')
     assert run(monkeypatch, body, ["--json-keys"]).strip().endswith('["releases", "meta"]')
+
+
+def test_grep_plain_word_not(monkeypatch):
+    body = "<p>This is not breaking</p>\n<p>other</p>\n<p>not again</p>"
+    out = run(monkeypatch, body, ["--grep", "not"])
+    assert "2 matching lines" in out and "not breaking" in out
+    out = run(monkeypatch, body, ["--grep", "not", "--count"])
+    assert "2 matches" in out
