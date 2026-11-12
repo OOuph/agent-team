@@ -81,8 +81,12 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
                 inp = x.get("tool_input") or {}
                 arg = str(inp.get("command") or inp.get("url") or inp.get("file_path") or inp.get("pattern") or "") if isinstance(inp, dict) else str(inp)
                 calls.append(f"{x.get('tool_name')}({redact(arg)[:80]})" if arg else str(x.get("tool_name")))
-            out.append(_rec(slug, "tool_denied", f"{r.get('role')}: denied {', '.join(dict.fromkeys(calls))}", role=str(r.get("role")), ts=r.get("finished"),
+            cmds = [redact(str((x.get("tool_input") or {}).get("command") or ""))[:300] for x in den[:6]
+                    if isinstance(x, dict) and isinstance(x.get("tool_input"), dict) and (x.get("tool_input") or {}).get("command")]
+            rec = (_rec(slug, "tool_denied", f"{r.get('role')}: denied {', '.join(dict.fromkeys(calls))}", role=str(r.get("role")), ts=r.get("finished"),
                             run_id=r.get("run_id"), fp=str(r.get("run_id"))))      # fingerprint = run id: dedup unchanged (retro issue #1)
+            rec.update(denied_commands=cmds, allowed_tools=[redact(str(x))[:200] for x in (r.get("allowed_tools") or [])])   # T-0111
+            out.append(rec)
     for t in store.tasks():
         for h in t.get("history") or []:
             note, to, ts = str(h.get("note") or ""), h.get("to"), h.get("ts")
