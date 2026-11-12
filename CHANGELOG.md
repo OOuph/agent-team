@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-12
 
+- T-0124: `team-fetch --grep not` works (the parser never rejected plain words; test added); reviewer and editor cards list the characters the Bash matcher denies in `--grep`: `( ) < > | ; & $ = " '` and backticks (F-0194, F-0185). `tests/test_fetch.py`, `team/roles/reviewer.md`, `team/roles/editor.md`, SCHEME.md.
 - T-0121: reviewer card and repo_only prompt: `-B` and file-path unittest arguments are named as denied, with replacements (`tests.<module>`, `discover -s <dir> -t <dir>`, `discover -s mcp -t .`); denied commands go to `limits`, no retry (F-0192, F-0191, F-0190, F-0187, F-0183, F-0184, F-0182). `team/roles/reviewer.md`, `team/cycle.py`, SCHEME.md.
 - T-0119: reviewer card: `--grep` takes one plain word, no parentheses, quotes, `&`, `=`; use `--tag` or `--json-path`; editor card also names parentheses (F-0185, F-0156). `team/roles/reviewer.md`, `team/roles/editor.md`.
 - T-0115: developer `changes` is reconciled with `git diff --name-only base..HEAD`: entries naming only files absent from the diff are dropped from the stored list and logged as a warning; the `pr.claim_mismatch` friction record is no longer written for this case (F-0158, F-0189). `team/prfacts.py`, `team/cycle.py`, SCHEME.md, test.
