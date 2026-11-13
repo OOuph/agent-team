@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-13
 
+- T-0136: reviewer unittest allowlist is generated from one grammar and checked on the parsed argv (`unittest_argv_allowed`): `python3 [-B] -m unittest [-v] (tests.<module> | <dir>/<file>.py | discover [-s D] [-t D] [-p G]) [-v]`, `-B`/`-v` in any position; `;`, `&&`, `|`, `$()`, `python3 -c`, other flags denied. Supersedes the earlier fixed-pattern [retro] proposals (T-0125, T-0121, T-0120, T-0109) (F-0203, F-0202, F-0201, F-0198, F-0196, F-0191, F-0188, F-0192, F-0199). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, tests.
 - T-0132: if the developer's `changes` names any file absent from `git diff --name-only base..HEAD`, the dispatcher records the diff list instead (log note only, no block, no `pr.claim_mismatch` friction record) (F-0189, F-0158). `team/prfacts.py`, `team/cycle.py`, SCHEME.md, test.
 
 ## 2026-11-12

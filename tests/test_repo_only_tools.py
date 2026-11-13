@@ -115,3 +115,24 @@ def test_t0126_removing_an_entry_denies_its_command(monkeypatch):
     assert matching
     monkeypatch.setattr(cycle, "REPO_ONLY_REVIEW_TOOLS", [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if t not in matching])
     assert not _allowed(cmd)
+
+
+def test_t0136_argv_allows_flag_orders():
+    for c in ("python3 -B -m unittest tests.test_go_pages -v", "python3 -m unittest tests.x", "python3 -B -m unittest -v tests.x",
+              "python3 -m unittest tests.x -v", "python3 -B -m unittest tests.x", "python3 -m unittest discover -v -s tests -t .",
+              "python3 -m unittest -v discover -s tests", "python3 -B -m unittest discover -s tests -p 'test_*.py' -v"):
+        assert cycle.unittest_argv_allowed(c), c
+
+
+def test_t0136_argv_denies_injection_and_other_interpreters():
+    for c in ("python3 -m unittest tests.x; ls", "python3 -c 'print(1)'", "python3 -m unittest tests.x && id",
+              "python3 -m unittest tests.x $(id)", "python3 -m unittest tests.x | sh", "python3 -m unittest -v -v tests.x",
+              "python3 -m unittest ../x/test.py", "python3 -m pip install x", "python3 -m unittest tests.x -k foo",
+              "python3 -X -m unittest tests.x"):
+        assert not cycle.unittest_argv_allowed(c), c
+
+
+def test_t0136_patterns_cover_every_accepted_form():
+    for c in ("python3 -B -m unittest tests.test_go_pages -v", "python3 -B -m unittest -v tests.x", "python3 -m unittest tests.x -v",
+              "python3 -B -m unittest discover -v -s tests -t ."):
+        assert _allowed(c), c
