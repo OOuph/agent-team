@@ -74,3 +74,44 @@ def test_t0120_forms_allowed_and_escape_hatches_denied():
         assert _allowed(c), c
     for c in ("python3 -c 'print(1)'", "python3 -m pip install x", "python3 -B -c 'x'"):
         assert not _allowed(c), c
+
+
+def _promised_commands():
+    """Every `python3 -m unittest ...` command in backticks in the reviewer card, SCHEME.md and the repo_only prompt,
+    except those the card names as denied (preceded by 'denied example')."""
+    out = set()
+    texts = [(ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8"), cycle.REPO_ONLY_PROMPT]
+    for text in texts:
+        for m in re.finditer(r"`(python3 -m unittest[^`]*)`", text):
+            before = text[max(0, m.start() - 40):m.start()]
+            if "denied" in before.lower() or "No `-B`" in before:
+                continue
+            if "[" in m.group(1):
+                c = m.group(1)
+                out.add(re.sub(r" ?\[-v\]", "", c))
+                out.add(re.sub(r"\[-v\]", "-v", c))
+                continue
+            out.add(m.group(1).replace("<module>", "test_x").replace("<dir>", "tests").replace("<glob>", "test_*.py"))
+    return out
+
+
+def test_t0126_every_promised_unittest_command_matches_an_entry():
+    cmds = _promised_commands()
+    assert len(cmds) >= 5, cmds
+    for c in cmds:
+        assert _allowed(c), c
+
+
+def test_t0126_machine_links_reviewer_command_allowed():
+    # F-0188: `python3 -m unittest tests.test_machine_links -v` was denied
+    for c in ("python3 -m unittest tests.test_machine_links -v", "python3 -m unittest -v tests.test_machine_links",
+              "python3 -m unittest tests.test_machine_links"):
+        assert _allowed(c), c
+
+
+def test_t0126_removing_an_entry_denies_its_command(monkeypatch):
+    cmd = "python3 -m unittest tests.test_machine_links -v"
+    matching = [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if fnmatch.fnmatchcase(f"Bash({cmd})", t)]
+    assert matching
+    monkeypatch.setattr(cycle, "REPO_ONLY_REVIEW_TOOLS", [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if t not in matching])
+    assert not _allowed(cmd)
