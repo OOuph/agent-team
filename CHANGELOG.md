@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-13
 
+- T-0139: reviewer `repo_only` allowlist, prompt and card accept the `-B` unittest forms (`python3 -B -m unittest tests.<module> [-v]`, `discover -s <dir> -t <dir>`); runner already sets PYTHONDONTWRITEBYTECODE=1 (F-0205, F-0203, F-0202, F-0201, F-0198, F-0196, F-0199, F-0192, F-0188). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, test.
 - T-0132: if the developer's `changes` names any file absent from `git diff --name-only base..HEAD`, the dispatcher records the diff list instead (log note only, no block, no `pr.claim_mismatch` friction record) (F-0189, F-0158). `team/prfacts.py`, `team/cycle.py`, SCHEME.md, test.
 
 ## 2026-11-12

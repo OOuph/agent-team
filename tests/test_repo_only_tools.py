@@ -115,3 +115,11 @@ def test_t0126_removing_an_entry_denies_its_command(monkeypatch):
     assert matching
     monkeypatch.setattr(cycle, "REPO_ONLY_REVIEW_TOOLS", [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if t not in matching])
     assert not _allowed(cmd)
+
+
+def test_b_flag_unittest_forms_allowed_and_documented():
+    for c in ("python3 -B -m unittest tests.test_x -v", "python3 -B -m unittest discover -s tests -t .",
+              "python3 -B -m unittest -v tests.test_x", "python3 -B -m unittest discover -s tests -t . -v"):
+        assert _allowed(c), c
+    card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
+    assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
