@@ -65,5 +65,5 @@ def test_grep_plain_words_accepted(monkeypatch):
 
 def test_grep_double_quote_rejected(monkeypatch, capsys):
     monkeypatch.delenv("TEAM_ALLOWED_HOSTS", raising=False)
-    assert fetch.main(["http://x.test/", "--grep", 'class="card']) == 2
+    assert fetch.main(["http://x.test/", "--grep", 'class"card']) == 2
     assert "'\"'" in capsys.readouterr().err

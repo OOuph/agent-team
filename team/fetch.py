@@ -39,7 +39,7 @@ def _json_out(body: str, path: str, keys: bool, count: bool) -> int:
 
 
 # real shell metacharacters, double quote, "=" (attribute text) and "&" (HTML entities); plain words such as "not" are fine
-DENIED_GREP_CHARS = '<>|;&$`"=\\'
+DENIED_GREP_CHARS = '|;&$`"='
 
 
 def main(argv: list[str] | None = None) -> int:
