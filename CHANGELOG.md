@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-13
+
+- T-0132: if the developer's `changes` names any file absent from `git diff --name-only base..HEAD`, the dispatcher records the diff list instead (log note only, no block, no `pr.claim_mismatch` friction record) (F-0189, F-0158). `team/prfacts.py`, `team/cycle.py`, SCHEME.md, test.
+
 ## 2026-11-12
 
 - T-0128: reviewer card line 11: `"`, `=` and HTML entities named as denied in `--grep`, attribute-search good/bad example, no `not` in a pattern; alternative one plain word plus `--around N`, or `--tag` (F-0195, F-0194, F-0185). `team/roles/reviewer.md`.
