@@ -20,3 +20,4 @@ builds/
 
 # service-account keys and other secret files (owner 10.11: Search Console key)
 secrets/
+.venv-test/
