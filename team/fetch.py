@@ -38,6 +38,10 @@ def _json_out(body: str, path: str, keys: bool, count: bool) -> int:
     return 0
 
 
+# real shell metacharacters, double quote, "=" (attribute text) and "&" (HTML entities); plain words such as "not" are fine
+DENIED_GREP_CHARS = '<>|;&$`"=\\'
+
+
 def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     grep: str | None = None
@@ -52,6 +56,10 @@ def main(argv: list[str] | None = None) -> int:
     i = 0
     while i < len(argv):                       # team-fetch <url> [--grep TEXT] [--tail N]: a big page without the whole body
         if argv[i] == "--grep" and i + 1 < len(argv):
+            bad = next((c for c in argv[i + 1] if c in DENIED_GREP_CHARS), None)
+            if bad is not None:
+                print(f"team-fetch: --grep pattern contains the denied character {bad!r}; use one plain word, or --tag NAME / --count", file=sys.stderr)
+                return 2
             grep = argv[i + 1]; i += 2; continue
         if argv[i] == "--tag" and i + 1 < len(argv):   # literal "<NAME": the role never types < or >
             grep = "<" + argv[i + 1].strip("<>/ "); tag = True; i += 2; continue
