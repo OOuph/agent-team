@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-12
 
+- T-0128: reviewer card line 11: `"`, `=` and HTML entities named as denied in `--grep`, attribute-search good/bad example, no `not` in a pattern; alternative one plain word plus `--around N`, or `--tag` (F-0195, F-0194, F-0185). `team/roles/reviewer.md`.
 - T-0126: test that every `python3 -m unittest` command promised by the reviewer card and the repo_only prompt (incl. `tests.test_machine_links -v`) matches an entry of `REPO_ONLY_REVIEW_TOOLS`; removing the entry makes it fail. Matching is correct in the repo (fnmatch), so the F-0188 denial is not reproducible here; no list change (F-0188, F-0187, F-0184, F-0191). `tests/test_repo_only_tools.py`.
 
 - T-0125: reviewer card: test commands verbatim, explicit no-`-B` rule (denied example `python3 -B -m unittest tests.test_go_pages -v`), no `-p`/`-m` variants or path arguments; a denied test command is recorded once in `limits` as `not observable: test not runnable`, no retries (F-0198, F-0196, F-0191, F-0190, F-0199, F-0192). `team/roles/reviewer.md`, SCHEME.md.
