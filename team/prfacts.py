@@ -59,6 +59,13 @@ def reconcile_changes(changes: list[str] | None, diff_files: list[str]) -> tuple
     return kept, dropped
 
 
+def changes_from_diff(changes: list[str] | None, diff_files: list[str]) -> tuple[list[str], list[str]]:
+    """(changes to record, absent): if any file named in `changes` is absent from the diff, the recorded list is the diff
+    itself (T-0132); otherwise the developer's list is kept as is."""
+    absent = mismatches(claimed_files("", changes), diff_files)
+    return (list(diff_files), absent) if absent else (list(changes or []), [])
+
+
 def render(diff_stat: str, diff_files: list[str], test_output: str | None, claimed: list[str], canary: str = "pending") -> str:
     """The markdown section. `canary` is 'pending' at PR open, then the dispatcher edits the PR with the result."""
     lines = [HEADING, "", f"Computed by the dispatcher from `git diff --stat` against the base branch and the test run; not taken from the developer's text.", "",

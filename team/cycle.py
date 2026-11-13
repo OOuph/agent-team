@@ -897,11 +897,11 @@ class Cycle:
         tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
             gitops.push_branch(repo, t["id"])
-            # the diff is the truth (T-0115): claimed files absent from it are dropped from the stored changes, logged as a warning only
-            kept, dropped = prfacts.reconcile_changes(res.get("changes"), touched)
-            if dropped:
-                log.warning("%s: dropped developer `changes` entries absent from the git diff: %s", t["id"], "; ".join(dropped[:8]))
-                res = {**res, "changes": kept}
+            # the diff is the truth (T-0132): if `changes` names a file absent from it, the recorded list is the diff; a log note only
+            new_changes, absent = prfacts.changes_from_diff(res.get("changes"), touched)
+            if absent:
+                log.warning("%s: developer `changes` named files absent from the git diff (%s); recorded the diff list instead", t["id"], "; ".join(absent[:8]))
+                res = {**res, "changes": new_changes}
             facts, _ = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +

@@ -36,3 +36,10 @@ def test_reconcile_drops_claimed_file_absent_from_diff():
     kept, dropped = prfacts.reconcile_changes(["team/a.py", "team/ghost.py (new)", "no path here"], ["team/a.py"])
     assert kept == ["team/a.py", "no path here"]
     assert dropped == ["team/ghost.py (new)"]
+
+
+def test_changes_replaced_by_diff_when_a_claimed_file_is_absent():
+    new, absent = prfacts.changes_from_diff(["team/a.py", "team/ghost.py"], ["team/a.py", "SCHEME.md"])
+    assert new == ["team/a.py", "SCHEME.md"] and absent == ["team/ghost.py"]
+    same, none = prfacts.changes_from_diff(["team/a.py"], ["team/a.py", "SCHEME.md"])
+    assert same == ["team/a.py"] and none == []
