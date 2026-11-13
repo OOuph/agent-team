@@ -48,6 +48,7 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "
                           "Bash(python3 -m unittest */*.py)", "Bash(python3 -m unittest */*.py -v)",
                           "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
                           "Bash(python3 -m unittest discover -s * -t * -p *)",
+                          "Bash(python3 -B -m unittest discover -v -s * -t *)", "Bash(python3 -B -m unittest discover -s * -t * -v)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 REPO_ONLY_PROMPT = (
@@ -55,8 +56,9 @@ REPO_ONLY_PROMPT = (
     "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
     "`python3 -m unittest discover -s <dir> -t <dir>`, `python3 -m unittest discover -s <dir> -p <glob>`, "
     "If the tests live outside tests/ use `python3 -m unittest discover -s mcp -t .`. "
-    "DENIED, do not try them: the `-B` flag and file-path arguments such as `mcp/test_x.py` (`<dir>/<file>.py`); "
-    "do not retry a denied form, record the command in limits. "
+    "The `-B` flag is allowed: `python3 -B -m unittest tests.<module> -v`, `python3 -B -m unittest discover -s <dir> -t <dir>`. "
+    "File-path arguments such as `mcp/test_x.py` (`<dir>/<file>.py`) are also allowed. "
+    "Anything else is denied: do not retry a denied form, record the command in limits. "
     "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
     "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
     "A criterion about tests or code gets pass/fail from this checkout.\n")

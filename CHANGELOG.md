@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-13
+
+- T-0130: reviewer repo_only: `python3 -B -m unittest ...` is documented as allowed in the prompt, card and SCHEME (the allowlist already had the entries; two more `-B discover ... -t` forms added); test checks every `-B` form against `REPO_ONLY_REVIEW_TOOLS` (F-0198, F-0196, F-0191, F-0190, F-0187, F-0188, F-0199, F-0192). `team/cycle.py`, `team/roles/reviewer.md`, `SCHEME.md`, `tests/test_repo_only_tools.py`.
+
 ## 2026-11-12
 
 - T-0128: reviewer card line 11: `"`, `=` and HTML entities named as denied in `--grep`, attribute-search good/bad example, no `not` in a pattern; alternative one plain word plus `--around N`, or `--tag` (F-0195, F-0194, F-0185). `team/roles/reviewer.md`.
