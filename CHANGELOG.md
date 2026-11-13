@@ -7,6 +7,8 @@ the PR, a human merges.
 
 ## 2026-11-12
 
+- T-0126: test that every `python3 -m unittest` command promised by the reviewer card and the repo_only prompt (incl. `tests.test_machine_links -v`) matches an entry of `REPO_ONLY_REVIEW_TOOLS`; removing the entry makes it fail. Matching is correct in the repo (fnmatch), so the F-0188 denial is not reproducible here; no list change (F-0188, F-0187, F-0184, F-0191). `tests/test_repo_only_tools.py`.
+
 - T-0125: reviewer card: test commands verbatim, explicit no-`-B` rule (denied example `python3 -B -m unittest tests.test_go_pages -v`), no `-p`/`-m` variants or path arguments; a denied test command is recorded once in `limits` as `not observable: test not runnable`, no retries (F-0198, F-0196, F-0191, F-0190, F-0199, F-0192). `team/roles/reviewer.md`, SCHEME.md.
 - T-0121: reviewer card and repo_only prompt: `-B` and file-path unittest arguments are named as denied, with replacements (`tests.<module>`, `discover -s <dir> -t <dir>`, `discover -s mcp -t .`); denied commands go to `limits`, no retry (F-0192, F-0191, F-0190, F-0187, F-0183, F-0184, F-0182). `team/roles/reviewer.md`, `team/cycle.py`, SCHEME.md.
 - T-0119: reviewer card: `--grep` takes one plain word, no parentheses, quotes, `&`, `=`; use `--tag` or `--json-path`; editor card also names parentheses (F-0185, F-0156). `team/roles/reviewer.md`, `team/roles/editor.md`.
