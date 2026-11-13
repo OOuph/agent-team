@@ -55,3 +55,15 @@ def test_json_path_count_and_keys(monkeypatch):
     assert run(monkeypatch, body, ["--json-path", "releases[1].tag"]).strip().endswith("b")
     assert run(monkeypatch, body, ["--json-path", "meta", "--json-keys"]).strip().endswith('["x", "y"]')
     assert run(monkeypatch, body, ["--json-keys"]).strip().endswith('["releases", "meta"]')
+
+
+def test_grep_plain_words_accepted(monkeypatch):
+    body = "not here\nunder there\nother\n"
+    assert "1 matching" in run(monkeypatch, body, ["--grep", "not"])
+    assert "1 matching" in run(monkeypatch, body, ["--grep", "under"])
+
+
+def test_grep_double_quote_rejected(monkeypatch, capsys):
+    monkeypatch.delenv("TEAM_ALLOWED_HOSTS", raising=False)
+    assert fetch.main(["http://x.test/", "--grep", 'class"card']) == 2
+    assert "'\"'" in capsys.readouterr().err

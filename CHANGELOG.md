@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-13
 
+- T-0137: `team-fetch --grep` accepts plain words (`not`, `under`) and rejects only shell metacharacters, `"`, `=`, `&`, with a message naming the character; reviewer card line added (F-0194, F-0195, F-0200). `team/fetch.py`, `team/roles/reviewer.md`, SCHEME.md, test.
 - T-0132: if the developer's `changes` names any file absent from `git diff --name-only base..HEAD`, the dispatcher records the diff list instead (log note only, no block, no `pr.claim_mismatch` friction record) (F-0189, F-0158). `team/prfacts.py`, `team/cycle.py`, SCHEME.md, test.
 
 ## 2026-11-12

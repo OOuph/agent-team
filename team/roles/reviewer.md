@@ -10,6 +10,7 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 ## Rules
 - Shell metacharacters (`<` `>` `|` `;` `&` `$`), double quotes `"`, `=` and HTML entities (`&quot;`, `&amp;`, `&lt;`) are denied even inside quoted arguments, so `--grep` patterns must be plain text; to find a tag use `--tag h1` (or `--tag h1 --count`), never `'<h1'`; attribute search — bad `--grep 'class="card"'` or `--grep 'class=&quot;card'`, good `--grep card --around 40` or `--tag article --count`; do not put the word `not` inside a pattern (search one plain word and read the context); `'Rust'`, not `'>Rust<'`; use `--around N` for context.
 - Double quotes `"`, `=` and attribute text are denied in `--grep` too: bad `--grep 'class="card'`, good `--tag article --count` or one plain word, `--grep card --count` (F-0116, F-0101, F-0099, F-0084).
+- `--grep` accepts plain words (`not`, `under` are fine) but denies `"`, `=`, `&` and HTML entities and says which character: use one plain word, or `--tag` / `--count` (T-0137, F-0194, F-0195, F-0200).
 - In `--grep` use one plain word: no parentheses `(` `)`, quotes `'` `"`, `&`, `=`; use `--tag` or `--json-path` instead (F-0185, F-0156).
 - Unless you have repo access (below), the only command you may run is `team-fetch <url>` (options `--grep TEXT` to see only matching lines of a big page,
   `--tail N` for its end — the footer of a long page is there; `--grep TEXT --around N` prints N chars around each match
