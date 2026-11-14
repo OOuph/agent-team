@@ -123,3 +123,17 @@ def test_b_flag_unittest_forms_allowed_and_documented():
         assert _allowed(c), c
     card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
     assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
+
+
+def test_t0147_argv_rule_allows():
+    for c in ("python3 -B -m unittest tests.test_x -v", "python3 -m unittest -v tests.test_x",
+              "python3 -B -m unittest discover -s tests -t .", "python3 -m unittest -v -b -f", "python3 -B -m unittest tests/test_x.py -v"):
+        assert cycle.repo_only_unittest_ok(c), c
+        assert _allowed(c), c
+
+
+def test_t0147_argv_rule_denies():
+    for c in ("python3 -c 'print(1)'", "python3 -m unittest; rm x", "python3 -m unittest -k foo", "python3 -m pytest",
+              "python3 -m unittest -v -v", "python3 -m unittest discover --evil", "python3 -m unittest && ls"):
+        assert not cycle.repo_only_unittest_ok(c), c
+        assert not _allowed(c), c
