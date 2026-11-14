@@ -31,33 +31,77 @@ log = logging.getLogger("team.cycle")
 PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "voice", "digest")
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
+_UT_FLAGS = ("-v", "-b", "-f")
+_UT_DISCOVER_ARGS = ((), ("-s", "*"), ("-s", "*", "-t", "*"), ("-s", "*", "-p", "*"), ("-s", "*", "-t", "*", "-p", "*"))
+
+
+def repo_only_unittest_ok(cmd: str) -> bool:
+    """T-0147: one rule for the reviewer's unittest command, by normalized argv: `python3 [-B] -m unittest` + any mix of
+    -v/-b/-f (each at most once, before or after the target) + nothing | `discover [-s d] [-t d] [-p g]` | `tests.<module>` |
+    `<dir>/<file>.py`. Any other flag, other -m module, -c, or shell metacharacter is rejected."""
+    import shlex
+    if re.search(r"[;&|<>`$()\n]", cmd):
+        return False
+    try:
+        a = shlex.split(cmd)
+    except ValueError:
+        return False
+    if a[:1] != ["python3"]:
+        return False
+    a = a[1:]
+    if a[:1] == ["-B"]:
+        a = a[1:]
+    if a[:2] != ["-m", "unittest"]:
+        return False
+    a = a[2:]
+    flags = [x for x in a if x in _UT_FLAGS]
+    rest = [x for x in a if x not in _UT_FLAGS]
+    if len(set(flags)) != len(flags):
+        return False
+    if not rest:
+        return True
+    if rest[0] == "discover":
+        rest = rest[1:]
+        while rest:
+            if len(rest) < 2 or rest[0] not in ("-s", "-t", "-p") or rest[1].startswith("-"):
+                return False
+            rest = rest[2:]
+        return True
+    return len(rest) == 1 and not rest[0].startswith("-") and bool(re.fullmatch(r"tests(\.\w+)+(\.\w+)*(:\S*)?|[\w./-]+\.py", rest[0]))
+
+
+def _repo_only_unittest_globs() -> list[str]:
+    """Claude Code allowlist globs generated from the same rule (permissions are globs; the rule is repo_only_unittest_ok)."""
+    import itertools
+    perms = [()] + [p for n in (1, 2, 3) for p in itertools.permutations(_UT_FLAGS, n)]
+    targets = [("tests.*",), ("*/*.py",)] + [("discover",) + d for d in _UT_DISCOVER_ARGS]
+    out = []
+    for pre in ("python3", "python3 -B"):
+        base = f"{pre} -m unittest"
+        out.append(base)
+        for p in perms:
+            if p:
+                out.append(" ".join((base, *p)))
+            for t in targets:
+                out.append(" ".join((base, *p, *t)))
+                if p:
+                    out.append(" ".join((base, *t, *p)))
+                    if t[0] == "discover" and len(t) > 1:
+                        out.append(" ".join((base, "discover", *p, *t[1:])))
+    return [f"Bash({c})" for c in dict.fromkeys(out)]
+
+
 # reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
-REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
-                          "Bash(python3 -m unittest -v)", "Bash(python3 -m unittest tests.*)", "Bash(python3 -m unittest -v tests.*)",
-                          "Bash(python3 -m unittest discover -s *)", "Bash(python3 -m unittest discover -v -s *)",
-                          "Bash(python3 -m unittest tests.* -v)", "Bash(python3 -m unittest -v discover*)",
-                          "Bash(python3 -m unittest discover -s * -v)", "Bash(python3 -m unittest discover -s * -t *)",
-                          "Bash(python3 -m unittest discover -v -s * -t *)", "Bash(python3 -m unittest -v discover -s *)",
-                          "Bash(python3 -B -m unittest tests.*)", "Bash(python3 -B -m unittest -v tests.*)",
-                          "Bash(python3 -B -m unittest tests.* -v)", "Bash(python3 -B -m unittest discover -s *)",
-                          "Bash(python3 -B -m unittest -v discover*)", "Bash(python3 -B -m unittest discover -s * -p *)",
-                          "Bash(python3 -B -m unittest discover -s * -t *)", "Bash(python3 -B -m unittest */*.py)",
-                          "Bash(python3 -B -m unittest */*.py -v)", "Bash(python3 -B -m unittest)", "Bash(python3 -B -m unittest -v)", "Bash(python3 -B -m unittest discover)",
-                          "Bash(python3 -B -m unittest discover -v -s *)", "Bash(python3 -B -m unittest discover -s * -v)",
-                          "Bash(python3 -m unittest tests.*:*)", "Bash(python3 -B -m unittest tests.*:*)",
-                          "Bash(python3 -m unittest */*.py)", "Bash(python3 -m unittest */*.py -v)",
-                          "Bash(python3 -B -m unittest discover -s * -t * -v)", "Bash(python3 -B -m unittest discover -v -s * -t *)",
-                          "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
-                          "Bash(python3 -m unittest discover -s * -t * -p *)",
+REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", *_repo_only_unittest_globs(),
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
 REPO_ONLY_PROMPT = (
     "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
-    "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
+    "`python3 -m unittest` (or `python3 -B -m unittest`) with any mix of -v, -b, -f (before or after the target), `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
     "`python3 -m unittest discover -s <dir> -t <dir>`, `python3 -m unittest discover -s <dir> -p <glob>`, "
     "If the tests live outside tests/ use `python3 -m unittest discover -s mcp -t .`. "
     "The `-B` form is also allowed: `python3 -B -m unittest tests.<module> -v`, `python3 -B -m unittest discover -s <dir> -t <dir>` (path-form `<dir>/<file>.py` also works). "
-    "DENIED, do not try them: `-m` variants other than unittest and extra flags; "
+    "DENIED, do not try them: `-c`, `-m` variants other than unittest, any other flag, `;`/`&&`/pipes; "
     "do not retry a denied form, record the command in limits. "
     "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
     "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
