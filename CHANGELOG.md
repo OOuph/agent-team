@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-14
+
+- T-0152: marketer planning uses the publisher's 7-day count: one function `publish.week_count`/`week_usage` feeds the weekly cap, the marketing memory and the PO caps block (table column `used/cap 7 d`, `FULL`/`OVER` lines; no slot over the cap) (F-0219, F-0218). `team/publish.py`, `team/prompts.py`, `team/cycle.py`, SCHEME.md, test.
+
 ## 2026-11-13
 
 - T-0139: reviewer `repo_only` allowlist, prompt and card accept the `-B` unittest forms (`python3 -B -m unittest tests.<module> [-v]`, `discover -s <dir> -t <dir>`); runner already sets PYTHONDONTWRITEBYTECODE=1 (F-0205, F-0203, F-0202, F-0201, F-0198, F-0196, F-0199, F-0192, F-0188). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, test.

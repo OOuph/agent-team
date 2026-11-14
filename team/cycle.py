@@ -1043,7 +1043,7 @@ class Cycle:
                "TEAM_PUBLISH_MAX_PER_DAY": str(self.st.publish.get("max_posts_per_channel_per_day", 2)),
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
                "TEAM_PUBLISH_CAPS": json.dumps(self.channel_caps() or {}),
-               "TEAM_PUBLISH_COUNTS_WEEK": json.dumps({c: self.store.posts_last_days(c, 7) for c in channels}),
+               "TEAM_PUBLISH_COUNTS_WEEK": json.dumps({c: publish.week_count(self.store, c) for c in channels}),
                "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
         mkt_tools = ["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]

@@ -742,6 +742,23 @@ def _booked(env_key: str, channel: str) -> int:
         return 0
 
 
+def week_count(store: Any, channel: str) -> int:
+    """THE 7-day post count of a channel (calendar days, today included): the publisher's weekly cap and the planning
+    (marketing memory, PO caps block) both read it, so they cannot disagree."""
+    return int(store.posts_last_days(channel, 7))
+
+
+def week_usage_full(used: int, cap_week: int | None) -> bool:
+    return cap_week is not None and used >= cap_week
+
+
+def week_usage(store: Any, channel: str, cap_week: int | None) -> dict[str, Any]:
+    """used/cap over 7 days with one verdict: `full` once used >= cap (no slot may be booked), `over` when used > cap."""
+    used = week_count(store, channel)
+    return {"used": used, "cap": cap_week, "full": week_usage_full(used, cap_week),
+            "over": cap_week is not None and used > cap_week}
+
+
 def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
     """The dispatcher's caps per channel: per day (TEAM_PUBLISH_MAX_PER_DAY or TEAM_PUBLISH_CAPS) and per 7 days
     (TEAM_PUBLISH_CAPS), counting posts already booked (TEAM_PUBLISH_COUNTS today, TEAM_PUBLISH_COUNTS_WEEK for the last
@@ -767,7 +784,7 @@ def _daily_limit_error(channel: str, ledger: Path | None) -> str | None:
             return f"daily limit reached for {channel}: {n} of {cap_day} posts today; no more posts until tomorrow"
     if cap_week is not None:
         n = _booked("TEAM_PUBLISH_COUNTS_WEEK", channel) + run_all
-        if n >= cap_week:
+        if week_usage_full(n, cap_week):
             return (f"weekly limit reached for {channel}: {n} of {cap_week} posts in the last 7 days; "
                     "this channel brought almost no people (owner 10.11) — put the effort into a channel with room")
     return None
