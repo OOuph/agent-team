@@ -123,3 +123,16 @@ def test_b_flag_unittest_forms_allowed_and_documented():
         assert _allowed(c), c
     card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
     assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
+
+
+def test_t0153_normalized_unittest_argv():
+    ok = ["python3 -B -m unittest tests.test_x -v", "python3 -B -m unittest -v tests.test_x", "python3 -m unittest tests.test_x -v",
+          "python3 -B -m unittest discover -s tests -t .", "python3 -m unittest discover -v -s tests -t . -B",
+          "python3 -m unittest", "python3 -B -m unittest -v"]
+    for c in ok:
+        assert cycle.repo_only_unittest_allowed(c), c
+    bad = ["python3 -m unittest; rm x", "python3 -c 'print(1)'", "python3 -m pip install x", "python3 -m unittest tests.x && ls",
+           "python3 -m unittest discover -s /etc", "python3 -m unittest tests/test_x.py", "python3 -m unittest -k foo"]
+    for c in bad:
+        assert not cycle.repo_only_unittest_allowed(c), c
+    assert "Bash(python3 -B -m unittest*)" in cycle.REPO_ONLY_REVIEW_TOOLS

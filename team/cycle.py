@@ -10,6 +10,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -49,7 +50,41 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "
                           "Bash(python3 -B -m unittest discover -s * -t * -v)", "Bash(python3 -B -m unittest discover -v -s * -t *)",
                           "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
                           "Bash(python3 -m unittest discover -s * -t * -p *)",
+                          "Bash(python3 -B -m unittest*)",   # T-0153 stopgap: -B anywhere
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
+
+def repo_only_unittest_allowed(cmd: str) -> bool:
+    """T-0153: argv-normalizing check for the unittest forms a repo_only reviewer may run: drop `-B` and `-v` wherever
+    they appear, then require `python3 -m unittest [discover [-s D] [-t D] | tests.<module>]`. Anything else (shell
+    operators, `-c`, other modules, extra flags) is refused."""
+    if re.search(r"[;&|`$<>(){}\n\\]", cmd):
+        return False
+    try:
+        argv = shlex.split(cmd)
+    except ValueError:
+        return False
+    if argv[:1] != ["python3"]:
+        return False
+    rest = [a for a in argv[1:] if a not in ("-B", "-v")]
+    if rest[:2] != ["-m", "unittest"]:
+        return False
+    rest = rest[2:]
+    if not rest:
+        return True
+    if len(rest) == 1 and re.fullmatch(r"tests(\.\w+)+", rest[0]):
+        return True
+    if rest[0] != "discover":
+        return False
+    rest = rest[1:]
+    seen: set[str] = set()
+    while rest:
+        if len(rest) < 2 or rest[0] not in ("-s", "-t") or rest[0] in seen or not re.fullmatch(r"[\w./-]+", rest[1]) \
+                or ".." in rest[1] or rest[1].startswith("/"):
+            return False
+        seen.add(rest[0])
+        rest = rest[2:]
+    return True
+
 
 REPO_ONLY_PROMPT = (
     "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "

@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-14
+
+- T-0153: reviewer `repo_only`: `cycle.repo_only_unittest_allowed` normalizes argv (drops `-B` and `-v` anywhere, then `python3 -m unittest [discover [-s D] [-t D] | tests.<module>]`; `;`, `-c`, other modules refused) and a stopgap `Bash(python3 -B -m unittest*)` entry (F-0188, F-0192, F-0199, F-0205, F-0208, F-0209, F-0213, F-0214, F-0215, F-0216, F-0217). `team/cycle.py`, SCHEME.md, tests/test_repo_only_tools.py.
+
 ## 2026-11-13
 
 - T-0139: reviewer `repo_only` allowlist, prompt and card accept the `-B` unittest forms (`python3 -B -m unittest tests.<module> [-v]`, `discover -s <dir> -t <dir>`); runner already sets PYTHONDONTWRITEBYTECODE=1 (F-0205, F-0203, F-0202, F-0201, F-0198, F-0196, F-0199, F-0192, F-0188). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, test.
