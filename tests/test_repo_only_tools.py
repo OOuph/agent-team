@@ -123,3 +123,24 @@ def test_b_flag_unittest_forms_allowed_and_documented():
         assert _allowed(c), c
     card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
     assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
+
+
+def test_t0151_argv_parser_accepts_forms_in_any_order():
+    for c in ("python3 -B -m unittest tests.x -v", "python3 -m unittest -v tests.x",
+              "python3 -B -m unittest discover -s tests -t .", "python3 -m unittest discover -t . -s tests -v",
+              "python3 -B -m unittest -v discover -s tests", "python3 -m unittest"):
+        assert cycle.unittest_argv_allowed(c), c
+
+
+def test_t0151_argv_parser_rejects_c_pip_and_metacharacters():
+    for c in ("python3 -c 'print(1)'", "python3 -m pip install x", "python3 -B -c x", "python3 -m unittest tests.x; ls",
+              "python3 -m unittest tests.x && id", "python3 -m unittest tests.x | cat", "python3 -m unittest $(id)",
+              "python3 -m unittest tests.x > f", "python3 -m unittest `id`", "python3 -m unittest -x tests.x",
+              "python3 -m unittest ../x.py", "python3 -m unittest tests.x\nid", "python3 -m unittest tests.x tests.y"):
+        assert not cycle.unittest_argv_allowed(c), c
+
+
+def test_t0151_cli_allowlist_covers_the_required_forms():
+    for c in ("python3 -B -m unittest tests.x -v", "python3 -m unittest -v tests.x",
+              "python3 -B -m unittest discover -s tests -t ."):
+        assert cycle.unittest_argv_allowed(c) and _allowed(c), c
