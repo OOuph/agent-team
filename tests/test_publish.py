@@ -536,3 +536,19 @@ def test_reply_has_own_cap_and_skips_post_caps(monkeypatch, tmp_path):
     ledger.write_text(json.dumps({"ts": publish.utcnow_iso(), "channel": "x", "ok": True, "reply": True}) + "\n")
     monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 0}))
     assert publish._daily_limit_error("x", ledger) is None          # a reply line in the ledger is not a post
+
+
+def test_week_cap_same_full_in_planning_and_publish(monkeypatch, tmp_path):
+    from team import prompts
+    from team.store import Store
+    st = Store(tmp_path / "s.db")
+    for i in range(5):
+        st.record_post("bluesky", f"p{i}", f"u{i}", None, "t")
+    monkeypatch.setenv("TEAM_PUBLISH_CAPS", json.dumps({"bluesky": {"per_week": 2}}))
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS_WEEK", json.dumps({"bluesky": publish.week_count(st, "bluesky")}))
+    monkeypatch.delenv("TEAM_PUBLISH_MAX_PER_DAY", raising=False)
+    monkeypatch.delenv("TEAM_PUBLISH_COUNTS", raising=False)
+    assert "weekly limit reached" in publish._daily_limit_error("bluesky", None)
+    u = prompts.week_usage_map(st, {"bluesky": {"per_week": 2}}, ["bluesky"])["bluesky"]
+    assert (u["used"], u["cap"], u["full"], u["over"]) == (5, 2, True, True)
+    assert "5/2" in prompts.usage_lines({"bluesky": u}) and "OVER" in prompts.usage_lines({"bluesky": u})

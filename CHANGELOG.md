@@ -8,6 +8,9 @@ the PR, a human merges.
 ## 2026-11-15
 
 - T-0154: reviewer card and `repo_only` prompt now say: never add `-B` or other interpreter flags (PYTHONDONTWRITEBYTECODE=1 is already set); exact forms `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v` (F-0208, F-0209, F-0213, F-0215, F-0216, F-0217, F-0192, F-0199). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md.
+## 2026-11-14
+
+- T-0152: marketer planning uses the publisher's 7-day count: one function `publish.week_count`/`week_usage` feeds the weekly cap, the marketing memory and the PO caps block (table column `used/cap 7 d`, `FULL`/`OVER` lines; no slot over the cap) (F-0219, F-0218). `team/publish.py`, `team/prompts.py`, `team/cycle.py`, SCHEME.md, test.
 
 ## 2026-11-13
 
