@@ -32,6 +32,43 @@ PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "voice", "
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
 # reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
+def unittest_argv_allowed(cmd: str) -> bool:
+    """Argv-based rule for the reviewer's unittest command (T-0151): `python3 [-B] -m unittest` followed by `-v`,
+    `tests.<module>` and/or `discover` with `-s <dir>` / `-t <dir>` / `-p <glob>`, flags in any order. No `-c`, no other
+    `-m`, no shell metacharacters. The CLI allowlist below is glob-based; tests check that it covers what this accepts."""
+    import shlex
+    if re.search(r"[;&|`$<>(){}\\\n]", cmd):
+        return False
+    try:
+        a = shlex.split(cmd)
+    except ValueError:
+        return False
+    if a[:1] != ["python3"]:
+        return False
+    a = a[1:]
+    if a[:1] == ["-B"]:
+        a = a[1:]
+    if a[:2] != ["-m", "unittest"]:
+        return False
+    a, discover, seen = a[2:], False, set()
+    i = 0
+    while i < len(a):
+        t = a[i]
+        if t == "-v":
+            pass
+        elif t == "discover" and not discover:
+            discover = True
+        elif t in ("-s", "-t", "-p") and discover and t not in seen and i + 1 < len(a) and not a[i + 1].startswith("-"):
+            seen.add(t)
+            i += 1
+        elif re.fullmatch(r"tests\.[A-Za-z0-9_.]+", t) and not discover and "mod" not in seen:
+            seen.add("mod")
+        else:
+            return False
+        i += 1
+    return True
+
+
 REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
                           "Bash(python3 -m unittest -v)", "Bash(python3 -m unittest tests.*)", "Bash(python3 -m unittest -v tests.*)",
                           "Bash(python3 -m unittest discover -s *)", "Bash(python3 -m unittest discover -v -s *)",
