@@ -521,3 +521,18 @@ def test_caps_block_in_prompt():
     txt = prompts.caps_block({"x": {"per_day": 2}, "mastodon": {"per_week": 1}})
     assert "- x: 2/day" in txt and "- mastodon: 1/7 days" in txt
     assert prompts.caps_block({}) == ""
+
+
+def test_reply_has_own_cap_and_skips_post_caps(monkeypatch, tmp_path):
+    """T-0071 (#128, ported 15.11): with X at 1 post a day, a reply must not take the day's post, nor be refused by it."""
+    monkeypatch.setenv("TEAM_PUBLISH_CAPS", json.dumps({"x": {"per_day": 1, "per_week": 7}}))
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 1}))
+    monkeypatch.delenv("TEAM_PUBLISH_REPLY_COUNTS", raising=False)
+    assert "daily limit" in publish._daily_limit_error("x", None)
+    assert publish._daily_limit_error("x", None, "123") is None
+    monkeypatch.setenv("TEAM_PUBLISH_REPLY_COUNTS", json.dumps({"x": 10}))
+    assert "replies" in publish._daily_limit_error("x", None, "123")
+    ledger = tmp_path / "l.jsonl"
+    ledger.write_text(json.dumps({"ts": publish.utcnow_iso(), "channel": "x", "ok": True, "reply": True}) + "\n")
+    monkeypatch.setenv("TEAM_PUBLISH_COUNTS", json.dumps({"x": 0}))
+    assert publish._daily_limit_error("x", ledger) is None          # a reply line in the ledger is not a post

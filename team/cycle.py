@@ -299,7 +299,7 @@ class Cycle:
             r = publish.post(channel, str(res["text"]), disclosure=str(disc_s or ""), dry_run=bool(self.st.publish.get("dry_run")), **how)
             if r.ok:
                 self.store.event("support.reply", str(o.get("fingerprint")), "support", {"channel": channel, "url": r.url, "action": res.get("action")})
-                self.store.record_post(channel, str(r.post_id or ""), str(r.url or ""), None)
+                self.store.record_post(channel + publish.REPLY_SUFFIX, str(r.post_id or ""), str(r.url or ""), None)   # T-0071: not a post
                 n += 1
             else:
                 self.store.event("support.error", str(o.get("fingerprint")), "support", str(r.error)[:300])
@@ -1072,6 +1072,7 @@ class Cycle:
                "TEAM_PUBLISH_PRODUCT": self.p.slug, "TEAM_PUBLISH_COUNTS": json.dumps({c: self.store.posts_today(c) for c in channels}),
                "TEAM_PUBLISH_CAPS": json.dumps(self.channel_caps() or {}),
                "TEAM_PUBLISH_COUNTS_WEEK": json.dumps({c: self.store.posts_last_days(c, 7) for c in channels}),
+               "TEAM_PUBLISH_REPLY_COUNTS": json.dumps({c: self.store.posts_today(c + publish.REPLY_SUFFIX) for c in channels}),
                "TEAM_PUBLISH_DRAFT_DIR": str(drafts_dir),
                **({"TEAM_PUBLISH_DRY_RUN": "1"} if self.st.publish.get("dry_run") else {})}
         mkt_tools = ["Bash(team-publish *)", "Bash(team-publish:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Write"]
@@ -1201,7 +1202,7 @@ class Cycle:
             text = str(r.get("final_text") or "").strip() or None
             res = publish.publish_draft(Path(d["_path"]), text=text, dry_run=bool(self.st.publish.get("dry_run")))
             if res.ok and not res.dry_run:
-                self.store.record_post(str(res.channel), str(res.post_id or ""), str(res.url or ""), t["id"], text=text or str(d.get("text") or ""))
+                self.store.record_post(str(res.channel) + (publish.REPLY_SUFFIX if d.get("reply_to") else ""), str(res.post_id or ""), str(res.url or ""), t["id"], text=text or str(d.get("text") or ""))
                 posted += 1
             elif not res.ok:
                 self.store.event("post.error", t["id"], "dispatcher", {"channel": d.get("channel"), "error": str(res.error)[:200]})
