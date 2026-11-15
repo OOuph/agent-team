@@ -34,18 +34,12 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
   shows) goes into `limits` as `not observable: <case>`, not into an inconclusive verdict, if every other criterion
   passed: give `pass`. `inconclusive` is for when the main criteria could not be checked.
 - Repo access (task flag `repo_only: true`, the deliverable is not served publicly): the dispatcher starts you in a
-  read-only checkout of the merged commit (the prompt says so, with a "READ-ONLY CHECKOUT" section). Then, and only
-  then, you may use `Read`, `Glob`, `Grep` and exactly these commands: `python3 -m unittest`,
-  `python3 -m unittest -v`, `python3 -m unittest tests.<module>` (also with `-v`), `python3 -m unittest discover`,
-  `python3 -m unittest discover -s <dir>` (also `discover -v -s <dir>`; use it when plain `discover` finds 0 tests; when `tests/` has no `__init__.py`, bare `python3 -m unittest` finds 0 tests (F-0095, F-0096): run `python3 -m unittest discover -s tests -t .`; flags may follow the module: `python3 -m unittest tests.test_x -v`), `python3 -m pytest -q`, `git log -1`; also allowed: `python3 -m unittest discover -s <dir> -p <glob>` and `discover -s <dir> -t <dir>`; also allowed (T-0139, F-0205, F-0203, F-0202, F-0201, F-0198, F-0196, F-0199, F-0192, F-0188): the `-B` form, `python3 -B -m unittest tests.<module> [-v]` and `python3 -B -m unittest discover -s <dir> -t <dir>` (path-form `<dir>/<file>.py` also works); prefer `python3 -m unittest [-v] tests.<module> [-v]` or `discover -s <dir> -t <dir>`, and for tests outside `tests/` use `discover -s mcp -t .`; never retry a denied form, record the command in `limits`; if tests need to write, report `not observable: read-only checkout` in limits, not friction; `team-fetch` stays for live-site criteria.
-  You cannot write to the checkout, run any other command, or reach the network except through `team-fetch`. A
-  criterion about tests or code is judged from the checkout: tests pass → `pass`, tests fail → `fail` with the failing
-  test name; do not write `not observable: repo-only` for what you could run. Without the READ-ONLY CHECKOUT section
-  the rule above (raw URLs, `limits`) applies.
-- Test commands, no variants (T-0125; F-0198, F-0196, F-0191, F-0190, F-0199, F-0192): use the listed commands verbatim.
-  Do not use -B or any other interpreter flag: PYTHONDONTWRITEBYTECODE=1 is already set, bytecode writes are already off (T-0154; F-0208, F-0209, F-0213, F-0215, F-0216, F-0217). Exact forms: `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v` (the allowlist still tolerates `python3 -B -m unittest tests.test_go_pages -v`, but do not use it); no `-p` beyond the listed form, no `-m` variants, no path-form
-  arguments, no other extra flags. A denied test command is not retried with variants: record it once in `limits` as
-  `not observable: test not runnable` and judge the rest; do not open friction loops.
+  read-only checkout of the merged commit (the prompt says so, with a "READ-ONLY CHECKOUT" section) and has already run
+  the repository's tests on that commit; the prompt shows each command, its exit code and output (owner 15.11). You have
+  `Read`, `Glob`, `Grep` and `team-fetch`, no shell: do not try to run tests. A criterion about tests is judged from that
+  output (exit 0 and the named test present → `pass`; failing or missing → `fail` with the test name); a criterion about
+  code is judged by reading the files. Do not write `not observable: repo-only` for what the test run or the files show.
+  Without the READ-ONLY CHECKOUT section the rule above (raw URLs, `limits`) applies.
 - The live site is rebuilt by a daily cron: a build marker newer than the expected commit is normal; compare the
   content the task changed, not the hash. An older marker means the release is not deployed yet.
 - A marker that differs from the expected commit (older or newer) is never by itself a reason for `inconclusive`: say so

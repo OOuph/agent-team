@@ -276,10 +276,22 @@ def diff_stat(repo_dir: Path, base: str = "main") -> str:
 
 
 def tests_modified_or_deleted(repo_dir: Path, base: str = "main") -> list[str]:
-    """Files under tests/ that the branch modifies, renames or deletes (pure additions are not listed)."""
+    """Files under tests/ whose existing lines the branch changes: deleted, renamed, type-changed, or modified with at
+    least one removed line. A new test file, or new tests appended to an existing file (0 lines removed), is not listed
+    (owner 15.11: «M» alone flagged almost every PR — 13 sat waiting for a human for adding a test)."""
     ref = f"origin/{base}" if has_remote(repo_dir) else base
-    out = git(repo_dir, "diff", "--name-only", "--diff-filter=MDRT", f"{ref}...HEAD", "--", "tests/", check=False)
-    return [ln.strip() for ln in out.splitlines() if ln.strip().startswith("tests/")]
+    out = set()
+    st = git(repo_dir, "diff", "--name-status", "--diff-filter=DRT", f"{ref}...HEAD", "--", "tests/", check=False)
+    for ln in st.splitlines():
+        parts = ln.split("\t")
+        if len(parts) >= 2:
+            out.add(parts[1].strip())
+    ns = git(repo_dir, "diff", "--numstat", "--diff-filter=M", f"{ref}...HEAD", "--", "tests/", check=False)
+    for ln in ns.splitlines():
+        parts = ln.split("\t")
+        if len(parts) == 3 and (parts[1] == "-" or (parts[1].isdigit() and int(parts[1]) > 0)):
+            out.add(parts[2].strip())
+    return sorted(x for x in out if x.startswith("tests/"))
 
 
 TESTS_REASON_RE = re.compile(r"(?m)^[ \t]*(?:[-*][ \t]+)?tests-change-reason:[ \t]*F-\d{4,}\b")

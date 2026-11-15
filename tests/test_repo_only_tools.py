@@ -1,125 +1,77 @@
-import fnmatch
-import re
+"""Reviewer of repo_only tasks (owner 15.11): no shell, the dispatcher runs the tests and puts the output in the prompt.
+
+Replaces the unittest allowlist tests (T-0109…T-0154): the allowlist never matched in Claude Code (patterns with `*` in
+the middle), so the reviewer kept getting «required approval» and six retro PRs only added patterns."""
+from __future__ import annotations
+
+import subprocess
 from pathlib import Path
 
-from team import cycle
+from team import cycle, gitops
 
 ROOT = Path(__file__).resolve().parent.parent
-NEW = ["python3 -m unittest tests.*", "python3 -m unittest -v tests.*",
-       "python3 -m unittest discover -s *", "python3 -m unittest discover -v -s *"]
 
 
-def test_module_targeted_unittest_allowed():
-    for c in NEW:
-        assert f"Bash({c})" in cycle.REPO_ONLY_REVIEW_TOOLS
+def test_reviewer_has_no_shell_beyond_team_fetch():
+    bash = [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if t.startswith("Bash(")]
+    assert bash and all(t.startswith("Bash(team-fetch") for t in bash)
+    assert {"Read", "Glob", "Grep"} <= set(cycle.REPO_ONLY_REVIEW_TOOLS)
 
 
-def test_card_scheme_and_prompt_agree():
+def test_card_scheme_and_prompt_say_the_dispatcher_runs_tests():
     card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
     scheme = (ROOT / "SCHEME.md").read_text(encoding="utf-8")
-    src = (ROOT / "team/cycle.py").read_text(encoding="utf-8")
-    for text in (card, src):
-        assert "tests.<module>" in text and "discover -s <dir>" in text
-    assert "tests.<module>" in scheme and "-s <dir>" in scheme
+    assert "has already run" in card and "no shell" in card and "-B" not in card
+    assert "запускает диспетчер" in scheme
+    assert "{tests}" in cycle.REPO_ONLY_PROMPT and "unittest" not in cycle.REPO_ONLY_PROMPT
 
 
-def _allowed(cmd):
-    return any(fnmatch.fnmatchcase(f"Bash({cmd})", t) for t in cycle.REPO_ONLY_REVIEW_TOOLS if t.startswith("Bash("))
+def _repo(tmp_path: Path, test_body: str) -> tuple[Path, str]:
+    repo = gitops.init_local(tmp_path / "repo")
+    (repo / "tests").mkdir()
+    (repo / "tests" / "test_x.py").write_text(test_body)
+    (repo / "mcp").mkdir()
+    (repo / "mcp" / "test_m.py").write_text("import unittest\nclass M(unittest.TestCase):\n    def test_m(self):\n        self.assertTrue(True)\n")
+    gitops.git(repo, "add", "-A"); gitops.git(repo, "commit", "-q", "-m", "init")
+    return repo, gitops.head(repo)
 
 
-def test_flags_in_either_order():
-    for c in ("python3 -m unittest tests.test_x -v", "python3 -m unittest -v tests.test_x",
-              "python3 -m unittest -v discover -s tests -t .", "python3 -m unittest discover -s tests -t ."):
-        assert _allowed(c), c
+def test_run_tests_for_review_passes_and_writes(tmp_path: Path):
+    body = ("import unittest, pathlib\nclass T(unittest.TestCase):\n    def test_writes(self):\n"
+            "        pathlib.Path('scratch.txt').write_text('ok')\n        self.assertTrue(True)\n")
+    repo, sha = _repo(tmp_path, body)
+    out = cycle.run_tests_for_review(repo, sha, tmp_path / "run")
+    assert "$ python3 -m unittest discover -s tests\n" in out and "$ python3 -m unittest discover -s mcp\n" in out
+    assert out.count("exit code: 0") == 2 and "OK" in out                # a writable copy: tests may write (#163)
 
 
-def test_every_prompt_command_is_allowed():
-    cmds = [c.replace("<module>", "test_x").replace("<dir>", "tests").replace("<file>", "test_x").replace("<glob>", "test_*.py")
-            for c in re.findall(r"`([^`]+)`", cycle.REPO_ONLY_PROMPT) if c.startswith(("python3", "git"))]
-    assert len(cmds) >= 6
-    for c in cmds:
-        assert _allowed(c), c
+def test_run_tests_for_review_reports_failure_and_hides_secrets(tmp_path: Path, monkeypatch):
+    monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "secret-value")
+    body = ("import os, unittest\nclass T(unittest.TestCase):\n    def test_env(self):\n"
+            "        self.assertNotIn('TELEGRAM_BOT_TOKEN', os.environ)\n    def test_fail(self):\n        self.assertEqual(1, 2)\n")
+    repo, sha = _repo(tmp_path, body)
+    out = cycle.run_tests_for_review(repo, sha, tmp_path / "run")
+    assert "exit code: 1" in out and "FAIL: test_fail" in out and "FAIL: test_env" not in out
 
 
-def test_f0095_exact_command_allowed():
-    # F-0095/F-0096: the reviewer of luz-amanha T-0042 was denied this exact command
-    assert _allowed("python3 -m unittest tests.test_offline_build -v")
-    assert _allowed("python3 -m unittest tests.test_offline_build")
+def test_run_tests_for_review_uses_test_cmd(tmp_path: Path):
+    repo, sha = _repo(tmp_path, "import unittest\n")
+    out = cycle.run_tests_for_review(repo, sha, tmp_path / "run", "echo custom-suite")
+    assert out.startswith("$ echo custom-suite\nexit code: 0\ncustom-suite")
 
 
-def test_b_flag_path_form_and_pattern_allowed():
-    for c in ("python3 -B -m unittest tests.test_links -v", "python3 -m unittest mcp/test_release_radar_mcp.py -v",
-              "python3 -m unittest mcp/test_release_radar_mcp.py", "python3 -m unittest discover -s tests -p 'test_*.py'"):
-        assert _allowed(c), c
-
-
-def test_shell_metacharacter_command_still_denied():
-    for c in ("rm -rf /", "cat /etc/passwd", "python3 -c 'import os'", "python3 -m http.server"):
-        assert not _allowed(c), c
-
-
-def test_t0109_commands_allowed_and_documented():
-    for c in ("python3 -B -m unittest tests.x -v", "python3 -m unittest mcp/test_x.py -v", "python3 -m unittest tests.x -v",
-              "python3 -B -m unittest mcp/test_x.py -v", "python3 -B -m unittest discover -s tests -p 'test_*.py'"):
-        assert _allowed(c), c
-    for f in ("team/roles/reviewer.md", "SCHEME.md"):
-        t = (ROOT / f).read_text(encoding="utf-8")
-        assert "-B -m unittest" in t and "<dir>/<file>.py" in t, f
-    assert "-B" in cycle.REPO_ONLY_PROMPT and "<dir>/<file>.py" in cycle.REPO_ONLY_PROMPT
-
-
-def test_t0120_forms_allowed_and_escape_hatches_denied():
-    for c in ("python3 -B -m unittest tests.test_links -v", "python3 -m unittest mcp/test_x.py",
-              "python3 -m unittest mcp/test_x.py -v", "python3 -B -m unittest -v", "python3 -B -m unittest discover -v -s tests"):
-        assert _allowed(c), c
-    for c in ("python3 -c 'print(1)'", "python3 -m pip install x", "python3 -B -c 'x'"):
-        assert not _allowed(c), c
-
-
-def _promised_commands():
-    """Every `python3 -m unittest ...` command in backticks in the reviewer card, SCHEME.md and the repo_only prompt,
-    except those the card names as denied (preceded by 'denied example')."""
-    out = set()
-    texts = [(ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8"), cycle.REPO_ONLY_PROMPT]
-    for text in texts:
-        for m in re.finditer(r"`(python3 -m unittest[^`]*)`", text):
-            before = text[max(0, m.start() - 40):m.start()]
-            if "denied" in before.lower() or "No `-B`" in before:
-                continue
-            if "[" in m.group(1):
-                c = m.group(1)
-                out.add(re.sub(r" ?\[-v\]", "", c))
-                out.add(re.sub(r"\[-v\]", "-v", c))
-                continue
-            out.add(m.group(1).replace("<module>", "test_x").replace("<dir>", "tests").replace("<glob>", "test_*.py"))
-    return out
-
-
-def test_t0126_every_promised_unittest_command_matches_an_entry():
-    cmds = _promised_commands()
-    assert len(cmds) >= 5, cmds
-    for c in cmds:
-        assert _allowed(c), c
-
-
-def test_t0126_machine_links_reviewer_command_allowed():
-    # F-0188: `python3 -m unittest tests.test_machine_links -v` was denied
-    for c in ("python3 -m unittest tests.test_machine_links -v", "python3 -m unittest -v tests.test_machine_links",
-              "python3 -m unittest tests.test_machine_links"):
-        assert _allowed(c), c
-
-
-def test_t0126_removing_an_entry_denies_its_command(monkeypatch):
-    cmd = "python3 -m unittest tests.test_machine_links -v"
-    matching = [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if fnmatch.fnmatchcase(f"Bash({cmd})", t)]
-    assert matching
-    monkeypatch.setattr(cycle, "REPO_ONLY_REVIEW_TOOLS", [t for t in cycle.REPO_ONLY_REVIEW_TOOLS if t not in matching])
-    assert not _allowed(cmd)
-
-
-def test_b_flag_unittest_forms_allowed_and_documented():
-    for c in ("python3 -B -m unittest tests.test_x -v", "python3 -B -m unittest discover -s tests -t .",
-              "python3 -B -m unittest -v tests.test_x", "python3 -B -m unittest discover -s tests -t . -v"):
-        assert _allowed(c), c
-    card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
-    assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
+def test_tests_gate_ignores_appended_tests(tmp_path: Path):
+    repo = gitops.init_local(tmp_path / "r")
+    (repo / "tests").mkdir()
+    for n in "abc":
+        (repo / "tests" / f"test_{n}.py").write_text(f"def test_{n}():\n    assert 1\n")
+    gitops.git(repo, "add", "-A"); gitops.git(repo, "commit", "-q", "-m", "base")
+    base = gitops.git(repo, "rev-parse", "--abbrev-ref", "HEAD")
+    gitops.git(repo, "checkout", "-q", "-b", "task")
+    with (repo / "tests" / "test_a.py").open("a") as f:                  # appended a test: not a change of tests
+        f.write("\n\ndef test_a2():\n    assert 2\n")
+    (repo / "tests" / "test_new.py").write_text("def test_n():\n    assert 1\n")
+    (repo / "tests" / "test_b.py").write_text("def test_b():\n    assert 0\n")   # an assertion rewritten
+    subprocess.run(["git", "rm", "-q", "tests/test_c.py"], cwd=repo, check=True)
+    gitops.git(repo, "add", "-A"); gitops.git(repo, "commit", "-q", "-m", "task")
+    assert gitops.tests_modified_or_deleted(repo, base) == ["tests/test_b.py", "tests/test_c.py"]

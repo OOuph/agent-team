@@ -31,38 +31,56 @@ log = logging.getLogger("team.cycle")
 PHASES = ("collect", "review", "triage", "execute", "measure", "geo", "voice", "digest")
 PRIO = {"P0": 0, "P1": 1, "P2": 2, "P3": 3}
 SCHEMAS = Path(__file__).parent / "schemas"
-# reviewer of a `repo_only` task: read-only checkout + these tools only (no Write/Edit, no free shell, no network but team-fetch)
-REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "Bash(python3 -m unittest discover)",
-                          "Bash(python3 -m unittest -v)", "Bash(python3 -m unittest tests.*)", "Bash(python3 -m unittest -v tests.*)",
-                          "Bash(python3 -m unittest discover -s *)", "Bash(python3 -m unittest discover -v -s *)",
-                          "Bash(python3 -m unittest tests.* -v)", "Bash(python3 -m unittest -v discover*)",
-                          "Bash(python3 -m unittest discover -s * -v)", "Bash(python3 -m unittest discover -s * -t *)",
-                          "Bash(python3 -m unittest discover -v -s * -t *)", "Bash(python3 -m unittest -v discover -s *)",
-                          "Bash(python3 -B -m unittest tests.*)", "Bash(python3 -B -m unittest -v tests.*)",
-                          "Bash(python3 -B -m unittest tests.* -v)", "Bash(python3 -B -m unittest discover -s *)",
-                          "Bash(python3 -B -m unittest -v discover*)", "Bash(python3 -B -m unittest discover -s * -p *)",
-                          "Bash(python3 -B -m unittest discover -s * -t *)", "Bash(python3 -B -m unittest */*.py)",
-                          "Bash(python3 -B -m unittest */*.py -v)", "Bash(python3 -B -m unittest)", "Bash(python3 -B -m unittest -v)", "Bash(python3 -B -m unittest discover)",
-                          "Bash(python3 -B -m unittest discover -v -s *)", "Bash(python3 -B -m unittest discover -s * -v)",
-                          "Bash(python3 -m unittest tests.*:*)", "Bash(python3 -B -m unittest tests.*:*)",
-                          "Bash(python3 -m unittest */*.py)", "Bash(python3 -m unittest */*.py -v)",
-                          "Bash(python3 -B -m unittest discover -s * -t * -v)", "Bash(python3 -B -m unittest discover -v -s * -t *)",
-                          "Bash(python3 -m unittest discover -s * -p *)", "Bash(python3 -m unittest discover -v -s * -p *)",
-                          "Bash(python3 -m unittest discover -s * -t * -p *)",
-                          "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
+# reviewer of a `repo_only` task (owner 15.11): read-only checkout + Read/Glob/Grep; the DISPATCHER runs the tests and puts
+# their output into the prompt. The unittest allowlist it replaced never worked: Claude Code did not match patterns with
+# `*` in the middle (`python3 -B -m unittest discover -s tests -t .` denied with that exact pattern listed), and six
+# retro PRs (#218 #225 #238 #240 #244 #251) only added more patterns. Replan probe T-0146 (T-0143 stuck) proposed this.
+REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
+SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
+                       "ANTHROPIC_API_KEY", "GSC_")
+REVIEW_TEST_TIMEOUT_S = 900
+REVIEW_TEST_OUTPUT_CHARS = 6000
 
 REPO_ONLY_PROMPT = (
-    "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
-    "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
-    "`python3 -m unittest discover -s <dir> -t <dir>`, `python3 -m unittest discover -s <dir> -p <glob>`, "
-    "If the tests live outside tests/ use `python3 -m unittest discover -s mcp -t .`. "
-    "Do not use -B or any other interpreter flag: PYTHONDONTWRITEBYTECODE=1 is already set, so bytecode writes are already off. Exact forms: `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v`. "
-    "(The allowlist still tolerates `python3 -B -m unittest tests.<module> -v`, `python3 -B -m unittest discover -s <dir> -t <dir>` and path-form `<dir>/<file>.py`, but do not use them.) "
-    "DENIED, do not try them: `-m` variants other than unittest and extra flags; "
-    "do not retry a denied form, record the command in limits. "
-    "`python3 -m unittest discover -s <dir>` (also `-v`), `python3 -m pytest -q`, `git log -1`, and team-fetch for the live site. "
-    "If tests/ has no __init__.py use `python3 -m unittest discover -s tests -t .` so that discover finds the tests. "
-    "A criterion about tests or code gets pass/fail from this checkout.\n")
+    "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. You have Read, Glob, Grep and "
+    "team-fetch for the live site; no shell. The dispatcher already ran the repository's tests on this commit in a writable "
+    "copy; their command, exit code and output are below. A criterion about tests is judged from that output: exit 0 and the "
+    "named test present → pass; a failing or missing test → fail with its name. A criterion about code is judged by reading "
+    "the files.\n\n## TEST RUN (by the dispatcher)\n{tests}\n")
+
+
+def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "") -> str:
+    """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
+    environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
+    `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files."""
+    import shutil
+    if dest.exists():
+        shutil.rmtree(dest, ignore_errors=True)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    gitops.git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
+    gitops.git(dest, "checkout", "--quiet", "--detach", sha)
+    gitops.git(dest, "remote", "remove", "origin", check=False)
+    if test_cmd:
+        cmds = [test_cmd]
+    else:
+        dirs = sorted({p.relative_to(dest).parts[0] for p in dest.rglob("test_*.py")
+                       if ".git" not in p.parts and len(p.relative_to(dest).parts) > 1})
+        cmds = [f"python3 -m unittest discover -s {d}" for d in dirs]   # no -t: works without __init__.py
+    if not cmds:
+        return "(no tests found in the repository: no test_*.py files and no repo.test_cmd)"
+    env = {k: v for k, v in os.environ.items() if not k.startswith(SECRET_ENV_PREFIXES)}
+    env.update({"TEAM_PUBLISH_DRY_RUN": "1", "PYTHONDONTWRITEBYTECODE": "1"})
+    out = []
+    for c in cmds:
+        try:
+            cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=REVIEW_TEST_TIMEOUT_S, env=env)
+            text, code = (cp.stdout + "\n" + cp.stderr).strip(), cp.returncode
+        except subprocess.TimeoutExpired:
+            text, code = f"timed out after {REVIEW_TEST_TIMEOUT_S} s", "timeout"
+        if len(text) > REVIEW_TEST_OUTPUT_CHARS:
+            text = "… [head cut]\n" + text[-REVIEW_TEST_OUTPUT_CHARS:]
+        out.append(f"$ {c}\nexit code: {code}\n{text}")
+    return "\n\n".join(out)
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -405,10 +423,13 @@ class Cycle:
             self.store.save_task(t)
         if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
             try:
+                try:
+                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd)
+                except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
+                    tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
-                env = {"PYTHONDONTWRITEBYTECODE": "1"}
-                prompt += REPO_ONLY_PROMPT.format(sha=sha)
+                prompt += REPO_ONLY_PROMPT.format(sha=sha, tests=tests)
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)
                 work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
@@ -880,7 +901,7 @@ class Cycle:
         test_output: str | None = None
         if self.p.test_cmd:
             # the test suite never gets the dispatcher's secrets: a test that posts would post for real (Demo $25, 02.11)
-            test_env = {k: v for k, v in os.environ.items() if not k.startswith(("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY"))}
+            test_env = {k: v for k, v in os.environ.items() if not k.startswith(SECRET_ENV_PREFIXES)}
             test_env["TEAM_PUBLISH_DRY_RUN"] = "1"
             try:
                 cp = subprocess.run(self.p.test_cmd, shell=True, cwd=str(repo), capture_output=True, text=True, timeout=900, env=test_env)
