@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-15
+
+- T-0154: reviewer card and `repo_only` prompt now say: never add `-B` or other interpreter flags (PYTHONDONTWRITEBYTECODE=1 is already set); exact forms `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v` (F-0208, F-0209, F-0213, F-0215, F-0216, F-0217, F-0192, F-0199). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md.
+
 ## 2026-11-13
 
 - T-0139: reviewer `repo_only` allowlist, prompt and card accept the `-B` unittest forms (`python3 -B -m unittest tests.<module> [-v]`, `discover -s <dir> -t <dir>`); runner already sets PYTHONDONTWRITEBYTECODE=1 (F-0205, F-0203, F-0202, F-0201, F-0198, F-0196, F-0199, F-0192, F-0188). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md, test.
