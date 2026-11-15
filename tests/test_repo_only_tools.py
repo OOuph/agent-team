@@ -123,3 +123,10 @@ def test_b_flag_unittest_forms_allowed_and_documented():
         assert _allowed(c), c
     card = (ROOT / "team/roles/reviewer.md").read_text(encoding="utf-8")
     assert "python3 -B -m unittest" in cycle.REPO_ONLY_PROMPT and "python3 -B -m unittest" in card
+
+
+def test_reviewer_env_and_prompt_forbid_b():
+    assert cycle.REPO_ONLY_REVIEW_ENV["PYTHONDONTWRITEBYTECODE"] == "1"
+    assert "env = dict(REPO_ONLY_REVIEW_ENV)" in (ROOT / "team/cycle.py").read_text(encoding="utf-8")
+    assert "do not pass -b" in cycle.REPO_ONLY_PROMPT.lower()
+    assert "path-form" in cycle.REPO_ONLY_PROMPT

@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-15
 
+- T-0158: `REPO_ONLY_REVIEW_ENV` (PYTHONDONTWRITEBYTECODE=1) is the single source of the `repo_only` reviewer env; prompt adds "do not pass -B, -p or any flag other than -v; path-form is not allowed, use tests.<module>"; test asserts both (F-0208, F-0209, F-0213, F-0215, F-0216, F-0217, F-0192, F-0188). `team/cycle.py`, SCHEME.md, test.
 - T-0154: reviewer card and `repo_only` prompt now say: never add `-B` or other interpreter flags (PYTHONDONTWRITEBYTECODE=1 is already set); exact forms `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v` (F-0208, F-0209, F-0213, F-0215, F-0216, F-0217, F-0192, F-0199). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md.
 
 ## 2026-11-13

@@ -51,12 +51,14 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(python3 -m unittest)", "
                           "Bash(python3 -m unittest discover -s * -t * -p *)",
                           "Bash(python3 -m pytest -q)", "Bash(git log -1)", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 
+REPO_ONLY_REVIEW_ENV = {"PYTHONDONTWRITEBYTECODE": "1"}   # T-0158: removes the reason to pass -B
+
 REPO_ONLY_PROMPT = (
     "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. Allowed: Read, Glob, Grep, "
     "`python3 -m unittest`, `python3 -m unittest -v`, `python3 -m unittest tests.<module> -v` (flags before or after the module), "
     "`python3 -m unittest discover -s <dir> -t <dir>`, `python3 -m unittest discover -s <dir> -p <glob>`, "
     "If the tests live outside tests/ use `python3 -m unittest discover -s mcp -t .`. "
-    "Do not use -B or any other interpreter flag: PYTHONDONTWRITEBYTECODE=1 is already set, so bytecode writes are already off. Exact forms: `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v`. "
+    "Do not pass -B, -p or any flag other than -v; path-form `python3 -m unittest path/to/test.py` is not allowed, use tests.<module>. Do not use -B or any other interpreter flag: PYTHONDONTWRITEBYTECODE=1 is already set, so bytecode writes are already off. Exact forms: `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v`. "
     "(The allowlist still tolerates `python3 -B -m unittest tests.<module> -v`, `python3 -B -m unittest discover -s <dir> -t <dir>` and path-form `<dir>/<file>.py`, but do not use them.) "
     "DENIED, do not try them: `-m` variants other than unittest and extra flags; "
     "do not retry a denied form, record the command in limits. "
@@ -407,7 +409,7 @@ class Cycle:
             try:
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
-                env = {"PYTHONDONTWRITEBYTECODE": "1"}
+                env = dict(REPO_ONLY_REVIEW_ENV)
                 prompt += REPO_ONLY_PROMPT.format(sha=sha)
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)
