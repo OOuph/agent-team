@@ -188,4 +188,7 @@ def test_retro_duplicate_of_done_task() -> None:
     assert retro.duplicate_of(same_title, [done]) == "T-0099"
     assert retro.duplicate_of(same_files, [done]) == "T-0099"
     assert retro.duplicate_of(differs, [done]) is None
-    assert retro.duplicate_of(same_title, [openq]) is None
+    assert retro.duplicate_of(same_title, [openq]) == "T-0100"                  # open tasks count too (15.11)
+    assert retro.duplicate_of(same_title, [{**done, "state": "rejected"}]) is None
+    waiting = {**done, "id": "T-0101", "state": "waiting_owner", "title": "something else", "problem": "F-0001"}
+    assert retro.duplicate_of(differs | {"files": ["team/roles/reviewer.md", "team/cycle.py"]}, [waiting]) == "T-0101"

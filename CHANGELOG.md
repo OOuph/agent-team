@@ -34,6 +34,10 @@ the PR, a human merges.
 
 - T-0103: retro does not create a task that repeats a done task: same normalised title, or same files and evidence ids already cited by it; the skip is logged with the duplicated task id. Open tasks are unaffected (F-0182, F-0183, F-0184, F-0176, F-0178). `team/retro.py`.
 
+## 2026-11-15
+
+- Owner 15.11 — framework PRs had piled up (17 open, 13 waiting for a human). Two causes, both in the framework: (1) the tests gate counted any modified file under `tests/` as «tests changed», so a PR that appended a new test to an existing file waited for a human; now only deletions, renames and files with removed lines count (`gitops.tests_modified_or_deleted`). (2) The repo_only reviewer's unittest allowlist never matched: Claude Code did not match the patterns with `*` in the middle, so every run asked for approval and six retro PRs (#218 #225 #238 #240 #244 #251) only added patterns. Now the dispatcher runs the tests on the merged commit in a writable copy without secrets (`repo.test_cmd`, else `python3 -m unittest discover -s <dir>` per top-level directory with `test_*.py`) and gives the reviewer the command, exit code and output; the reviewer has Read/Glob/Grep/team-fetch and no shell (replan probe T-0146; also closes #163, writable tests). Ported by hand from open PRs: #176 retro dedupe (extended to open tasks and to PRs waiting for a human), #157 no lease while the blocking question is open, #128 replies have their own cap (support replies were booked as posts: with X at 1/day an answer took the day's post), #242 one 7-day count for planning and publishing, #226 `team-fetch --grep` plain words. `team/cycle.py`, `gitops.py`, `retro.py`, `publish.py`, `fetch.py`, `roles/reviewer.md`, SCHEME.md, tests.
+
 ## 2026-11-11
 
 - T-0108: PO and marketer cards: a dev.to post task never demands the site root as canonical (name a dated `/d/<date>/` page); `team-publish` retries once on a 422, which the marketer does not report as friction (F-0151, F-0155). `team/roles/po.md`, `team/roles/marketer.md`.

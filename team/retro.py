@@ -242,17 +242,25 @@ def _files(x: Any) -> set[str]:
     return {i.strip() for i in items if i and i.strip()}
 
 
+RETRO_DUP_STATES = ("done", "accepted", "released", "review", "ready", "claimed", "in_progress", "blocked", "waiting_owner")
+
+
 def duplicate_of(p: dict[str, Any], tasks: list[dict[str, Any]]) -> str | None:
-    """Id of a done task that a retro proposal repeats: same normalised title, or same files and its evidence ids
-    (F-xxxx) all already cited by that task. Open tasks never count."""
+    """Id of a task that a retro proposal repeats: same normalised title; or same files and its evidence ids (F-xxxx)
+    all already cited by that task; or same files as a task whose pull request waits for a human (`waiting_owner`).
+    Done and open tasks count, rejected ones do not (owner 15.11: six open PRs #218…#251 fixed one allowlist, each
+    proposed again while the previous one waited for a human; the T-0103 rule looked at done tasks only)."""
     title, files = _norm_title(p.get("title")), _files(p.get("files"))
     ev = {str(e).strip() for e in p.get("evidence") or [] if str(e).strip()}
     for t in tasks:
-        if t.get("state") != "done":
+        if t.get("state") not in RETRO_DUP_STATES:
             continue
         if title and _norm_title(t.get("title")) == title:
             return str(t.get("id"))
-        if files and ev and _files(t.get("scope")) == files and ev <= set(re.findall(r"F-\d+", str(t.get("problem") or ""))):
+        same_files = bool(files) and _files(t.get("scope")) == files
+        if same_files and ev and ev <= set(re.findall(r"F-\d+", str(t.get("problem") or ""))):
+            return str(t.get("id"))
+        if same_files and t.get("state") == "waiting_owner":
             return str(t.get("id"))
     return None
 
@@ -334,7 +342,7 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
                     existing = s.tasks()
                     dup = duplicate_of(p, existing)
                     if dup:
-                        log.info("retro: proposal %r not created: duplicates done task %s", p.get("title"), dup)
+                        log.info("retro: proposal %r not created: duplicates task %s", p.get("title"), dup)
                     elif not any(t.get("title") == title for t in existing):
                         t = s.create_task(title=title, type_="fix", created_by="framework-retro", role="developer", state="ready",
                                           problem=f"Friction: {', '.join(p.get('evidence') or [])}. {p.get('change')}",
