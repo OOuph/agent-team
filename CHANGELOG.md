@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-16
 
+- T-0162: PO card: added an allowed-criterion example (footer time equals `build.json` `scan.generated`) to the no-unobservable-criteria rule; no live timestamp vs commit time, no second build with 0 changed files (F-0225, F-0226, F-0224, F-0222). `team/roles/po.md`, SCHEME.md.
 - T-0161: PO card rule: no unobservable acceptance criteria — checkable on the live site in one reviewer run; no live timestamp (`built_at`, scan time) vs commit time, no second build / "0 files changed", named sample page instead of "every page of a class"; otherwise a `repo_only` test (F-0226, F-0225, F-0197, F-0224, F-0222). `team/roles/po.md`, SCHEME.md.
 - T-0160: PO card rule extended: no acceptance comparing a live timestamp (`built_at`) to merge/commit time, no "0 file changes after a second rebuild" (feeds and llms files change per build); use "field X exists and is a valid ISO time" or "value equals build.json scan.generated" (F-0225, F-0226). `team/roles/po.md`, SCHEME.md.
 - T-0159: PO card rule: acceptance criteria are checkable on the live site or `repo_only`; no live `built_at` vs merge time, no "0 file changes on second rebuild" (state as `repo_only` test), no "every /go/ page linked from X" without naming page types (F-0225, F-0226, F-0197). `team/roles/po.md`, SCHEME.md.
