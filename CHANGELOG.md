@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-16
+
+- T-0159: PO card rule: acceptance criteria are checkable on the live site or `repo_only`; no live `built_at` vs merge time, no "0 file changes on second rebuild" (state as `repo_only` test), no "every /go/ page linked from X" without naming page types (F-0225, F-0226, F-0197). `team/roles/po.md`, SCHEME.md.
+
 ## 2026-11-15
 
 - T-0154: reviewer card and `repo_only` prompt now say: never add `-B` or other interpreter flags (PYTHONDONTWRITEBYTECODE=1 is already set); exact forms `python3 -m unittest discover -s tests -t .` and `python3 -m unittest tests.<module> -v` (F-0208, F-0209, F-0213, F-0215, F-0216, F-0217, F-0192, F-0199). `team/cycle.py`, `team/roles/reviewer.md`, SCHEME.md.
