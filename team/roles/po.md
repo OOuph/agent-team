@@ -137,7 +137,8 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Checkable criteria (F-0225, F-0226, F-0197): every acceptance criterion must be checkable on the live site, or on the
   repository with `repo_only: true`. Never write a criterion that compares the live `built_at` with the merge commit
   time, or that requires 0 file changes on a second rebuild (idempotence); state such checks as `repo_only` test
-  criteria (a test that builds twice). Never write the wording that failed F-0197, "every /go/ page linked from X",
+  criteria (a test that builds twice), because feeds and llms files change per build. Prefer live-site checks of
+  the form "field X exists and is a valid ISO time" or "value equals build.json scan.generated". Never write the wording that failed F-0197, "every /go/ page linked from X",
   when a page type is not covered: name the page types and the exact URLs or the test that enumerates them.
 
 ## Output
