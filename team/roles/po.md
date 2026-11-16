@@ -140,6 +140,10 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   criteria (a test that builds twice), because feeds and llms files change per build. Prefer live-site checks of
   the form "field X exists and is a valid ISO time" or "value equals build.json scan.generated". Never write the wording that failed F-0197, "every /go/ page linked from X",
   when a page type is not covered: name the page types and the exact URLs or the test that enumerates them.
+- No unobservable criteria (F-0226, F-0225, F-0197, F-0224, F-0222): a criterion must be checkable on the live site in one
+  reviewer run. Do not compare live timestamps (`built_at`, scan time) with commit or merge time. Do not require a
+  second build or a "0 files changed" rebuild (a second build changes feeds and llms files). Do not rely on the reviewer
+  checking every page of a class when you can name a sample page (exact URL). Put such checks in the tests with `repo_only: true`.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
