@@ -20,6 +20,10 @@ of where it got in its own way and a retro role turns that into issues and pull 
 
 ## Run it
 
+Requires Python 3.12+. The `--dry-run` cycle needs no keys or tokens: it shows which roles would run and with what
+prompts. Real runs need Claude Code on the machine and a subscription token. Tried it? Tell us what broke:
+[open a trial report](https://github.com/OOuph/agent-team/issues/new?template=trial-report.yml).
+
 ```bash
 python3 -m venv .venv && .venv/bin/pip install -e .
 cp .env.example .env            # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-token`), GITHUB_TOKEN, channel keys

@@ -1,0 +1,46 @@
+name: Trial report
+description: You tried to install or run agent-team — tell us what happened, good or bad.
+title: "[trial] "
+labels: ["trial-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying it. Short and honest beats polished. Do not paste tokens, keys or `.env` contents.
+  - type: dropdown
+    id: got_to
+    attributes:
+      label: How far did you get?
+      options:
+        - Install failed
+        - Installed, init failed
+        - Dry-run cycle ran
+        - Real cycle ran (with Claude Code and a token)
+        - Ran it on my own site for a day or more
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS and Python version
+      placeholder: "macOS 15, Python 3.12.7"
+    validations:
+      required: true
+  - type: textarea
+    id: commands
+    attributes:
+      label: Commands you ran
+      render: bash
+    validations:
+      required: true
+  - type: textarea
+    id: broke
+    attributes:
+      label: What broke or confused you
+      description: Error output, a step the README skipped, a word you did not understand.
+    validations:
+      required: true
+  - type: textarea
+    id: would_use
+    attributes:
+      label: Would you run it on a real project? What would have to change?
