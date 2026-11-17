@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-17
+
+- T-0163: reviewer/editor cards and SCHEME list every character unusable in `team-fetch --grep` (`team/fetch.py` rejects `| ; & $` backtick `" =`; the permission layer also denies `< > ( )`) with the `--tag NAME --count` alternative for markup such as `</loc>` (F-0215, F-0221, F-0229). `team/roles/reviewer.md`, `team/roles/editor.md`, SCHEME.md.
+
 ## 2026-11-16
 
 - T-0162: PO card: added an allowed-criterion example (footer time equals `build.json` `scan.generated`) to the no-unobservable-criteria rule; no live timestamp vs commit time, no second build with 0 changed files (F-0225, F-0226, F-0224, F-0222). `team/roles/po.md`, SCHEME.md.
