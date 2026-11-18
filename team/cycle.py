@@ -97,6 +97,23 @@ def only_raw_github_urls(urls: Any) -> bool:
     return bool(urls) and all(re.match(r"https://raw\.githubusercontent\.com/", u.strip()) for u in urls)
 
 
+CANARY_EMPTY_REASON = "canary empty result"
+CANARY_RESULT_DIRS = ("digests", "reviews", "observations", "backlog")   # reports and task results
+
+
+def _canary_snapshot(pdir: Path) -> dict[str, str]:
+    """relative path -> content hash of every non-blank file in the result directories."""
+    import hashlib
+    out: dict[str, str] = {}
+    for d in CANARY_RESULT_DIRS:
+        for f in sorted((pdir / d).rglob("*")) if (pdir / d).is_dir() else []:
+            if f.is_file():
+                data = f.read_bytes()
+                if data.strip():
+                    out[str(f.relative_to(pdir))] = hashlib.sha256(data).hexdigest()
+    return out
+
+
 class Cycle:
     def __init__(self, st: Settings, product: Product, runner: Runner | None, cycle_id: str, *, dry_run: bool = False):
         self.st, self.p, self.runner, self.cycle_id, self.dry_run = st, product, runner, cycle_id, dry_run
@@ -1005,6 +1022,7 @@ class Cycle:
         (root / "products").mkdir(parents=True)
         (root / "data").mkdir()
         shutil.copytree(src, root / "products" / product, ignore=shutil.ignore_patterns("*.lock", "work", "runs"))
+        before = _canary_snapshot(root / "products" / product)
         for name in ("team.yaml", "DEPUTY.md"):
             if (self.st.root / name).exists():
                 shutil.copy2(self.st.root / name, root / name)
@@ -1014,7 +1032,10 @@ class Cycle:
             cp = subprocess.run([sys.executable, "-m", "team.cli", "cycle", "--product", product, "--cycle", cyc, "--dry-run"], cwd=str(repo),
                                 env=env, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
+            shutil.rmtree(root, ignore_errors=True)
             return False, "canary timed out"
+        try:
+            artefacts = self._canary_artefacts(root / "products" / product, before)
         finally:
             shutil.rmtree(root, ignore_errors=True)
         out = (cp.stdout + cp.stderr)
@@ -1029,7 +1050,20 @@ class Cycle:
         # (12:07: a dry-run warning "deputy run failed: no run" matched the old substring check and failed PR #32 falsely)
         if "phase.error" in out or re.search(r"phase \w+ failed", out):
             return False, "phase error: " + out[-800:]
-        return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases"
+        # T-0165 (voice:2026-11-18:P1): a cycle that merely ended is not enough; it must have produced a real result
+        if not artefacts:
+            note = f"{CANARY_EMPTY_REASON}: cycle {cyc} of {product} ended, but wrote no non-empty report or task result"
+            try:
+                self.store.event("canary.empty", product, "dispatcher", {"text": note})
+            except Exception as exc:  # recording must never mask the verdict
+                log.warning("could not record canary.empty: %s", exc)
+            return False, note
+        return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases, {len(artefacts)} result artefact(s)"
+
+    @staticmethod
+    def _canary_artefacts(pdir: Path, before: dict[str, str]) -> list[str]:
+        """Non-empty report / task-result files that the canary cycle created or changed in the state copy."""
+        return [k for k, v in _canary_snapshot(pdir).items() if before.get(k) != v]
 
     def check_pull_requests(self) -> None:
         for t in self.store.tasks(["waiting_owner"]):
