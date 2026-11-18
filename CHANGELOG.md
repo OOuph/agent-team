@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-18
+
+- T-0164: reviewer/editor cards: `--grep` rule names redirect characters `<` `>` and a trailing `-` or `(` fragment as denied; search one plain word, use `--tag` / `--json-path` for markup or comparisons (F-0229, F-0221). `team/roles/reviewer.md`, `team/roles/editor.md`.
+
 ## 2026-11-17
 
 - T-0163: reviewer/editor cards and SCHEME list every character unusable in `team-fetch --grep` (`team/fetch.py` rejects `| ; & $` backtick `" =`; the permission layer also denies `< > ( )`) with the `--tag NAME --count` alternative for markup such as `</loc>` (F-0215, F-0221, F-0229). `team/roles/reviewer.md`, `team/roles/editor.md`, SCHEME.md.
