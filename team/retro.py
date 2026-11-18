@@ -80,7 +80,7 @@ def file_issue(repo: str, label: str, title: str, body: str) -> str | None:
         return None
 
 
-def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], existing_titles: list[str]) -> str:
+def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], existing_titles: list[str], effectiveness: str = "") -> str:
     cards = []
     for p in sorted(ROLES_DIR.glob("*.md")):
         cards.append(f"### {p.name}\n{p.read_text(encoding='utf-8')[:3500]}")
@@ -93,6 +93,8 @@ def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], exis
         "## Friction register (last 7 days)\n" + reg.register_md(7)[:14000],
         "## SCHEME.md\n" + (scheme.read_text(encoding="utf-8")[:9000] if scheme.exists() else "(missing)"),
         "## Role cards\n" + "\n\n".join(cards)[:16000],
+        (effectiveness or "## Rule effectiveness\n- none") + "\nWhen a kind came back after its rule merged, propose replacing or removing that rule "
+        "(or changing behaviour), not adding another rule. Kinds marked 'too early' are not judged yet.",
         "## Previous proposals (do not repeat)\n" + "\n".join(f"- {t}" for t in (previous + existing_titles)[:60]),
         "## Rules\n- Each proposal cites friction ids as evidence and names the file(s) to change and acceptance criteria that a developer "
         "can verify by running the tests or reading the file.\n- risk: low = role card text, docs, config values; medium = schema or tool "
@@ -102,6 +104,54 @@ def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], exis
 
 
 SPEND_WARN_SHARE = 0.8
+
+RULE_MIN_CYCLES = 72  # cycles are hourly: fewer than 72 h since the merge is "too early"
+_ROLE_CARD = re.compile(r"team/roles/([\w.-]+)\.md")
+_FID = re.compile(r"F-\d{4}")
+
+
+def rule_effectiveness(records: list[dict[str, Any]], merged: list[dict[str, Any]], now: datetime | None = None,
+                       min_cycles: int = RULE_MIN_CYCLES) -> str:
+    """T-0166: for each merged task that changed a role card, the count of its F kind and role before vs after the merge.
+    merged: [{id, title, scope, problem, merged_at}]. Verdict: too early / came back / held."""
+    now = now or datetime.now(timezone.utc)
+    by_id = {str(r.get("id")): r for r in records}
+    lines = ["## Rule effectiveness", ""]
+    for t in merged:
+        m = _ROLE_CARD.search(str(t.get("scope") or ""))
+        ids = [i for i in _FID.findall(str(t.get("problem") or "")) if i in by_id]
+        at = parse_ts(str(t.get("merged_at") or "")) if t.get("merged_at") else None
+        if not (m and ids and at):
+            continue
+        kind = str(by_id[ids[0]].get("kind"))
+        role = str(by_id[ids[0]].get("role") or m.group(1))
+        cut = at.isoformat()
+        same = [r for r in records if r.get("kind") == kind and r.get("role") == role]
+        before = sum(1 for r in same if str(r.get("ts") or "") < cut)
+        after = sum(1 for r in same if str(r.get("ts") or "") >= cut)
+        cycles = int((now - at).total_seconds() // 3600)
+        head = f"- {t.get('id')} (`{m.group(1)}` card) kind `{kind}` role `{role}`: before {before}, after {after}, {cycles} cycles since merge"
+        if cycles < min_cycles:
+            lines.append(f"{head} → too early (< {min_cycles} cycles)")
+        elif after > 0:
+            lines.append(f"{head} → came back. Proposal: replace or remove the rule from {t.get('id')}; do not add another.")
+        else:
+            lines.append(f"{head} → held")
+    if len(lines) == 2:
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
+
+
+def merged_rule_tasks(st: Settings, slug: str) -> list[dict[str, Any]]:
+    pdir = st.products_dir / slug
+    if not slug or not (pdir / "product.yaml").exists():
+        return []
+    s = Store(pdir)
+    try:
+        return [{**t, "merged_at": t.get("updated")} for t in s.tasks() if t.get("state") in ("done", "released", "measured", "accepted")]
+    finally:
+        s.close()
+
 
 
 def team_cap_usd(st: Settings) -> float:
@@ -284,7 +334,8 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
     repo, label = str(cfg.get("repo") or ""), str(cfg.get("issue_label") or "friction")
     issues = open_issues(repo, label) if repo and cfg.get("issues") and not dry_run else []
     titles = [str(i.get("title")) for i in issues]
-    prompt = retro_prompt(st, reg, previous, titles)
+    eff_md = rule_effectiveness(reg.records, merged_rule_tasks(st, str(cfg.get("product") or "")))
+    prompt = retro_prompt(st, reg, previous, titles, eff_md)
     if dry_run or runner is None:
         (rdir / "prompt-dry-run.md").write_text(prompt, encoding="utf-8")
         return None
@@ -315,7 +366,7 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
     if not spend_ok:
         reg.add([friction._rec("agent-team", "missing_data", "retro Spend section: no per-day spend record readable (billing ledger empty)",
                                role="framework-retro", fp=f"retro-spend-{day}")])
-    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{digest_md}\n{rep.get('summary_md', '')}\n\n{spend_md}\n" +
+    (rdir / f"{day}.md").write_text(f"# Framework retro {day}\n\n{digest_md}\n{rep.get('summary_md', '')}\n\n{spend_md}\n\n{eff_md}\n" +
                                     "\n".join(f"## {p.get('title')}\n- kind: {p.get('kind')} · risk: {p.get('risk')} · evidence: {', '.join(p.get('evidence') or [])}\n"
                                               f"- files: {', '.join(p.get('files') or [])}\n- change: {p.get('change')}\n- acceptance:\n" +
                                               "\n".join(f"  - {a}" for a in p.get("acceptance") or []) for p in props) +
