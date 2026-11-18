@@ -66,6 +66,8 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
         elif k == "pr.claim_mismatch":
             out.append(_rec(slug, "reported", f"dispatcher: [other] claim vs git diff MISMATCH {e.get('subject')}: {d.get('text')}", ts=ts, task=str(e.get("subject")),
                             fp=f"mismatch:{e.get('subject')}"))
+        elif k == "canary.empty":
+            out.append(_rec(slug, "reported", f"dispatcher: [other] canary empty result: {d.get('text')}", ts=ts, fp=f"canary-empty:{ts}"))
         elif k == "budget.stop":
             out.append(_rec(slug, "budget_stop", f"budget stop: {d}", ts=ts, fp=str(ts)))
     for rj in p.runs_dir.glob("*/*/run.json"):
