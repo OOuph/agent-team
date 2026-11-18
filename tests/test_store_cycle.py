@@ -531,6 +531,10 @@ def test_done_without_commit_with_no_change_reason_goes_to_review(tmp_path: Path
     assert Cycle(st, p, ReasonRunner(), "c1").exec_developer(s.task(t["id"]), "run-1")
     assert s.task(t["id"])["state"] == "review"
     assert not [r for r in friction.collect_product(p, s) if r["kind"] == "no_commit"]
+    # the reviewer picks it up: «no change needed» is checked, not left in review forever (14 tasks, 06–18.11)
+    r = FakeRunner()
+    Cycle(st, p, r, "c2").phase_review()
+    assert "reviewer" in r.calls and s.task(t["id"])["state"] != "review"
     s.close()
 
 

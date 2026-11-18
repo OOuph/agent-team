@@ -406,7 +406,9 @@ class Cycle:
         if self.p.repo_mode == "pr":
             self.check_pull_requests()
         after = timedelta(minutes=int(self.st.cycle.get("review_after_min", 6)))
-        for t in self.store.tasks(["released"]):
+        # «review» = the developer answered «no change needed» (T-0041); it waited here for a reviewer that only read
+        # «released», and 14 tasks sat unreviewed 06.11 → 18.11 (owner 18.11)
+        for t in self.store.tasks(["released", "review"]):
             rel = parse_ts(t.get("released_at"))
             if rel and _now() - rel < after:
                 continue
