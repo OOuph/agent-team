@@ -951,7 +951,13 @@ class Cycle:
             if absent:
                 log.warning("%s: developer `changes` named files absent from the git diff (%s); recorded the diff list instead", t["id"], "; ".join(absent[:8]))
                 res = {**res, "changes": new_changes}
-            facts, _ = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res)
+            facts, _ = prfacts.build(gitops.diff_stat(repo, self.p.repo_branch), touched, test_output, res, scope=t.get("scope"))
+            extra_files = prfacts.out_of_scope(t.get("scope"), touched)
+            if extra_files:   # T-0167: warn-only, never blocks the merge or the canary
+                try:
+                    self.store.event("pr.out_of_scope", self.p.slug, "dispatcher", {"text": "; ".join(extra_files[:12]), "task": t["id"]})
+                except Exception as exc:
+                    log.warning("could not record pr.out_of_scope: %s", exc)
             body = (f"{res.get('summary', '')}\n\n**Changes:** " + "; ".join(res.get("changes") or []) +
                     "\n\n**Self-check:**\n" + "\n".join(f"- {'✓' if c.get('met') else '✗'} {c.get('criterion')} — {c.get('evidence')}" for c in res.get("self_check") or []) +
                     "\n\n" + "\n".join(f"Evidence: {l}" for l in t.get("links") or []) +

@@ -66,6 +66,9 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
         elif k == "pr.claim_mismatch":
             out.append(_rec(slug, "reported", f"dispatcher: [other] claim vs git diff MISMATCH {e.get('subject')}: {d.get('text')}", ts=ts, task=str(e.get("subject")),
                             fp=f"mismatch:{e.get('subject')}"))
+        elif k == "pr.out_of_scope":
+            out.append(_rec(slug, "reported", f"dispatcher: [other] out-of-scope files in PR for {d.get('task')}: {d.get('text')}", ts=ts, task=d.get("task"),
+                            fp=f"out-of-scope:{d.get('task')}"))
         elif k == "canary.empty":
             out.append(_rec(slug, "reported", f"dispatcher: [other] canary empty result: {d.get('text')}", ts=ts, fp=f"canary-empty:{ts}"))
         elif k == "budget.stop":
