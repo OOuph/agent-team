@@ -133,6 +133,7 @@ def test_marketer_prompt_has_memory_and_by_src(tmp_path: Path):
     assert rows["devto"]["posts"] == 0 and "no posts yet" in rows["devto"]["verdict"]
     assert mem["feedback"][0]["title"].startswith("Reply on Bluesky")
     prompt = prompts.marketer_prompt(p, t, p.raw["channels"], [], lessons=["lead with the event"], memory=mem)
+    assert "# AI TELLS TO AVOID" in prompt and "- §1 Not X but Y:" in prompt and "### 1." not in prompt
     for needle in ("PUBLISHED IN THE LAST 7 DAYS", "https://t.me/demo/1", "vitest 4 drops Node 18", "VISITS BY ?src=",
                    "| bluesky | 1 | 3 | 1 |", "WHAT PEOPLE SAID", "which packages", "no plan yet"):
         assert needle in prompt, needle

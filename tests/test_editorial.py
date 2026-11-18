@@ -66,6 +66,7 @@ def test_editor_prompt_contents(tmp_path: Path) -> None:
     txt = editorial.editor_prompt(p, {"id": "T-1", "title": "post"}, drafts, ["Lesson A"], ["no hook"], 2, ["fix the opening"])
     assert "DRAFT `01-telegram.json`" in txt and "Lesson A" in txt and "no hook" in txt and "ISSUES YOU RAISED IN ROUND 1" in txt
     assert "review round 2" in txt and "живой рассказ" in txt
+    assert "## AI TELLS" in txt and "### 1. Not X but Y" in txt and "Project overrides" in txt
 
 
 def test_label_lessons_not_appended(tmp_path: Path) -> None:

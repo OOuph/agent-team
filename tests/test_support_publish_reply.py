@@ -38,6 +38,7 @@ def test_pending_skips_answered_and_own(tmp_path: Path, monkeypatch) -> None:
     assert [o["fingerprint"] for o in support.pending(p, s)] == ["bsky-at://did/app.bsky.feed.post/2"]
     assert support.replies_today(s) == 1
     prompt = support.support_prompt(p, todo[0], "# vision")
+    assert "## AI tells to avoid in the reply" in prompt
     assert "feed 500" in prompt and "escalate" in prompt
     s.close()
 

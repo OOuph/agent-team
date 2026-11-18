@@ -1,22 +1,24 @@
 # agent-team
 
-A dispatcher that runs a small product with AI roles (product owner, developer, reviewer, analyst, marketer, personas,
-GEO probe, voice-of-user researcher) as short headless [Claude Code](https://claude.com/claude-code) runs on a subscription token. A product
-description goes in; a static site that keeps improving against measurable goals comes out. People are needed only
-for decisions outside the product's own vision.
+agent-team is a dispatcher that runs a small product with AI roles: product owner, developer, reviewer, analyst,
+marketer, personas, a GEO probe and a voice-of-user researcher. Each role is a short headless
+[Claude Code](https://claude.com/claude-code) run on a subscription token. You give it a product description, and it
+builds a static site and keeps improving it against measurable goals. People only decide things that fall outside the
+product's own vision.
 
 The full scheme of the loop (roles, phases, task states, feedback, analytics, policies, self-improvement) is in
 [SCHEME.md](SCHEME.md). The live diary written by the team about itself: https://agentteam.formachines.ai.
 
 ## How it works in one paragraph
 
-Roles never talk to each other; everything is a file in `products/<slug>/` (tasks, questions, observations, reviews,
-digests, metrics) plus an SQLite ledger (claims, events, spend, posts). Every hour `team cycle` runs the phases
-collect → review → triage → execute → measure → geo → digest for each product: the PO turns observations into tasks
-with acceptance criteria, the developer implements one task on a branch, the dispatcher merges and the site deploys
-itself from git, the reviewer checks the live site, the analyst reads the server logs, the marketer posts in allowed
-channels. Budgets, leases, a STOP file and an inactivity watchdog keep it bounded. The framework also keeps a register
-of where it got in its own way and a retro role turns that into issues and pull requests on this repository.
+Roles never talk to each other. Everything they produce is a file in `products/<slug>/` (tasks, questions,
+observations, reviews, digests, metrics), and an SQLite ledger records claims, events, spend and posts. Every hour
+`team cycle` runs the phases `collect → review → triage → execute → measure → geo → digest` for each product. The PO
+turns observations into tasks with acceptance criteria, the developer implements one task on a branch, the dispatcher
+merges it, and the site deploys itself from git. The reviewer checks the live site, the analyst reads the server logs,
+and the marketer posts in the channels it is allowed to use. Budgets, leases, a STOP file and an inactivity watchdog
+keep the loop within limits. The framework also logs each time it got in its own way, and a retro role turns that log
+into issues and pull requests on this repository.
 
 ## Run it
 
@@ -40,14 +42,16 @@ Deployment of the sites (nginx + git pull timer + metrics from logs) is in `depl
 
 ## Status
 
-Operation began on 2 November 2026: four sites and the framework itself, hourly, without a human in the loop. The formal
-pilot window is 4–10 November. First six days of operation (Nov 2 to Nov 8, 06:00 UTC): 677 cycles, 1,108 role runs, ~260 tasks closed, 53
-framework changes merged by the loop itself (tests + canary, automatic rollback), 98 posts in six channels, ~$172
-spend, API-equivalent (what the same tokens would cost at API prices; paid inside one subscription, not billed as such).
-What it does not solve: people. Traffic figures on the sites are estimates of engaged log sources (distinct IP + user-agent
-sources that behaved like readers), not identified people; the period and method are described on the public
-[method page](https://agentteam.formachines.ai/about/). We do not state a humans-per-day range here, because no
-public calculation backs one; agent posting alone brings few readers.
+On 2 November 2026 the team started running four sites and the framework itself every hour, with no human in the
+loop. The formal pilot window is 4 to 10 November. In the first six days (2 Nov to 8 Nov, 06:00 UTC) it ran 677
+cycles and 1,108 role runs, closed about 260 tasks, posted 98 times in six channels, and merged 53 changes to its own
+framework, each after tests and a canary with automatic rollback. Spend was about $172 at API prices. The tokens
+actually came out of one subscription, so nobody was billed that amount.
+
+The loop does not bring people: agent posting alone draws few readers. The traffic figures on the sites count engaged
+log sources (distinct IP and user-agent pairs that behaved like readers), so they cannot say how many humans came, and
+we publish no humans-per-day estimate because no public calculation backs one. The period and method are on the public
+[method page](https://agentteam.formachines.ai/about/).
 
 The sites it runs:
 - [AGENTS.md Tracker](https://agentsmd.formachines.ai) — which of 1,922 top GitHub repos have AGENTS.md, CLAUDE.md, .cursorrules, …

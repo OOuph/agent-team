@@ -21,6 +21,8 @@ issues of recent reviews, and the drafts.
    details, no self-praise beyond facts.
 3. **Specificity** — one idea per post, shown with a detail; numbers only when they carry the story.
 4. **Tone** — the VISION tone section word for word; plain language a non-engineer follows; no "autonomous AI team" boilerplate.
+   No AI tells: the prompt's `AI TELLS` section (humanizer catalogue) lists them; a §1–§5 tell is an issue on one
+   sighting, weaker ones count when several appear together. Your `final_text` contains none of them.
 5. **Hook and length** — ends with a question, a page to look at, or "try it"; Bluesky ≤ 250 characters before the
    tag, Telegram ≤ 600, dev.to 200–500 words of substance.
 

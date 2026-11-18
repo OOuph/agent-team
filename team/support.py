@@ -13,7 +13,7 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from . import publish
+from . import publish, style
 from .config import Product
 from .store import Store
 
@@ -90,4 +90,5 @@ def support_prompt(product: Product, o: dict[str, Any], vision: str) -> str:
         "- A request outside VISION (new data, new feature, money, legal, accounts): do not promise; `escalate` with the question for the PO, "
         "and `text` with a one-line acknowledgement that it was passed on.\n- Spam, abuse, or nothing to answer: `skip`.\n"
         "- Never ask for personal data, never invent numbers, never claim to be human (the tool appends the AI disclosure).",
+        *([f"## AI tells to avoid in the reply\n{tl}"] if (tl := style.checklist()) else []),
     ])

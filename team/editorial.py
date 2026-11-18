@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from . import style
 from .config import Product, Settings
 
 log = logging.getLogger("team.editorial")
@@ -174,6 +175,12 @@ def editor_prompt(product: Product, task: dict[str, Any], drafts: list[tuple[str
                      + series["rubric"])
     if previous_issues:
         parts.append(f"## ISSUES YOU RAISED IN ROUND {round_no - 1} (check they are fixed)\n" + "\n".join(f"- {x}" for x in previous_issues))
+    tells = style.catalogue()
+    if tells:
+        parts.append("## AI TELLS (owner 18.11: public text must not read as machine-written)\n"
+                     "Mark every tell in each draft before scoring. A §1–§5 tell, or several weaker ones together, is a "
+                     "concrete issue (quote the phrase, give the replacement) and lowers tone. A final_text must contain "
+                     "none of them. Do not trade a fact for style.\n\n" + tells)
     for name, d in drafts:
         parts.append(f"## DRAFT `{name}` — channel {d.get('channel')} → {d.get('target') or ''}\nurl: {d.get('url') or ''}\ntitle: {d.get('title') or ''}\n\n```\n{d.get('text', '')}\n```")
     if series:

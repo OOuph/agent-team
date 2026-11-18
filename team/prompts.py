@@ -8,6 +8,7 @@ from typing import Any
 
 import yaml
 
+from . import style
 from .config import Product
 from .store import Store
 
@@ -225,10 +226,12 @@ def marketer_prompt(product: Product, task: dict[str, Any], channels: dict[str, 
     if editor_notes:
         notes = "\n\n# THE EDITOR SENT YOUR DRAFTS BACK — this is your one revision. Fix every issue, then publish again:\n" + _y(editor_notes)
     mem = ("\n\n" + memory_block(memory, for_plan=False)) if memory else ""
+    tl = style.checklist()
+    tells = ("\n\n# AI TELLS TO AVOID (write without them; the editor sends a draft back for any of §1–§5)\n" + tl) if tl else ""
     return (f"# MARKETING TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
             "# TASK\n" + _y(_task_brief(task))
             + "\n\n# CHANNELS CONFIGURED (channel → target)\n" + _y(channels)
-            + "\n\n# VISION\n" + product.vision() + les + mem + prev + notes
+            + "\n\n# VISION\n" + product.vision() + les + tells + mem + prev + notes
             + "\n\nWrite each post to a file here, then `team-publish --channel <channel> --target <target> --text-file <file> --url <url>`. "
             "Every post goes to the editor before it is sent; the editor may approve, send it back once, or reject. "
             "team-publish answers `\"dry_run\": true` with a `draft:` id: that only means the draft is saved for the editor, "
