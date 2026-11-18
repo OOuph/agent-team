@@ -666,6 +666,12 @@ class _Day:
     src_human: dict[str, set[Source]] = field(default_factory=dict)              # src -> human sources
     src_engaged: dict[str, set[Source]] = field(default_factory=dict)            # src -> engaged human sources
     human_beyond_go: set[Source] = field(default_factory=set)                    # human sources that asked for more than /go/
+    human_page: set[Source] = field(default_factory=set)                         # human sources that asked for a page (not an asset, not /go/)
+    human_ref: set[Source] = field(default_factory=set)                          # human sources that came with an external referer
+    no_page: int = 0                                                             # human-UA sources with assets but no page
+    human_pages_of: dict[Source, set[str]] = field(default_factory=dict)         # human source -> pages it opened
+    human_tagged: set[Source] = field(default_factory=set)                       # human sources that arrived with ?src=
+    drive_by: int = 0                                                            # engaged by asset, but one deep page out of nowhere
     human_req: Counter = field(default_factory=Counter)                          # human source -> requests
     human_target_req: Counter = field(default_factory=Counter)                   # (target, human source) -> requests
     clickers: int = 0                                                            # human-UA sources that only hit /go/
@@ -719,6 +725,14 @@ class Aggregator:
             d.human_req[src] += 1
             if not rec.path.startswith(GO_PREFIX):
                 d.human_beyond_go.add(src)
+                if not is_asset(rec.path):
+                    d.human_page.add(src)
+                    if rec.status < 400:
+                        d.human_pages_of.setdefault(src, set()).add(rec.path.rstrip("/") or "/")
+            if rec.src:
+                d.human_tagged.add(src)
+            if ext_ref:
+                d.human_ref.add(src)
             if ext_ref or (rec.status < 400 and is_asset(rec.path)):
                 d.engaged.add(src)
         if ext_ref and cls != "own":
@@ -740,12 +754,18 @@ class Aggregator:
     def _finalize_clickers(self) -> None:
         """A browser-UA source that asked only for /go/ links that day — no page, no asset, no external referer — is not a
         person: a human reaches /go/ from a page of the site and loads its stylesheet. Seen 10.11 on releases: 299 sources
-        on /go/, 4 of them loaded the CSS (crawler networks with browser UAs walking the vote links). Moved to `unknown`."""
+        on /go/, 4 of them loaded the CSS (crawler networks with browser UAs walking the vote links). Moved to `unknown`.
+
+        The same holds for a source that loaded assets but never a page (owner 18.11): from 13.11 agentsmd counted
+        2 200–6 200 «engaged people» a day that asked only for /favicon.svg and /go/ — the asset made them engaged. A
+        person opens a page or arrives with an external referer; everything else moves to `unknown` (`no_page_excluded`)."""
         for day, d in self.days.items():
-            bad = d.class_sources["human"] - d.human_beyond_go - d.engaged
+            bad = d.class_sources["human"] - d.human_page - d.human_ref
             if not bad:
                 continue
-            d.clickers = len(bad)
+            d.no_page = len(bad & d.human_beyond_go)
+            d.clickers = len(bad) - d.no_page
+            d.engaged -= bad
             n = sum(d.human_req[s] for s in bad)
             d.class_sources["human"] -= bad
             d.class_sources["unknown"] |= bad
@@ -760,6 +780,15 @@ class Aggregator:
             for k in list(d.src_human):
                 d.src_human[k] -= bad
             self.history.get(day, set()).difference_update(bad)
+        # A source that opened one deep page with no referer and no ?src= and loaded its CSS is a scraper, not a reader
+        # (owner 18.11): agentsmd 13–16.11 got 1 400–3 800 such sources a day from proxy fleets (47.82/16, 47.79/16 and
+        # thousands of single addresses), one /repo/<name>/ each. A person arrives by a link (referer or our ?src=),
+        # types the home page, or opens a second page. They stay human sources, but not engaged.
+        for d in self.days.values():
+            drive = {s for s in d.engaged - d.human_ref - d.human_tagged
+                     if len(d.human_pages_of.get(s, ())) < 2 and "/" not in d.human_pages_of.get(s, ())}
+            d.drive_by = len(drive)
+            d.engaged -= drive
 
     def _finalize_returns(self) -> None:
         seen: set[Source] = set()
@@ -782,6 +811,8 @@ class Aggregator:
             "humans": {"requests": d.class_requests.get("human", 0), "sources": len(d.class_sources["human"]),
                        "engaged": len(d.engaged), "returns": d.returns},
             "go_only_excluded": d.clickers,   # browser-UA sources that hit only /go/ that day: moved from humans to unknown
+            "no_page_excluded": d.no_page,    # browser-UA sources with assets (favicon, CSS) but no page that day: moved too
+            "drive_by_not_engaged": d.drive_by,  # one deep page, no referer, no ?src=: human source, not engaged
             "agents": {"requests": d.class_requests.get("agent", 0), "sources": len(d.class_sources["agent"]),
                        "by_family": _sorted_counter(d.agent_requests)},
             "crawlers": {"requests": d.class_requests.get("crawler", 0), "sources": len(d.class_sources["crawler"]),
@@ -808,6 +839,8 @@ class Aggregator:
             t.engaged |= d.engaged
             t.returns += d.returns
             t.clickers += d.clickers
+            t.no_page += d.no_page
+            t.drive_by += d.drive_by
             t.crawler_requests.update(d.crawler_requests)
             t.social_preview += d.social_preview
             t.agent_requests.update(d.agent_requests)

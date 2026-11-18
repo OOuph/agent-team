@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-18
 
+- Metrics: a browser source with assets but no page is `unknown` (`no_page_excluded`); one deep page with no referer and no `?src=` is a human source but not engaged (`drive_by_not_engaged`). agentsmd 13–16.11 engaged 2 221–6 212 → 2–6 on the same logs; other sites ±1–3 (owner 18.11, Q-0020). `team/sitemetrics.py`, SCHEME.md.
 - T-0164: reviewer/editor cards: `--grep` rule names redirect characters `<` `>` and a trailing `-` or `(` fragment as denied; search one plain word, use `--tag` / `--json-path` for markup or comparisons (F-0229, F-0221). `team/roles/reviewer.md`, `team/roles/editor.md`.
 
 ## 2026-11-17

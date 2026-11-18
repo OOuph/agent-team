@@ -164,7 +164,7 @@ def test_engaged_by_asset_or_external_referer(tmp_path: Path):
         line("10.0.0.2", CHROME, "/errata/", referer="https://news.ycombinator.com/item?id=1"),
         # C: page only → not engaged
         line("10.0.0.3", CHROME, "/errata/"),
-        # D: asset 404 only → not engaged
+        # D: asset 404 only, no page → not a person at all (owner 18.11: assets without a page moved to unknown)
         line("10.0.0.4", IPHONE, "/missing.js", status=404),
         # E: internal referer only → not engaged
         line("10.0.0.5", IPHONE, "/errata/x", referer=f"https://{HOST}/"),
@@ -173,7 +173,7 @@ def test_engaged_by_asset_or_external_referer(tmp_path: Path):
     ]
     res = sm.run([write_log(tmp_path / "access.log", lines)], HOST)
     d = res["days"]["2026-11-03"]
-    assert d["humans"]["sources"] == 5
+    assert d["humans"]["sources"] == 4 and d["no_page_excluded"] == 1
     assert d["humans"]["engaged"] == 2
     assert d["humans"]["returns"] == 0
     assert d["classes"]["agent"]["sources"] == 1
@@ -190,12 +190,13 @@ def test_returns_across_days_and_history_before_since(tmp_path: Path):
         line("10.0.0.1", CHROME, "/", day="2026-11-01"), line("10.0.0.1", CHROME, "/s.css", day="2026-11-01"),
         line("10.0.0.2", CHROME, "/", day="2026-11-01"),
         # day 2: A engaged again (return), B engaged (return: seen day 1), C new engaged (not return), D not engaged
+        line("10.0.0.1", CHROME, "/a", day="2026-11-02"), line("10.0.0.1", CHROME, "/b", day="2026-11-02"),
         line("10.0.0.1", CHROME, "/s.css", day="2026-11-02"),
         line("10.0.0.2", CHROME, "/", day="2026-11-02", referer="https://t.co/x"),
-        line("10.0.0.3", CHROME, "/s.css", day="2026-11-02"),
+        line("10.0.0.3", CHROME, "/", day="2026-11-02"), line("10.0.0.3", CHROME, "/s.css", day="2026-11-02"),
         line("10.0.0.2", IPHONE, "/", day="2026-11-02"),       # same ip, other UA = other source
         # day 3: A again with a different UA = new source; C returns
-        line("10.0.0.1", IPHONE, "/s.css", day="2026-11-03"),
+        line("10.0.0.1", IPHONE, "/", day="2026-11-03"), line("10.0.0.1", IPHONE, "/s.css", day="2026-11-03"),
         line("10.0.0.3", CHROME, "/", day="2026-11-03", referer="https://t.co/y"),
     ]
     log_path = write_log(tmp_path / "access.log", lines)
@@ -334,7 +335,7 @@ def test_other_hosts_are_ignored_and_status_buckets(tmp_path: Path):
     assert d["status"] == {"2xx": 2, "3xx": 1, "4xx": 1, "5xx": 1}
     assert res["parse"]["parsed"] == 6
     assert set(res) == {"host", "generated", "window", "targets", "parse", "days", "totals"}
-    assert set(d) == {"requests_raw", "status", "classes", "humans", "go_only_excluded", "agents", "crawlers", "scanners", "targets",
+    assert set(d) == {"requests_raw", "status", "classes", "humans", "go_only_excluded", "no_page_excluded", "drive_by_not_engaged", "agents", "crawlers", "scanners", "targets",
                       "top_pages", "referers", "by_src"}
     assert d["by_src"] == {} and res["totals"]["by_src"] == {}
     assert "## Sources by src" not in sm.to_markdown(res)
@@ -518,3 +519,35 @@ def test_go_only_browser_sources_are_not_people(tmp_path):
     assert d["targets"]["/go/"]["unknown"]["sources"] == 3
     assert d["targets"]["/go/vote/"]["human"]["requests"] == 1
     assert d["targets"]["/go/vote/"]["unknown"]["requests"] == 2
+
+
+def test_asset_only_browser_sources_are_not_people(tmp_path):
+    """agentsmd 13–16.11: thousands of browser-UA sources asked only for /favicon.svg (and /go/) and were counted engaged."""
+    lines = [
+        line("198.51.100.1", CHROME, "/"), line("198.51.100.1", CHROME, "/favicon.svg"),           # a person
+        line("198.51.100.2", IPHONE, "/favicon.svg", referer="https://t.co/x"),                    # external referer: kept
+        line("192.0.2.21", CHROME, "/favicon.svg"), line("192.0.2.21", CHROME, "/go/abc/"),        # favicon + /go/: not a person
+        line("192.0.2.22", CHROME, "/favicon.svg"),                                                 # favicon only
+        line("192.0.2.23", CHROME, "/go/vote/x/up/"),                                               # /go/ only
+    ]
+    out = sm.run([write_log(tmp_path / "access.log", lines)], HOST, targets=["/go/"])
+    d = out["days"]["2026-11-03"] if isinstance(out["days"], dict) else out["days"][0]
+    assert d["humans"]["sources"] == 2 and d["humans"]["engaged"] == 2
+    assert d["no_page_excluded"] == 2 and d["go_only_excluded"] == 1
+    assert d["classes"]["unknown"]["sources"] == 3
+
+
+def test_one_deep_page_out_of_nowhere_is_not_engaged(tmp_path):
+    """agentsmd 13–16.11: proxy fleets opened one /repo/<name>/ each, loaded the CSS, no referer: 1 400–3 800 a day."""
+    lines = [
+        line("192.0.2.31", CHROME, "/repo/a/b/"), line("192.0.2.31", CHROME, "/style.css"),            # scraper
+        line("192.0.2.32", CHROME, "/repo/c/d/"), line("192.0.2.32", CHROME, "/style.css"),            # scraper
+        line("198.51.100.5", CHROME, "/repo/a/b/?src=x"), line("198.51.100.5", CHROME, "/style.css"),  # our post
+        line("198.51.100.6", CHROME, "/repo/e/f/", referer="https://www.google.com/"),                 # search
+        line("198.51.100.7", CHROME, "/"), line("198.51.100.7", CHROME, "/style.css"),                 # typed the site
+        line("198.51.100.8", CHROME, "/repo/g/"), line("198.51.100.8", CHROME, "/lang/go/"),
+        line("198.51.100.8", CHROME, "/style.css"),                                                     # two pages
+    ]
+    out = sm.run([write_log(tmp_path / "access.log", lines)], HOST)
+    d = out["days"]["2026-11-03"]
+    assert d["humans"]["sources"] == 6 and d["humans"]["engaged"] == 4 and d["drive_by_not_engaged"] == 2
