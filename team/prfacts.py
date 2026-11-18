@@ -66,7 +66,32 @@ def changes_from_diff(changes: list[str] | None, diff_files: list[str]) -> tuple
     return (list(diff_files), absent) if absent else (list(changes or []), [])
 
 
-def render(diff_stat: str, diff_files: list[str], test_output: str | None, claimed: list[str], canary: str = "pending") -> str:
+ALWAYS_ALLOWED = ("tests/", "CHANGELOG.md", "SCHEME.md")
+
+
+def scope_paths(scope: str | None) -> list[str]:
+    """File paths named in the task's scope text (URLs ignored)."""
+    return claimed_files("", [str(scope or "")])
+
+
+def out_of_scope(scope: str | None, diff_files: list[str]) -> list[str]:
+    """Diff files not named in the task scope (T-0167). tests/, CHANGELOG.md, SCHEME.md are always allowed.
+    A scope naming no file path declares nothing to compare with: no result. Warn-only; never blocks."""
+    named = scope_paths(scope)
+    if not named:
+        return []
+    out = []
+    for f in diff_files:
+        if f in ALWAYS_ALLOWED or f.startswith("tests/"):
+            continue
+        if any(f == n or f.endswith("/" + n) or (("/" not in n) and f.rsplit("/", 1)[-1] == n) for n in named):
+            continue
+        out.append(f)
+    return out
+
+
+def render(diff_stat: str, diff_files: list[str], test_output: str | None, claimed: list[str], canary: str = "pending",
+           extra: list[str] | None = None) -> str:
     """The markdown section. `canary` is 'pending' at PR open, then the dispatcher edits the PR with the result."""
     lines = [HEADING, "", f"Computed by the dispatcher from `git diff --stat` against the base branch and the test run; not taken from the developer's text.", "",
              f"**Files changed ({len(diff_files)}):**"]
@@ -82,13 +107,16 @@ def render(diff_stat: str, diff_files: list[str], test_output: str | None, claim
     bad = mismatches(claimed, diff_files)
     if bad:
         lines += ["", "**MISMATCH:** the developer's `changes` list names files that are not in the diff: " + ", ".join(f"`{b}`" for b in bad)]
+    if extra:
+        lines += ["", "out-of-scope files: " + ", ".join(f"`{b}`" for b in extra)]
     return "\n".join(lines)
 
 
-def build(diff_stat: str, diff_files: list[str], test_output: str | None, res: dict[str, Any], canary: str = "pending") -> tuple[str, list[str]]:
+def build(diff_stat: str, diff_files: list[str], test_output: str | None, res: dict[str, Any], canary: str = "pending",
+          scope: str | None = None) -> tuple[str, list[str]]:
     """(markdown, mismatched files)."""
     claimed = claimed_files(res.get("summary", ""), res.get("changes"))
-    return render(diff_stat, diff_files, test_output, claimed, canary), mismatches(claimed, diff_files)
+    return render(diff_stat, diff_files, test_output, claimed, canary, out_of_scope(scope, diff_files)), mismatches(claimed, diff_files)
 
 
 def with_canary(body: str, canary: str) -> str:
