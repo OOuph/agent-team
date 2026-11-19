@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-19
 
+- T-0181: reviewer.md and editor.md say plain `team-fetch <url>` shows the page head, `--tail`/`--head` count characters (N about 500 or more for a footer), `--offset K` reads the middle, 375 px is `not observable`; reviewer.md merges four `--grep` denied-character bullets into one (F-0232, F-0233, F-0234, F-0235, F-0237, F-0238). `team/roles/reviewer.md`, `team/roles/editor.md`. No change to `team/fetch.py`, so SCHEME.md is unchanged.
 - T-0175: `team-fetch --head N` prints the first N body chars with a `[head: first N of M chars]` line; usage line and cut notice say `--tail`/`--head` count characters, not lines; reviewer.md, editor.md, SCHEME.md reviewer row updated (F-0232, F-0233, F-0234, F-0235). `team/fetch.py`, `tests/test_fetch.py`.
 - T-0170: `test_canary_with_real_output_passes` failed before 07:00 UTC because the canary's dry-run cycle writes its digest only after the digest hour; the test's `team.yaml` fixture now sets `digest_hours_utc: [0]`, so the test no longer depends on the clock. Canary code unchanged; the empty-result test is untouched (OBS-0300). `tests/test_canary_output.py`.
 
