@@ -46,6 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     argv = sys.argv[1:] if argv is None else argv
     grep: str | None = None
     tail: int | None = None
+    head: int | None = None
     around: int | None = None
     offset = 0
     count = False
@@ -65,6 +66,8 @@ def main(argv: list[str] | None = None) -> int:
             grep = "<" + argv[i + 1].strip("<>/ "); tag = True; i += 2; continue
         if argv[i] == "--tail" and i + 1 < len(argv):
             tail = int(argv[i + 1]); i += 2; continue
+        if argv[i] == "--head" and i + 1 < len(argv):
+            head = int(argv[i + 1]); i += 2; continue
         if argv[i] == "--around" and i + 1 < len(argv):
             around = int(argv[i + 1]); i += 2; continue
         if argv[i] == "--offset" and i + 1 < len(argv):
@@ -77,7 +80,7 @@ def main(argv: list[str] | None = None) -> int:
             count = True; i += 1; continue
         rest.append(argv[i]); i += 1
     if len(rest) != 1 or not rest[0].startswith("http"):
-        print("usage: team-fetch <url> [--grep TEXT | --tag NAME [--around N] [--count]] [--tail N] [--offset K] [--json-path a.b[0].c [--count]] [--json-keys]", file=sys.stderr)
+        print("usage: team-fetch <url> [--grep TEXT | --tag NAME [--around N] [--count]] [--tail N | --head N] (--tail/--head count characters, not lines) [--offset K] [--json-path a.b[0].c [--count]] [--json-keys]", file=sys.stderr)
         return 2
     url = rest[0]
     allowed = [h.strip().lower() for h in os.environ.get("TEAM_ALLOWED_HOSTS", "").split(",") if h.strip()]
@@ -136,11 +139,15 @@ def main(argv: list[str] | None = None) -> int:
         print(f"[tail: last {tail} of {len(body)} chars]")
         print(body[-tail:])
         return 0
+    if head:
+        print(f"[head: first {min(head, len(body))} of {len(body)} chars]")
+        print(body[:head])
+        return 0
     chunk = body[offset:offset + max_body]
     print(chunk)
     rest_chars = len(body) - offset - len(chunk)
     if rest_chars > 0:
-        print(f"\n… [cut: {rest_chars} more chars after char {offset + len(chunk)}; use --offset K, --grep TEXT [--around N] or --tail N to see the rest, or fetch a JSON address]")
+        print(f"\n… [cut: {rest_chars} more chars after char {offset + len(chunk)}; use --offset K, --grep TEXT [--around N] or --tail N / --head N (characters, not lines) to see the rest, or fetch a JSON address]")
     return 0
 
 
