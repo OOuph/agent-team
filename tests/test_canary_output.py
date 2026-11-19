@@ -12,7 +12,8 @@ REPO = Path(__file__).resolve().parent.parent
 
 def _setup(tmp_path):
     st = _settings(tmp_path)
-    (st.root / "team.yaml").write_text("paths:\n  products_dir: products\n  data_dir: data\n  repos_dir: data/repos\n", encoding="utf-8")
+    (st.root / "team.yaml").write_text("paths:\n  products_dir: products\n  data_dir: data\n  repos_dir: data/repos\n"
+        "cycle:\n  digest_hours_utc: [0]   # T-0170: digest always due, so the dry-run canary result does not depend on the UTC hour\n", encoding="utf-8")
     p = _product(st)
     return st, p, Cycle(st, p, FakeRunner(), "c9")
 
