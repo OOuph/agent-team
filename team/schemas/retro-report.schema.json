@@ -23,6 +23,7 @@
     }
    }
   },
+  "owner_question": {"type": "string", "maxLength": 200, "description": "the one question for the owner, or empty; shown as the last line of the Owner digest"},
   "no_action": {"type": "array", "items": {"type": "string", "maxLength": 300}, "description": "friction read as noise or one-off, and why"}
  }
 }

@@ -99,7 +99,8 @@ def retro_prompt(st: Settings, reg: friction.Register, previous: list[str], exis
         "## Rules\n- Each proposal cites friction ids as evidence and names the file(s) to change and acceptance criteria that a developer "
         "can verify by running the tests or reading the file.\n- risk: low = role card text, docs, config values; medium = schema or tool "
         "behaviour; high = dispatcher code or state machine.\n- No proposal without at least 2 friction records or one blocking record. If the "
-        "register is empty or noise, say so in no_action and propose nothing.\n- English, terse.",
+        "register is empty or noise, say so in no_action and propose nothing.\n- owner_question: at most one question that only the owner can "
+        "answer, else empty.\n- English, terse.",
     ])
 
 
@@ -199,7 +200,7 @@ def spend_section(st: Settings, now: datetime | None = None, cap: float | None =
     return "\n".join(lines), True
 
 
-DIGEST_MAX_LINES = 12
+DIGEST_MAX_LINES = 5  # body lines under '## Owner digest' (T-0185): merged, waiting, rolled back, spend, one question
 
 
 def fetch_prs(repo: str, now: datetime | None = None) -> dict[str, Any] | None:
@@ -239,8 +240,8 @@ def _waiting_reason(pr: dict[str, Any], protected: list[str]) -> str | None:
 
 
 def owner_digest(st: Settings, prs: dict[str, Any] | None, records: list[dict[str, Any]], now: datetime | None = None,
-                 cap: float | None = None) -> str:
-    """'## Owner digest': at most DIGEST_MAX_LINES lines, four items in fixed order (merged PRs 24 h, PRs waiting for a human,
+                 cap: float | None = None, question: str | None = None) -> str:
+    """'## Owner digest': at most DIGEST_MAX_LINES body lines, four items in fixed order (merged PRs 24 h, PRs waiting for a human,
     rollbacks 24 h, spend today vs cap), an explicit 'none' for an empty item and 'unknown' where the source cannot be read."""
     from . import billing
     now = now or datetime.now(timezone.utc)
@@ -278,8 +279,11 @@ def owner_digest(st: Settings, prs: dict[str, Any] | None, records: list[dict[st
                    else "- Spend today: unknown (no record in the billing ledger)")
     except (OSError, ValueError, TypeError, KeyError):
         spend_l = "- Spend today: unknown (billing ledger not readable)"
-    lines = ["## Owner digest", "", merged_l, wait_l, rb_l, spend_l]
-    return "\n".join(lines[:DIGEST_MAX_LINES]) + "\n"
+    body = [merged_l, wait_l, rb_l, spend_l]
+    q = " ".join(str(question or "").split())
+    if q:
+        body.append("- Question for the owner: " + short(q if len(q) <= 200 else q[:197] + "..."))
+    return "\n".join(["## Owner digest", ""] + body[:DIGEST_MAX_LINES]) + "\n"
 
 
 def _norm_title(t: Any) -> str:
@@ -359,7 +363,7 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
     props = rep.get("proposals") or []
     spend_md, spend_ok = spend_section(st)
     try:
-        digest_md = owner_digest(st, fetch_prs(repo), reg.since(1))
+        digest_md = owner_digest(st, fetch_prs(repo), reg.since(1), question=rep.get("owner_question"))
     except Exception as exc:  # noqa: BLE001
         log.warning("retro: owner digest failed: %s", exc)
         digest_md = "## Owner digest\n\n- unknown (digest could not be built)\n"
