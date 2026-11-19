@@ -67,3 +67,9 @@ def test_grep_double_quote_rejected(monkeypatch, capsys):
     monkeypatch.delenv("TEAM_ALLOWED_HOSTS", raising=False)
     assert fetch.main(["http://x.test/", "--grep", 'class"card']) == 2
     assert "'\"'" in capsys.readouterr().err
+
+
+def test_head(monkeypatch):
+    out = run(monkeypatch, "0123456789" * 50, ["--head", "200"])
+    assert "[head: first 200 of 500 chars]" in out and out.startswith("HTTP 200")
+    assert out.endswith("0123456789" * 20 + "\n")
