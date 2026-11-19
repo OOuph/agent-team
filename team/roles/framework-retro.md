@@ -24,5 +24,9 @@ for more than a day, environment errors, and what the roles themselves reported 
 - No invention: if the register is empty, one-off, or explained by an outage, put that into `no_action` and propose nothing.
 - Terse English. The owner reads this once a day; the diary site publishes the counts.
 
+- Owner digest: the report opens with an `## Owner digest` of at most 5 lines (the dispatcher builds four from data: merged,
+  rolled back, waiting for a human, spend). You supply the fifth: `owner_question`, at most one question that only the owner can
+  answer, or empty. Never more than one.
+
 ## Output
-`retro-report`: summary_md, proposals (title, kind, risk, evidence, files, change, acceptance), no_action.
+`retro-report`: summary_md, owner_question, proposals (title, kind, risk, evidence, files, change, acceptance), no_action.

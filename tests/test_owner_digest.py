@@ -25,7 +25,7 @@ def test_digest_full(monkeypatch, tmp_path):
     recs = [{"kind": "rollback", "ts": "2026-11-08T05:00:00+00:00", "summary": "code rolled back"}]
     md = _digest(monkeypatch, _st(tmp_path), prs, recs, {"2026-11-08": 3.5})
     lines = md.strip().splitlines()
-    assert lines[0] == "## Owner digest" and len(lines) <= 12
+    assert lines[0] == "## Owner digest" and len(lines) <= 7
     pos = [next(i for i, l in enumerate(lines) if k in l) for k in ORDER]
     assert pos == sorted(pos)
     assert "#7 Add thing" in md and "#8" in md and "#9" in md and "#10" not in md
@@ -44,4 +44,19 @@ def test_digest_none_and_unknown(monkeypatch, tmp_path):
 def test_digest_line_limit(monkeypatch, tmp_path):
     prs = {"merged": [{"number": i, "title": "t" * 200} for i in range(30)], "open": []}
     md = _digest(monkeypatch, _st(tmp_path), prs, [], {"2026-11-08": 1})
-    assert len(md.strip().splitlines()) <= 12 and "+26 more" in md
+    assert len(md.strip().splitlines()) <= 7 and "+26 more" in md
+
+
+def test_digest_five_lines_with_one_question(monkeypatch, tmp_path):
+    md = _digest(monkeypatch, _st(tmp_path), {"merged": [], "open": []}, [], {"2026-11-08": 1})
+    assert len([l for l in md.splitlines()[2:] if l]) == 4
+    monkeypatch.setattr(billing, "load", lambda s: {"spend": {"2026-11-08": 1}})
+    md = retro.owner_digest(_st(tmp_path), {"merged": [], "open": []}, [], now=NOW, cap=10.0, question="Raise cap?\nPlease")
+    body = md.splitlines()[2:]
+    assert len(body) == 5 and body[-1] == "- Question for the owner: Raise cap? Please"
+
+
+def test_card_states_five_line_rule():
+    from pathlib import Path
+    card = (Path(__file__).resolve().parent.parent / "team/roles/framework-retro.md").read_text()
+    assert "at most 5 lines" in card and "owner_question" in card
