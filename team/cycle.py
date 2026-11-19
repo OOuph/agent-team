@@ -709,7 +709,10 @@ class Cycle:
                                   force=True, assignee_run=None, replan={"state": "asked", "at": utcnow(), "failures": n})
             self.store.event("task.replan_asked", t["id"], "dispatcher", {"failures": n})
         else:
-            self.escalate_stuck(t, f"stuck again after a replan on this chain ({n} failed attempts)", n)
+            hand = ""
+            if replan.is_framework_fix(t):
+                hand = f"; framework-fix task: hand-apply the change to the file named in its scope ({_short_text(t.get('scope'), 160)})"
+            self.escalate_stuck(t, f"stuck again after a replan on this chain ({n} failed attempts){hand}", n)
         return True
 
     def escalate_stuck(self, t: dict[str, Any], why: str, n: int, probes: list[dict[str, Any]] | None = None) -> None:

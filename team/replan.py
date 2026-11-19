@@ -120,7 +120,25 @@ def needs_attention(store: Any, t: dict[str, Any], threshold: int) -> str | None
         return None                     # already in a replan (or the owner answered): the state machine owns it
     if chain_failures(store, t) < threshold:
         return None
-    return "owner" if replanned_before(store, t) else "replan"
+    if replanned_before(store, t) or (is_framework_fix(t) and same_title_replanned(store, t)):
+        return "owner"
+    return "replan"
+
+
+def is_framework_fix(t: dict[str, Any]) -> bool:
+    return str(t.get("title") or "").lstrip().lower().startswith("[retro]")
+
+
+def _norm_title(t: dict[str, Any]) -> str:
+    return " ".join(str(t.get("title") or "").lower().split())
+
+
+def same_title_replanned(store: Any, t: dict[str, Any]) -> bool:
+    """A [retro] (framework-fix) task re-created under a new id without `continues`: an earlier task with the same title
+    already went through a replan, so the owner gets it instead of a second replan (T-0186, F-0237, F-0238, F-0240)."""
+    key = _norm_title(t)
+    return any(x.get("id") != t.get("id") and _norm_title(x) == key and (x.get("replan") or {}).get("state")
+               for x in store.tasks())
 
 
 def validate(rp: dict[str, Any]) -> list[str]:

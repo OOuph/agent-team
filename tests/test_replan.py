@@ -153,3 +153,22 @@ def test_no_probe_works_goes_to_owner_and_answer_restarts_once(tmp_path: Path):
     assert r.calls.count("developer") == n + 1                                 # the owner's direction runs
     t = s.task(t["id"])
     assert t["replan"]["state"] == "owner" and "drop tomorrow's prices" in t["scope"]
+
+
+def test_retro_task_stuck_twice_one_owner_question_no_second_replan(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    a = _mk(s, "[retro] Fix the fetch tool")
+    a["replan"] = {"state": "done"}                       # the first one went through a replan
+    s.save_task(a)
+    b = _mk(s, "[retro] Fix the fetch tool", problem="same again")
+    b["results"] = [_partial(i) for i in range(1, 4)]
+    s.save_task(b)
+    cy = Cycle(st, p, NoProbeWorks(), "c1")
+    assert cy.guard_replan(s.task(b["id"])) is True
+    assert cy.guard_replan(s.task(b["id"])) is False      # not stopped or replanned a second time
+    t = s.task(b["id"])
+    assert t["replan"]["state"] == "exhausted"
+    qs = [q for q in s.questions(["open"]) if b["id"] in (q.get("blocks") or [])]
+    assert len(qs) == 1 and "hand-apply" in qs[0]["question"]
