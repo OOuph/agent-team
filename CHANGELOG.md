@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-19
+
+- T-0170: `test_canary_with_real_output_passes` failed before 07:00 UTC because the canary's dry-run cycle writes its digest only after the digest hour; the test's `team.yaml` fixture now sets `digest_hours_utc: [0]`, so the test no longer depends on the clock. Canary code unchanged; the empty-result test is untouched (OBS-0300). `tests/test_canary_output.py`.
+
 ## 2026-11-18
 
 - T-0167: PR facts block gets `out-of-scope files: ...` when the diff touches files not named in the task's scope (`tests/`, CHANGELOG.md, SCHEME.md always allowed) and a `reported` friction record is written; warn-only, blocks neither merge nor canary (voice:2026-11-18:P5, F-0189). `team/prfacts.py`, `team/cycle.py`, `team/friction.py`, `tests/test_out_of_scope.py`, SCHEME.md.
