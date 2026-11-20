@@ -3,7 +3,7 @@
 # loop can fast-forward it after a merge): this script pushes the local main and fast-forwards the server checkout.
 # Product state (products/<slug>/backlog… , team.db) and data/ are not in git and are never touched.
 set -euo pipefail
-HOST="${TEAM_HOST:-reservememes}"
+HOST="${TEAM_HOST:-agentteam}"
 DEST="${TEAM_DEST:-agent-team/dispatcher}"
 cd "$(dirname "$0")"
 if [ -n "$(git status --porcelain)" ]; then

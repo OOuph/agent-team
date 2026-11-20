@@ -1,0 +1,15 @@
+7 * * * * bash /home/ubuntu/agent-team/dispatcher/run-cycle.sh
+0 2 * * * bash /home/ubuntu/agent-team/dispatcher/backup-state.sh
+25 7 * * * bash /home/ubuntu/agent-team/dispatcher/publish-diary.sh >> /home/ubuntu/agent-team/dispatcher/data/diary.log 2>&1
+*/30 * * * * bash /home/ubuntu/agent-team/dispatcher/watchdog.sh >> /home/ubuntu/agent-team/dispatcher/data/watchdog.log 2>&1
+0 4 * * * TIMEOUT_S=6600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh agentsmd-tracker --max-seconds 5400 >> /dev/null 2>&1
+0 6 * * * TIMEOUT_S=1500 bash /home/ubuntu/agent-team/dispatcher/build-site.sh release-radar >> /dev/null 2>&1
+15 13 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha >> /dev/null 2>&1
+45 13 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha >> /dev/null 2>&1
+30 7,19 * * * bash /home/ubuntu/agent-team/dispatcher/report-roles.sh >> /dev/null 2>&1
+15 8 * * * bash /home/ubuntu/agent-team/dispatcher/autonomy-check.sh >> /dev/null 2>&1
+30 14 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha >> /dev/null 2>&1
+0 16 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha >> /dev/null 2>&1
+10 0 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha --offline >> /dev/null 2>&1
+10 23 * * * TIMEOUT_S=600 bash /home/ubuntu/agent-team/dispatcher/build-site.sh luz-amanha --offline >> /dev/null 2>&1
+20 5 * * * cd /home/ubuntu/agent-team/dispatcher && set -a && . ./.env && set +a && .venv/bin/team gsc >> data/logs/gsc.log 2>&1

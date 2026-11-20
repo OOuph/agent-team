@@ -1,0 +1,11 @@
+[Unit]
+Description=Review formachines every two hours
+
+[Timer]
+OnCalendar=*-*-* 01/2:15:00 Europe/Lisbon
+Persistent=true
+AccuracySec=1s
+Unit=formachines-external-critic.service
+
+[Install]
+WantedBy=timers.target
