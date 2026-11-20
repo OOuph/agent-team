@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-20
+
+- T-0192: retro report gets an advisory `## Rules that did not help`: merged tasks citing F-xxxx whose same-kind friction count after the merge is not lower than before (voice:2026-11-18:P4). No role card is edited. `team/retro.py`, `tests/test_rules_did_not_help.py`, SCHEME.md.
+
 ## 2026-11-19
 
 - T-0186: a `[retro]` (framework-fix) task stuck again after a replan, including one re-created under a new id with the same title, goes straight to one owner question that names the file to hand-apply; no second replan (F-0237, F-0238, F-0240). `team/replan.py`, `team/cycle.py`, `tests/test_replan.py`, SCHEME.md.
