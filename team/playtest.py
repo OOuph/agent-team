@@ -113,8 +113,7 @@ def health_ok(url: str, timeout: float = 2.0) -> bool:
 
 def live_base_url(product: Product) -> str | None:
     """The deployed host when there is one: `deploy.mode` not pending and a site_base."""
-    mode = str((product.raw.get("deploy") or {}).get("mode") or "pending")
-    if mode != "pending" and product.site_base:
+    if product.deploy_mode != "pending" and product.site_base:
         return product.site_base
     return None
 

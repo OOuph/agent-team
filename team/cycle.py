@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, voice
+from . import geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, servicedeploy, voice
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
@@ -1036,7 +1036,34 @@ class Cycle:
             self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
         self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
+        self.deploy_after_merge(t, sha)
         return True
+
+    def deploy_after_merge(self, t: dict[str, Any], sha: str) -> bool:
+        """Slice 5 (owner 20.11): a game product with `deploy.mode: service` gets the merged commit deployed at once
+        (deploy-service.sh on the droplet: release, health, nginx switch, rollback on failure). Success → the task stays
+        `released` and the tester plays the deployed host. Failure → the live release is untouched (the script never
+        switches before health), the task is `blocked` with a PO question and one environment_error observation; the
+        deploy log is kept under data/work. `pending` / `git_pull` / dry run deploy nothing. Returns True when deployed."""
+        if self.dry_run or not servicedeploy.enabled(self.p):
+            return False
+        log_path = self.p.work_dir / self.cycle_id / f"deploy-{t['id']}.log"
+        res = servicedeploy.run(self.p, sha=sha, log_path=log_path)
+        if res.ok or res.skipped:
+            self.store.event("deploy.ok", t["id"], "dispatcher", {"sha": sha[:12], "url": res.url, "port": res.port, "colour": res.colour,
+                                                                  "skipped": res.skipped, "duration_s": round(res.duration_s, 1)})
+            t = self.store.task(t["id"]) or t
+            t["deployed_sha"], t["deployed_url"] = sha, res.url or self.p.site_base
+            self.store.save_task(t)
+            return True
+        self.store.event("deploy.failed", t["id"], "dispatcher", {"sha": sha[:12], "exit": res.exit_code, "error": res.error[:300], "log": str(log_path)})
+        self.store.add_observation({**servicedeploy.result_card(self.p, t, res), "run_id": f"{self.cycle_id}-deploy",
+                                    "fingerprint": fingerprint("deploy", "failed", "", t["id"])})
+        self.store.transition(t["id"], "blocked", "dispatcher", f"deploy failed: {res.summary()[:260]}", force=True)
+        self.store.ask(from_="developer", to="po", question=f"Task {t['id']} merged ({sha[:10]}) but did not deploy: {res.summary()[:500]} "
+                       f"The previous release stays live. Re-open the task for the developer (build or health path), or ask the owner if the host is the problem "
+                       f"(log: {log_path}).", task_id=t["id"], blocks=[t["id"]])
+        return False
 
     def exec_game_designer(self, t: dict[str, Any], run_id: str) -> bool:
         """Game designer (owner 20.11, game profile): writes GAME-DESIGN.md and balance tables as a `design-spec`; the

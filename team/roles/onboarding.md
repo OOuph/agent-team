@@ -43,8 +43,9 @@ team does meanwhile, and what to hand over — the NAME of a secret or a host na
   did not grant is `state: deferred` with `return_condition`. Acceptance criteria are scenarios a tester can run in a
   browser («two tabs join room ABCD; a move in tab 1 appears in tab 2 within 1 s») or `repo_only` checks (tests pass).
 - `product`: profile `game`, `stage: M0`, `repo.kind: service` with run/build/test commands and health path for the
-  chosen stack, `deploy.mode: pending` until a host is granted, `phase_gates` (marketing, seo, geo, voice from M2;
-  persona from M1).
+  chosen stack, `deploy.mode: pending` until a host is granted (the owner then registers the game on the droplet with
+  `deploy/service/add-service.sh` and switches to `deploy.mode: service`; the dispatcher deploys every merge from there),
+  `phase_gates` (marketing, seo, geo, voice from M2; persona from M1).
 - `owner_summary_md` in Russian: what we build first, what waits for which account, the daily cost.
 
 ## Rules

@@ -1,0 +1,75 @@
+# agent-team service: __HOST__ (slug __SLUG__) — a long-running game server behind nginx.
+# Rendered by render-vhost.sh (TEMPLATE=/etc/agent-team/service.conf.template) from add-service.sh:
+#   __HOST__ -> FQDN, __SLUG__ -> slug, __INDEXNOW_KEY__ -> the shared IndexNow key (unused by a game, kept for the renderer).
+# The upstream `svc___SLUG__` is a separate file, /etc/nginx/conf.d/agent-team-svc-__SLUG__.conf, rewritten by
+# deploy-service.sh on every deploy (blue/green: it points at the live colour's port). This vhost never changes per deploy.
+# Certificate obtained by certbot --nginx; the http-only bootstrap block lives in add-service.sh.
+
+map $http_upgrade $svc___SLUG___connection {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80;
+    listen [::]:80;
+    server_name __HOST__;
+
+    access_log /var/log/nginx/access.log full;
+
+    location /.well-known/acme-challenge/ { root /var/www/acme; }
+    location / { return 301 https://$host$request_uri; }
+}
+
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name __HOST__;
+
+    ssl_certificate     /etc/letsencrypt/live/__HOST__/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/__HOST__/privkey.pem;
+    include /etc/letsencrypt/options-ssl-nginx.conf;
+    ssl_dhparam /etc/letsencrypt/ssl-dhparams.pem;
+
+    access_log /var/log/nginx/access.log full;
+
+    include /etc/nginx/snippets/agent-team-headers.conf;
+
+    gzip on;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types text/plain text/css application/json application/javascript image/svg+xml;
+
+    client_max_body_size 1m;
+
+    # Everything — pages, /healthz, /_team/metrics.json (the server computes its own metrics) and the WebSocket —
+    # goes to the live release. Long read timeout: a WebSocket stays open for the whole round.
+    location / {
+        proxy_pass http://svc___SLUG__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $svc___SLUG___connection;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+        proxy_buffering off;
+        include /etc/nginx/snippets/agent-team-headers.conf;
+    }
+
+    # The dispatcher's metrics file must never be cached by a browser or a proxy.
+    location = /_team/metrics.json {
+        proxy_pass http://svc___SLUG__;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        add_header Cache-Control "no-store" always;
+        include /etc/nginx/snippets/agent-team-headers.conf;
+    }
+
+    location = /__INDEXNOW_KEY__.txt {
+        alias /etc/agent-team/indexnow-keyfile.txt;
+        default_type text/plain;
+    }
+}
