@@ -1,11 +1,12 @@
 # agent-team service: __HOST__ (slug __SLUG__) — a long-running game server behind nginx.
 # Rendered by render-vhost.sh (TEMPLATE=/etc/agent-team/service.conf.template) from add-service.sh:
-#   __HOST__ -> FQDN, __SLUG__ -> slug, __INDEXNOW_KEY__ -> the shared IndexNow key (unused by a game, kept for the renderer).
-# The upstream `svc___SLUG__` is a separate file, /etc/nginx/conf.d/agent-team-svc-__SLUG__.conf, rewritten by
+#   __HOST__ -> FQDN, __SLUG__ -> slug, __SLUG_U__ -> slug with '-' replaced by '_' (nginx variable names allow no '-';
+#   deploy-service.sh names the upstream the same way), __INDEXNOW_KEY__ -> the shared IndexNow key (unused by a game, kept for the renderer).
+# The upstream `svc___SLUG_U__` is a separate file, /etc/nginx/conf.d/agent-team-svc-__SLUG__.conf, rewritten by
 # deploy-service.sh on every deploy (blue/green: it points at the live colour's port). This vhost never changes per deploy.
-# Certificate obtained by certbot --nginx; the http-only bootstrap block lives in add-service.sh.
+# Certificate obtained by certbot --webroot (/var/www/acme); the http-only bootstrap block lives in add-service.sh.
 
-map $http_upgrade $svc___SLUG___connection {
+map $http_upgrade $svc___SLUG_U___connection {
     default upgrade;
     ''      close;
 }
@@ -45,10 +46,10 @@ server {
     # Everything — pages, /healthz, /_team/metrics.json (the server computes its own metrics) and the WebSocket —
     # goes to the live release. Long read timeout: a WebSocket stays open for the whole round.
     location / {
-        proxy_pass http://svc___SLUG__;
+        proxy_pass http://svc___SLUG_U__;
         proxy_http_version 1.1;
         proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection $svc___SLUG___connection;
+        proxy_set_header Connection $svc___SLUG_U___connection;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -61,7 +62,7 @@ server {
 
     # The dispatcher's metrics file must never be cached by a browser or a proxy.
     location = /_team/metrics.json {
-        proxy_pass http://svc___SLUG__;
+        proxy_pass http://svc___SLUG_U__;
         proxy_http_version 1.1;
         proxy_set_header Host $host;
         add_header Cache-Control "no-store" always;
