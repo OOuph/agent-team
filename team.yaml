@@ -25,6 +25,7 @@ claude:
     reporter: sonnet                # 12-hour role report to the owner (team report)
     deputy: opus                    # deputy owner: answers owner questions by DEPUTY.md while the owner is away
     voice: opus                     # owner 07.11: weekly voice-of-user research, the PO ranks hypotheses on it
+    onboarding: opus                # owner 20.11: brief → questions and accounts → VISION and backlog (team onboard), twice per product
 
 billing:                           # owner 04.11: "лимит расхода 100 в день, общий на всех; подписку не учитывай"
   daily_cap_usd_all: 100.0         # credits (real money) spent per UTC day by the whole team; runs inside the subscription are not counted

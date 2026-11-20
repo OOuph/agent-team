@@ -48,8 +48,8 @@ def due_questions(st: Settings, store: Store, now: datetime | None = None) -> li
     after = timedelta(hours=float(settings(st).get("after_h", DEFAULT_AFTER_H)))
     out = []
     for q in store.questions(["open"]):
-        if q.get("to") != "owner":
-            continue
+        if q.get("to") != "owner" or q.get("from") == "onboarding":
+            continue                              # onboarding (accounts, goals) is the owner's alone: no deputy answer
         c = parse_ts(q.get("created"))
         if c and now - c >= after:
             out.append(q)

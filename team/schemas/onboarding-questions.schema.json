@@ -1,0 +1,45 @@
+{
+ "title": "onboarding-questions",
+ "description": "Step 1 of `team onboard`: the onboarding role reads the owner's brief and returns ONE batch of clarifying questions and the list of accounts/access the team will need, each with its reason. The dispatcher renders it as products/<slug>/onboarding/questions.md for the owner to fill in.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["summary", "questions", "accounts", "assumptions"],
+ "properties": {
+  "summary": {"type": "string", "maxLength": 600, "description": "2–3 sentences: how the team understood the product, in the language of the brief"},
+  "proposed_name": {"type": "string", "maxLength": 80},
+  "questions": {
+   "type": "array", "maxItems": 12,
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["id", "topic", "question", "why", "default"],
+    "properties": {
+     "id": {"type": "string", "pattern": "^Q[0-9]{1,2}$"},
+     "topic": {"type": "string", "enum": ["players", "loop", "session", "persistence", "platform", "monetization", "audience", "content", "tone", "ops", "scope", "other"]},
+     "question": {"type": "string", "maxLength": 400},
+     "why": {"type": "string", "maxLength": 300, "description": "what decision in VISION / the first milestone depends on the answer"},
+     "options": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 120}},
+     "default": {"type": "string", "maxLength": 200, "description": "the answer applied when the owner leaves the field empty; the most conservative, cheapest, reversible one"}
+    }
+   }
+  },
+  "accounts": {
+   "type": "array", "maxItems": 10,
+   "description": "everything the team does not have and needs: hosting, domain, database, payments, analytics, asset generation, stores. Only what the brief or the milestones actually require.",
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["id", "what", "why", "needed_by", "without_it", "who_creates", "hand_over"],
+    "properties": {
+     "id": {"type": "string", "pattern": "^A[0-9]{1,2}$"},
+     "what": {"type": "string", "maxLength": 200},
+     "why": {"type": "string", "maxLength": 300, "description": "which task or milestone stops without it"},
+     "needed_by": {"type": "string", "maxLength": 40, "description": "milestone id (M0, M1, …) or a date"},
+     "without_it": {"type": "string", "maxLength": 300, "description": "what the team does meanwhile"},
+     "who_creates": {"type": "string", "enum": ["owner", "team"], "description": "team = the roles can set it up themselves inside existing permissions"},
+     "hand_over": {"type": "string", "maxLength": 300, "description": "what to hand over and where: the NAME of the secret in .env on the server, a host name in product.yaml — never a value"}
+    }
+   }
+  },
+  "assumptions": {"type": "array", "maxItems": 10, "items": {"type": "string", "maxLength": 300}, "description": "what the team took for granted without asking; the owner may correct any of them in the answers"},
+  "risks": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 300}}
+ }
+}

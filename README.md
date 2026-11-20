@@ -35,7 +35,12 @@ cp .env.example .env            # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-to
 .venv/bin/team cycle --product all          # cron this hourly: see run-cycle.sh
 ```
 
-Other commands: `team status`, `team tasks <slug>`, `team ask <slug> --text ...`, `team answer`, `team obs`,
+A product that is more than a static site (a networked game) starts from a brief instead: `team onboard my-game --brief brief.md`
+asks one batch of clarifying questions and lists the accounts the team needs with reasons; after you answer in the generated
+file, `team onboard my-game --answers` writes VISION.md, a game-design draft and the first backlog (`--dry-run` runs it on a
+bundled sample without a token). See SCHEME.md §11.
+
+Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team ask <slug> --text ...`, `team answer`, `team obs`,
 `team stop|resume`, `team digest`, `team export-public`, `team friction`, `team retro`.
 
 Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`. Tests: `pytest -q`.
