@@ -143,6 +143,28 @@ def rule_effectiveness(records: list[dict[str, Any]], merged: list[dict[str, Any
     return "\n".join(lines) + "\n"
 
 
+def rules_that_did_not_help(records: list[dict[str, Any]], merged: list[dict[str, Any]]) -> str:
+    """T-0192, advisory: for each merged task citing F-xxxx, count records of the same kind before and after the merge
+    time; list the task when the count after is not lower than before (and not zero). Never edits role cards."""
+    by_id = {str(r.get("id")): r for r in records}
+    lines = ["## Rules that did not help", ""]
+    for t in merged:
+        at = parse_ts(str(t.get("merged_at") or "")) if t.get("merged_at") else None
+        ids = [i for i in _FID.findall(str(t.get("problem") or "")) if i in by_id]
+        if not (at and ids):
+            continue
+        cut = at.isoformat()
+        for kind in dict.fromkeys(str(by_id[i].get("kind")) for i in ids):
+            same = [r for r in records if r.get("kind") == kind]
+            before = sum(1 for r in same if str(r.get("ts") or "") < cut)
+            after = sum(1 for r in same if str(r.get("ts") or "") >= cut)
+            if after > 0 and after >= before:
+                lines.append(f"- {t.get('id')}: kind `{kind}` before {before}, after {after} (advisory: consider retiring this rule)")
+    if len(lines) == 2:
+        lines.append("- none")
+    return "\n".join(lines) + "\n"
+
+
 def merged_rule_tasks(st: Settings, slug: str) -> list[dict[str, Any]]:
     pdir = st.products_dir / slug
     if not slug or not (pdir / "product.yaml").exists():
@@ -339,6 +361,7 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
     issues = open_issues(repo, label) if repo and cfg.get("issues") and not dry_run else []
     titles = [str(i.get("title")) for i in issues]
     eff_md = rule_effectiveness(reg.records, merged_rule_tasks(st, str(cfg.get("product") or "")))
+    eff_md += "\n" + rules_that_did_not_help(reg.records, merged_rule_tasks(st, str(cfg.get("product") or "")))
     prompt = retro_prompt(st, reg, previous, titles, eff_md)
     if dry_run or runner is None:
         (rdir / "prompt-dry-run.md").write_text(prompt, encoding="utf-8")
