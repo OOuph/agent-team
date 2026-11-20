@@ -139,13 +139,8 @@ class Cycle:
     # ------------------------------------------------------------ guards
 
     def stopped(self) -> str | None:
-        for f in (self.p.stop_file, self.st.root / "STOP"):
-            if f.exists():
-                return str(f)
-        if self.p.raw.get("paused"):
-            return "product.yaml: paused"
-        from . import onboard
-        return onboard.not_finished(self.p)      # owner 20.11: a product in onboarding has no VISION yet; the cycle waits
+        from . import cadence
+        return cadence.stop_reason(self.st, self.p)      # STOP files, `paused`, onboarding not finished — shared with `team cycle --due`
 
     def budget_ok(self, cap_run: float) -> bool:
         spent, cap = self.store.spent_today(), self.p.daily_cap

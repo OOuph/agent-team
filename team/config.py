@@ -113,6 +113,27 @@ def stage_index(stage: str) -> int:
     return MILESTONES.index(s) if s in MILESTONES else (len(MILESTONES) if s else -1)
 
 
+CYCLE_EVERY_MIN_RANGE = (5, 60)            # product.yaml `cycle.every_min`: 5 = the fast cron step, 60 = the hourly cron itself
+
+
+def parse_cycle_every_min(raw: dict[str, Any], where: str = "product.yaml") -> int | None:
+    """`cycle: {every_min: N}` of a product.yaml → N, or None when the setting is absent (the product runs on the hourly
+    cron only). N must be a whole number of minutes inside CYCLE_EVERY_MIN_RANGE; anything else is a ValueError naming
+    the file, so a typo is seen at load time and not as a product that silently stays hourly."""
+    block = raw.get("cycle")
+    if block is None:
+        return None
+    if not isinstance(block, dict):
+        raise ValueError(f"{where}: `cycle` must be a mapping like `cycle: {{every_min: 10}}`, got {block!r}")
+    v = block.get("every_min")
+    if v is None:
+        return None
+    lo, hi = CYCLE_EVERY_MIN_RANGE
+    if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+        raise ValueError(f"{where}: cycle.every_min must be a whole number of minutes {lo}..{hi}, got {v!r}")
+    return v
+
+
 PRODUCT_DEFAULTS: dict[str, Any] = {
     "slug": "", "name": "", "host": "", "site_base": "", "repo": {"url": "", "branch": "main", "public_dir": "public"},
     "channels": {}, "targets": [], "budget_usd_per_day": None, "paused": False,
@@ -233,6 +254,20 @@ class Product:
     def work_dir(self) -> Path:
         return self.st.data_dir / "work" / self.slug
 
+    # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
+
+    @property
+    def cycle_every_min(self) -> int | None:
+        """Minutes between cycles from `cycle.every_min` (5..60), or None = hourly cron only. `team cycle --due`
+        (run-cycle-fast.sh) starts a cycle when the last finished one is at least this old."""
+        return parse_cycle_every_min(self.raw, f"{self.dir / 'product.yaml'}")
+
+    @property
+    def cadence(self) -> str:
+        """Human-readable cadence for `team status`."""
+        n = self.cycle_every_min
+        return f"cycle every {n} min" if n else "hourly"
+
     @property
     def daily_cap(self) -> float:
         v = self.raw.get("budget_usd_per_day")
@@ -251,6 +286,8 @@ def load_product(st: Settings, slug_or_dir: str | Path) -> Product:
     d = Path(slug_or_dir) if isinstance(slug_or_dir, Path) or "/" in str(slug_or_dir) else st.products_dir / str(slug_or_dir)
     raw = _merge(PRODUCT_DEFAULTS, yaml.safe_load((d / "product.yaml").read_text(encoding="utf-8")) or {})
     raw["slug"] = raw.get("slug") or d.name
+    every = parse_cycle_every_min(raw, str(d / "product.yaml"))      # validated here: a bad value fails the load, loudly
+    log.debug("product %s: cadence %s", raw["slug"], f"every {every} min" if every else "hourly")
     return Product(str(raw["slug"]), d.resolve(), raw, st)
 
 

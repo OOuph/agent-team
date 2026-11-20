@@ -4,7 +4,8 @@
   team onboard <slug> --brief F [--host H --repo URL] | --answers [F] | --status [--dry-run]   brief → questions/accounts → VISION + backlog
   team deploy <slug> [--sha S | --rollback] [--force] [--show]   service deploy by hand (deploy.mode: service; the cycle does it after a merge)
   team cycle [--product SLUG|all] [--phase collect,review,...] [--dry-run] [--cycle ID]
-  team status [SLUG]            task counts, spend, open questions, last cycles
+  team cycle --due              only products with product.yaml `cycle.every_min` whose last finished cycle is that old (run-cycle-fast.sh)
+  team status [SLUG]            cadence, task counts, spend, open questions, last cycles
   team tasks SLUG [--state s]   list tasks
   team task SLUG new|move|show  create / transition / print a task
   team ask SLUG --from R --to R --text Q [--task T]      · team answer SLUG Q-0001 --text A [--by owner]
@@ -112,6 +113,17 @@ def cmd_deploy(st: C.Settings, a: argparse.Namespace) -> int:
 
 
 def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
+    products = _products(st, a.product)
+    if a.due:
+        # Fast entry (run-cycle-fast.sh, cron every 5 min, same lock as the hourly one): only the products on a cadence
+        # that are due now. The framework's own hourly work (rollback check, friction, retro, critic) stays with `all`.
+        from . import cadence
+        n_all = len(products)
+        products = cadence.due_products(st, products)
+        log.log(logging.INFO if products else logging.DEBUG, "cycle --due: %d of %d product(s) due: %s", len(products), n_all,
+                ", ".join(p.slug for p in products) or "none")
+        if not products:
+            return 0
     roles = load_roles(ROLES_DIR)
     runner = Runner(st.claude, roles) if roles else None
     cycle_id = a.cycle or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
@@ -119,10 +131,11 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
     if phases and any(p not in PHASES for p in phases):
         sys.exit(f"phases: {PHASES}")
     rc = 0
-    if a.product == "all" and not phases and not a.dry_run:
+    full = a.product == "all" and not phases and not a.due      # the hourly pass over every product
+    if full and not a.dry_run:
         from . import friction as _fr
         _fr.check_rollback(st, Path(__file__).resolve().parent.parent)
-    for p in _products(st, a.product):
+    for p in products:
         (p.runs_dir / cycle_id).mkdir(parents=True, exist_ok=True)
         fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
         fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
@@ -132,7 +145,7 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
             print(f"{p.slug}: {res}")
         finally:
             logging.getLogger().removeHandler(fh)
-    if a.product == "all" and not phases:
+    if full:
         from . import friction, retro
         try:
             friction.collect_all(st, _products(st, "all"))
@@ -149,11 +162,21 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
     return rc
 
 
+def _cadence_line(st: C.Settings, p: C.Product) -> str:
+    """`hourly`, or `cycle every N min` with what `team cycle --due` would do right now."""
+    if not p.cycle_every_min:
+        return p.cadence
+    from . import cadence
+    d = cadence.check(st, p)
+    return f"{p.cadence} · " + ("due now" if d.due else (f"next in {d.wait_min:.0f} min" if d.wait_min else d.reason))
+
+
 def cmd_status(st: C.Settings, a: argparse.Namespace) -> int:
     for p in _products(st, a.product):
         s = Store(p.dir)
         sm = summary(s)
         print(f"== {p.slug} ({p.site_base}) stop={'yes' if p.stop_file.exists() else 'no'}")
+        print(f"   cadence: {_cadence_line(st, p)}")
         print(f"   tasks {sm['tasks']}: " + ", ".join(f"{k} {v}" for k, v in sorted(sm['by_state'].items())))
         print(f"   open questions {sm['open_questions']} · new observations {sm['new_observations']} · spent today ${sm['spent_today']:.2f} / cap ${p.daily_cap:.0f}")
         for c in s.cycles(5):
@@ -321,7 +344,7 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("deploy"); s.add_argument("slug"); s.add_argument("--sha"); s.add_argument("--rollback", action="store_true")
     s.add_argument("--force", action="store_true"); s.add_argument("--show", action="store_true"); s.set_defaults(fn=cmd_deploy)
     s = sub.add_parser("cycle"); s.add_argument("--product", default="all"); s.add_argument("--phase"); s.add_argument("--cycle")
-    s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_cycle)
+    s.add_argument("--dry-run", action="store_true"); s.add_argument("--due", action="store_true"); s.set_defaults(fn=cmd_cycle)
     s = sub.add_parser("status"); s.add_argument("product", nargs="?", default="all"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("tasks"); s.add_argument("product"); s.add_argument("--state", choices=TASK_STATES); s.set_defaults(fn=cmd_tasks)
     s = sub.add_parser("task"); s.add_argument("product"); s.add_argument("action", choices=["new", "move", "show"])
