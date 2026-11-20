@@ -269,7 +269,8 @@ def test_install_and_add_service_scripts_parse_and_render(tmp_path: Path):
     assert "ExecStart=/opt/agent-team/bin/svc-run.sh %i" in unit and "User=__USER__" in unit
     assert "NOPASSWD: /opt/agent-team/bin/deploy-service.sh" in (DEPLOY_DIR / "agent-team-deploy.sudoers").read_text()
     tpl = (DEPLOY_DIR / "service.conf.template").read_text()
-    assert "proxy_pass http://svc___SLUG__;" in tpl and "Upgrade $http_upgrade" in tpl and "/_team/metrics.json" in tpl
+    assert "proxy_pass http://svc___SLUG_U__;" in tpl and "Upgrade $http_upgrade" in tpl and "/_team/metrics.json" in tpl
+    assert "svc___SLUG__" not in tpl   # a slug with "-" must become a valid nginx identifier (F: ai-battles)
     # install.sh without root into tmp dirs: files land where deploy-service.sh expects them
     env = {**os.environ, "REQUIRE_ROOT": "0", "ETC_DIR": str(tmp_path / "etc"), "OPT_DIR": str(tmp_path / "opt"), "VAR_DIR": str(tmp_path / "var"),
            "STATE_DIR": str(tmp_path / "state"), "LOG_DIR": str(tmp_path / "log"), "SYSTEMD_DIR": str(tmp_path / "systemd"),
@@ -454,3 +455,20 @@ def test_team_deploy_cli(tmp_path: Path, monkeypatch, capsys):
     monkeypatch.setattr(cli.C, "load", lambda *a, **k: pend.st)
     with pytest.raises(SystemExit):
         cli.main(["deploy", "fleets"])
+
+
+def test_vhost_template_renders_valid_nginx_identifiers_for_hyphenated_slug():
+    """render-vhost.sh substitutes __SLUG_U__ (slug with '-' → '_') before __SLUG__: the upstream name matches what
+    add-service.sh / deploy-service.sh write (`svc_${SLUG//-/_}`) and the map variable has no '-' (nginx forbids it)."""
+    render = (ROOT / "deploy" / "droplet" / "render-vhost.sh").read_text()
+    assert '-e "s|__SLUG_U__|${SLUG//-/_}|g" -e "s|__SLUG__|$SLUG|g"' in render
+    assert subprocess.run(["bash", "-n", str(ROOT / "deploy" / "droplet" / "render-vhost.sh")]).returncode == 0
+    slug, host = "ai-battles", "ai-battles.formachines.ai"
+    tpl = (DEPLOY_DIR / "service.conf.template").read_text()
+    rendered = tpl.replace("__HOST__", host).replace("__SLUG_U__", slug.replace("-", "_")).replace("__SLUG__", slug).replace("__INDEXNOW_KEY__", "k")
+    assert "proxy_pass http://svc_ai_battles;" in rendered and "$svc_ai_battles_connection" in rendered
+    assert "svc_ai-battles" not in rendered and "__SLUG" not in rendered
+    upstream_line = [ln for ln in (DEPLOY_DIR / "deploy-service.sh").read_text().splitlines() if "echo \"upstream svc_" in ln][0]
+    assert "${SLUG//-/_}" in upstream_line
+    add = (DEPLOY_DIR / "add-service.sh").read_text()
+    assert "certbot certonly --webroot -w /var/www/acme" in add and "location /.well-known/acme-challenge/ { root /var/www/acme; }" in add

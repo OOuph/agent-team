@@ -5,7 +5,8 @@
 # so a template change — e.g. the IndexNow key location — reaches existing sites).
 #
 # Usage: render-vhost.sh <slug> <host> [--no-reload]
-#   Placeholders: __HOST__ -> host, __SLUG__ -> slug, __INDEXNOW_KEY__ -> /etc/agent-team/indexnow.key.
+#   Placeholders: __HOST__ -> host, __SLUG__ -> slug, __SLUG_U__ -> slug with '-' as '_' (nginx identifiers),
+#   __INDEXNOW_KEY__ -> /etc/agent-team/indexnow.key.
 #   Writes /etc/nginx/sites-available/<slug>.conf (+ symlink in sites-enabled) only when the
 #   rendered text differs; then nginx -t; on failure the previous file is restored (exit 1).
 #   --no-reload  do not `systemctl reload nginx` after a successful change (caller reloads once).
@@ -55,7 +56,7 @@ mkdir -p "$NGINX_AVAILABLE" "$NGINX_ENABLED"
 echo "[$SLUG] rendering $TEMPLATE -> $CONF (host=$HOST)"
 rendered="$(mktemp)"
 trap 'rm -f "$rendered"' EXIT
-sed -e "s|__HOST__|$HOST|g" -e "s|__SLUG__|$SLUG|g" -e "s|__INDEXNOW_KEY__|$INDEXNOW_KEY|g" "$TEMPLATE" > "$rendered"
+sed -e "s|__HOST__|$HOST|g" -e "s|__SLUG_U__|${SLUG//-/_}|g" -e "s|__SLUG__|$SLUG|g" -e "s|__INDEXNOW_KEY__|$INDEXNOW_KEY|g" "$TEMPLATE" > "$rendered"
 # certbot's shared ssl snippets exist when any cert was ever installed with --nginx; drop the lines otherwise
 if [ ! -f "$LETSENCRYPT_DIR/options-ssl-nginx.conf" ]; then
   echo "[$SLUG] note: $LETSENCRYPT_DIR/options-ssl-nginx.conf missing — dropping its include from the vhost"

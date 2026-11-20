@@ -12,7 +12,7 @@
 # Steps (idempotent, re-running is safe):
 #   0. DNS check                     -  /etc/agent-team/services/<slug>.conf (written once; edit by hand to change commands)
 #   -  /etc/agent-team/services/<slug>.secrets.env placeholder (root:<user> 0640) — the owner fills values in by hand
-#   a. http-only bootstrap vhost → certbot --nginx (skipped when the certificate exists)
+#   a. http-only bootstrap vhost (serves /.well-known/acme-challenge/) → certbot certonly --webroot (skipped when the certificate exists)
 #   b. empty upstream file (points at PORT_A) + full vhost from service.conf.template via render-vhost.sh
 #   c. deploy-service.sh <slug> (unless --no-deploy)
 set -euo pipefail
@@ -148,13 +148,16 @@ server {
     server_name $HOST;
     root /var/www/acme;
     access_log /var/log/nginx/access.log full;
+    location /.well-known/acme-challenge/ { root /var/www/acme; }
     location / { return 404; }
 }
 EOF
   ln -sfn "$VHOST" "$VHOST_LINK"
   reload_nginx
-  echo "a. certbot --nginx -d $HOST (email $CERTBOT_EMAIL)"
-  certbot --nginx -d "$HOST" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --redirect --keep-until-expiring
+  echo "a. certbot certonly --webroot /var/www/acme -d $HOST (email $CERTBOT_EMAIL)"
+  # webroot, not the nginx plugin: python3-certbot-nginx is not installed on the droplet and the full vhost
+  # (service.conf.template) already carries the ssl and redirect lines; renewals keep working through /var/www/acme.
+  certbot certonly --webroot -w /var/www/acme -d "$HOST" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --keep-until-expiring
   [ -f "$CERT_DIR/fullchain.pem" ] || { echo "ERROR: certbot finished but $CERT_DIR/fullchain.pem is missing" >&2; exit 1; }
 fi
 
