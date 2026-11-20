@@ -107,8 +107,12 @@ def render(diff_stat: str, diff_files: list[str], test_output: str | None, claim
     bad = mismatches(claimed, diff_files)
     if bad:
         lines += ["", "**MISMATCH:** the developer's `changes` list names files that are not in the diff: " + ", ".join(f"`{b}`" for b in bad)]
-    if extra:
-        lines += ["", "out-of-scope files: " + ", ".join(f"`{b}`" for b in extra)]
+    if extra is None:
+        lines += ["", "**Out of declared scope:** no declared scope"]
+    elif extra:
+        lines += ["", "**Out of declared scope:**", "", "out-of-scope files: " + ", ".join(f"`{b}`" for b in extra)]
+    else:
+        lines += ["", "**Out of declared scope:** none"]
     return "\n".join(lines)
 
 
@@ -116,7 +120,7 @@ def build(diff_stat: str, diff_files: list[str], test_output: str | None, res: d
           scope: str | None = None) -> tuple[str, list[str]]:
     """(markdown, mismatched files)."""
     claimed = claimed_files(res.get("summary", ""), res.get("changes"))
-    return render(diff_stat, diff_files, test_output, claimed, canary, out_of_scope(scope, diff_files)), mismatches(claimed, diff_files)
+    return render(diff_stat, diff_files, test_output, claimed, canary, out_of_scope(scope, diff_files) if scope_paths(scope) else None), mismatches(claimed, diff_files)
 
 
 def with_canary(body: str, canary: str) -> str:

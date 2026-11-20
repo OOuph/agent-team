@@ -37,3 +37,16 @@ def test_friction_record_written_and_not_blocking(tmp_path: Path, monkeypatch):
     assert bodies and "out-of-scope files: `team/extra.py`" in bodies[0]
     recs = friction.collect_product(p, cy.store)
     assert any(r["kind"] == "reported" and "team/extra.py" in r["summary"] for r in recs)
+
+
+def test_heading_lists_out_of_scope_file_only():
+    md, _ = prfacts.build("", ["team/prfacts.py", "team/other.py"], None, {}, scope=SCOPE)
+    assert "**Out of declared scope:**" in md
+    tail = md.split("**Out of declared scope:**")[1]
+    assert "`team/other.py`" in tail and "`team/prfacts.py`" not in tail
+
+
+def test_empty_scope_says_no_declared_scope():
+    for scope in ("", None, "no paths here"):
+        md, _ = prfacts.build("", ["team/prfacts.py"], None, {}, scope=scope)
+        assert "**Out of declared scope:** no declared scope" in md
