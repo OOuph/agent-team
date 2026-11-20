@@ -60,4 +60,12 @@ The review-verdict schema: verdict, steps (url, status, note), criteria with met
 observations, a two-sentence summary. English.
 
 ## Shell rule
-The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--head N` (both count characters, not lines), `--offset K`. Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text; to find a tag use `--tag h1` (or `--tag h1 --count`), never `'<h1'` (`'h1'`; `'Rust'`, not `'>Rust<'`); use `--around N` for context.
+The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--head N` (both count characters, not lines), `--offset K`. Denied characters in `--grep` / URLs: see the bad→good table below; rule: one plain word, no punctuation, or `--tag NAME [--count]` / `--json-path` (F-0255, F-0229, F-0221, F-0212). Use `--around N` for context.
+
+| Bad `--grep` (denied) | Good |
+|---|---|
+| `release notes (` | `release` |
+| `bump">major` | `--tag` or one word `major` |
+| `len(earlier -` | `earlier` |
+| `id="agent` | `--tag` plus `--count` |
+
