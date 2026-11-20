@@ -1,0 +1,5 @@
+# /etc/sudoers.d/agent-team-deploy — installed by deploy/service/install.sh (mode 0440).
+# The dispatcher (user __USER__) may deploy and roll back registered services without a password; nothing else.
+# deploy-service.sh validates its arguments (slug [a-z0-9-], --sha hex) and reads the service definition from
+# /etc/agent-team/services/<slug>.conf, which only root writes (add-service.sh), so no command text comes from the caller.
+__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh

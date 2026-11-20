@@ -2,6 +2,7 @@
 
   team init <slug> --name N --host H [--repo URL] [--channel telegram=@chan ...]   create products/<slug>/ from the template
   team onboard <slug> --brief F [--host H --repo URL] | --answers [F] | --status [--dry-run]   brief → questions/accounts → VISION + backlog
+  team deploy <slug> [--sha S | --rollback] [--force] [--show]   service deploy by hand (deploy.mode: service; the cycle does it after a merge)
   team cycle [--product SLUG|all] [--phase collect,review,...] [--dry-run] [--cycle ID]
   team status [SLUG]            task counts, spend, open questions, last cycles
   team tasks SLUG [--state s]   list tasks
@@ -87,6 +88,26 @@ def cmd_onboard(st: C.Settings, a: argparse.Namespace) -> int:
             sys.exit("team onboard: one of --brief FILE, --answers [FILE], --status is required")
     except onboard.OnboardingError as exc:
         sys.exit(f"onboard: {exc}")
+    return 0
+
+
+def cmd_deploy(st: C.Settings, a: argparse.Namespace) -> int:
+    """`team deploy <slug> [--sha S | --rollback] [--force]` — run the service deploy by hand (slice 5, owner 20.11):
+    the same deploy-service.sh call the dispatcher makes after a merge; `--show` prints the command without running it."""
+    from . import servicedeploy
+    p = C.load_product(st, a.slug)
+    cmd = servicedeploy.command(p, sha=a.sha or "", rollback=a.rollback, force=a.force)
+    print(f"{p.slug}: {servicedeploy.describe(p)}")
+    if a.show:
+        print(" ".join(cmd))
+        return 0
+    if not servicedeploy.enabled(p):
+        sys.exit(f"deploy: {p.slug} has deploy.mode={p.deploy_mode}; set deploy: {{mode: service, host: local}} in product.yaml once the host is registered (add-service.sh)")
+    res = servicedeploy.run(p, sha=a.sha or "", rollback=a.rollback, force=a.force, log_path=p.work_dir / "deploy" / f"manual-{a.sha or ('rollback' if a.rollback else 'head')}.log")
+    print(res.summary())
+    if not (res.ok or res.skipped):
+        print(res.output[-1500:])
+        return 1
     return 0
 
 
@@ -297,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("onboard"); s.add_argument("slug"); s.add_argument("--brief"); s.add_argument("--answers", nargs="?", const="")
     s.add_argument("--status", action="store_true"); s.add_argument("--name"); s.add_argument("--host"); s.add_argument("--repo")
     s.add_argument("--budget", type=float, default=None); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_onboard)
+    s = sub.add_parser("deploy"); s.add_argument("slug"); s.add_argument("--sha"); s.add_argument("--rollback", action="store_true")
+    s.add_argument("--force", action="store_true"); s.add_argument("--show", action="store_true"); s.set_defaults(fn=cmd_deploy)
     s = sub.add_parser("cycle"); s.add_argument("--product", default="all"); s.add_argument("--phase"); s.add_argument("--cycle")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_cycle)
     s = sub.add_parser("status"); s.add_argument("product", nargs="?", default="all"); s.set_defaults(fn=cmd_status)

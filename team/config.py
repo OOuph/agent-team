@@ -203,6 +203,24 @@ class Product:
         v = (self.raw.get("repo") or {}).get("port")
         return int(v) if isinstance(v, int) or (isinstance(v, str) and v.isdigit()) else None
 
+    # --- deploy (slice 5): how the merged commit reaches the host ---------------------------------------------------
+
+    @property
+    def deploy_mode(self) -> str:
+        """`pending` (no host yet: the tester plays a local server), `service` (the dispatcher runs deploy-service.sh
+        after every merge) or `git_pull` (static site: the droplet timer pulls). Default: git_pull for a site, pending for a game."""
+        mode = str((self.raw.get("deploy") or {}).get("mode") or "")
+        return mode or ("pending" if self.profile == "game" else "git_pull")
+
+    @property
+    def deploy_host(self) -> str:
+        """Empty / `local` = the dispatcher's own host (sudo); `user@host` = over ssh."""
+        return str((self.raw.get("deploy") or {}).get("host") or "")
+
+    @property
+    def deploy_cmd(self) -> str:
+        return str((self.raw.get("deploy") or {}).get("cmd") or "")
+
     @property
     def repo_dir(self) -> Path:
         return self.st.repos_dir / self.slug

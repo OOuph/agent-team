@@ -1,0 +1,22 @@
+[Unit]
+Description=agent-team service instance %i (a game server release; deploy-service.sh starts one colour per deploy)
+Documentation=file:///opt/agent-team/service/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=__USER__
+Group=__USER__
+ExecStart=/opt/agent-team/bin/svc-run.sh %i
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=20
+KillMode=mixed
+Nice=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/agent-team/services
+StandardOutput=journal
+StandardError=journal

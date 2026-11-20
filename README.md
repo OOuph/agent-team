@@ -43,7 +43,8 @@ bundled sample without a token). See SCHEME.md §11.
 Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team ask <slug> --text ...`, `team answer`, `team obs`,
 `team stop|resume`, `team digest`, `team export-public`, `team friction`, `team retro`.
 
-Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`. Tests: `pytest -q`.
+Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`; a game server (long-running
+process, blue/green releases, health check, rollback, `team deploy`) in `deploy/service/`. Tests: `pytest -q`.
 
 ## Status
 
