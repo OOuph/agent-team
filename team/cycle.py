@@ -21,13 +21,17 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, hypothesis, prompts, prfacts, publish, replan, voice
+from . import geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, voice
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 
 GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
-PENDING_ROLES = ("tester",)                              # roles the PO/onboarding may name whose execute path comes in a later slice
+PENDING_ROLES = ("tester",)                              # the tester runs in the review phase; a tester TASK (load test, slice 6) has no execute path yet
+PLAYTEST_ROLES = ("developer", "designer")               # whose released tasks the tester plays (game profile)
+TESTER_CAP_USD = 1.5
+TESTER_MAX_TURNS = 40
+TESTER_TOOLS = ["Bash(team-play *)", "Bash(team-play:*)", "Bash(team-fetch *)", "Bash(team-fetch:*)", "Read", "Glob", "Grep"]
 
 
 def _y_short(obj: Any, n: int = 400) -> str:
@@ -446,6 +450,7 @@ class Cycle:
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         tools = env = None
         sha = t.get("released_sha")
+        tests_out = ""
         if not t.get("repo_only") and (only_raw_github_urls((result or {}).get("how_to_verify")) or not self.p.site_base):
             t["repo_only"] = True                    # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
             self.store.save_task(t)
@@ -455,14 +460,25 @@ class Cycle:
                     tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd)
                 except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
                     tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
+                tests_out = tests
                 work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
                 prompt += REPO_ONLY_PROMPT.format(sha=sha, tests=tests)
             except Exception as e:               # no checkout → the old URL-only review
                 log.warning("%s: read-only checkout failed: %s", t["id"], e)
                 work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
-        rr = self.role_run("reviewer", prompt, "review-verdict", cwd=work, label=f"review-{t['id']}", cap=1.0, max_turns=30,
-                           allowed_tools=tools, env_extra=env)
+        role, schema_name, cap, turns = "reviewer", "review-verdict", 1.0, 30
+        server = None
+        if self.playtest_due(t) and sha:
+            server, prompt, tools, env = self.start_playtest(t, result, sha, prompt, tests_out)
+            if server is not None:
+                role, schema_name, cap, turns = "tester", "test-report", TESTER_CAP_USD, TESTER_MAX_TURNS
+        try:
+            rr = self.role_run(role, prompt, schema_name, cwd=work, label=f"review-{t['id']}", cap=cap, max_turns=turns,
+                               allowed_tools=tools, env_extra=env)
+        finally:
+            if server is not None:
+                playtest.stop(server)
         if rr is None:
             return
         if not (rr.ok and rr.structured):
@@ -502,6 +518,45 @@ class Cycle:
             self.store.save_task(t)
             if t["review_inconclusive"] >= 3:
                 self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    def playtest_due(self, t: dict[str, Any]) -> bool:
+        """Game profile (owner 20.11, slice 4): a developer's or designer's change is accepted by the tester playing it; a
+        document task (game-designer) and anything the task marks `playtest: false` stay with the reviewer."""
+        return (self.p.profile == "game" and str(t.get("role") or "developer") in PLAYTEST_ROLES and t.get("playtest") is not False
+                and not self.dry_run and self.runner is not None)
+
+    def start_playtest(self, t: dict[str, Any], result: dict[str, Any] | None, sha: str, fallback_prompt: str, tests: str = ""):
+        """Start the server from the merged commit for the tester. Returns (server, prompt, tools, env); on failure
+        (no Node, run_cmd missing, health never answered) returns (None, reviewer prompt + the reason, …) so the reviewer
+        still judges what it can, and the PO gets one environment_error observation. `tests` is the dispatcher's unit-test
+        run from the repo_only path (not repeated here)."""
+        work = self.p.work_dir / self.cycle_id / f"playtest-{t['id']}"      # its own folder: the review checkout is read-only
+        if not tests:
+            try:
+                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd)
+            except Exception as e:  # noqa: BLE001
+                tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
+        out_dir = self.p.dir / "reviews" / t["id"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            server = playtest.start(self.p, self.p.repo_dir, sha, work)
+        except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
+            reason = str(exc)[:1500]
+            log.warning("%s: play-test server for %s not started: %s", self.p.slug, t["id"], reason[:200])
+            self.store.event("playtest.failed", t["id"], "dispatcher", {"reason": reason[:400]})
+            self.store.add_observation({"title": f"Play-test server could not start for {t['id']}: {reason.splitlines()[0][:90]}",
+                                        "classification": "environment_error", "source": "dispatcher", "task": t["id"], "url": self.p.site_base,
+                                        "actual": reason[:400], "fingerprint": f"playtest-failed-{t['id']}", "run_id": f"{self.cycle_id}-review-{t['id']}"})
+            prompt = fallback_prompt + f"\n# PLAY-TEST SERVER — NOT AVAILABLE\nThe dispatcher could not start the server from commit {sha}:\n{reason}\n" \
+                                       "Judge what the checkout and the test run show; put the rest into `limits` as `not observable: server not started`.\n"
+            return None, prompt, None, None
+        hosts = self._allowed_hosts("tester").split(",") + [playtest.HOST]
+        env = {"TEAM_PLAY_CWD": str(server.dest), "TEAM_PLAY_BASE_URL": server.base_url, "TEAM_PLAY_OUT": str(out_dir),
+               "TEAM_PLAY_SERVER_LOG": str(server.log_path or ""), "TEAM_ALLOWED_HOSTS": ",".join(dict.fromkeys(h for h in hosts if h))}
+        prompt = prompts.tester_prompt(self.p, t, result, sha, base_url=server.base_url, local=server.local, checkout=server.dest,
+                                       out_dir=out_dir, tests=tests, server_notes=server.notes)
+        self.store.event("playtest.started", t["id"], "dispatcher", {"base_url": server.base_url, "local": server.local})
+        return server, prompt, list(TESTER_TOOLS), env
 
     def content_without_post(self, t: dict[str, Any]) -> bool:
         if str(t.get("role") or "") != "marketer":

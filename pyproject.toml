@@ -12,6 +12,7 @@ dev = ["pytest>=8"]
 team = "team.cli:main"
 team-publish = "team.publish:main"
 team-fetch = "team.fetch:main"
+team-play = "team.play:main"
 
 [build-system]
 requires = ["setuptools>=68"]
@@ -24,4 +25,4 @@ include = ["team*"]
 testpaths = ["tests"]          # never collect the product repos cloned under data/ and builds/ on the server
 
 [tool.setuptools.package-data]
-team = ["roles/*.md", "schemas/*.json", "templates/*"]
+team = ["roles/*.md", "schemas/*.json", "templates/*", "templates/service-repo/*", "templates/service-repo/tests/e2e/*"]
