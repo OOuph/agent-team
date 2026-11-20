@@ -1,6 +1,7 @@
 """`team` — the dispatcher's command line.
 
   team init <slug> --name N --host H [--repo URL] [--channel telegram=@chan ...]   create products/<slug>/ from the template
+  team onboard <slug> --brief F [--host H --repo URL] | --answers [F] | --status [--dry-run]   brief → questions/accounts → VISION + backlog
   team cycle [--product SLUG|all] [--phase collect,review,...] [--dry-run] [--cycle ID]
   team status [SLUG]            task counts, spend, open questions, last cycles
   team tasks SLUG [--state s]   list tasks
@@ -59,6 +60,33 @@ def cmd_init(st: C.Settings, a: argparse.Namespace) -> int:
     (d / "decisions.md").write_text(f"# {raw['name']} — решения\n\n", encoding="utf-8")
     Store(d).close()
     print(f"created {d}: edit VISION.md and product.yaml, then `team cycle --product {a.slug} --dry-run`")
+    return 0
+
+
+def cmd_onboard(st: C.Settings, a: argparse.Namespace) -> int:
+    """`team onboard <slug> --brief F` → questions.md for the owner; `--answers [F]` → VISION, GDD, backlog; `--status`.
+    `--dry-run` uses the fixture instead of a model run (owner 20.11: onboarding of a game product, team/onboard.py)."""
+    from . import onboard
+    if a.status:
+        print(onboard.status(st, a.slug))
+        return 0
+    roles = load_roles(ROLES_DIR)
+    runner = Runner(st.claude, roles) if roles and not a.dry_run else None
+    try:
+        if a.brief:
+            res = onboard.start(st, a.slug, Path(a.brief), name=a.name, host=a.host or "", repo=a.repo or "", budget=a.budget,
+                                runner=runner, dry_run=a.dry_run)
+            print(f"{a.slug}: {res['n_questions']} questions and {res['n_accounts']} accounts written ({res['source']}) → {res['questions_md']}\n"
+                  f"owner question {res['question_id']}; fill the file, then: team onboard {a.slug} --answers {res['questions_md']}")
+        elif a.answers is not None:
+            res = onboard.apply_answers(st, a.slug, Path(a.answers) if a.answers else None, runner=runner, dry_run=a.dry_run)
+            print(f"{a.slug}: onboarding done ({res['source']}): VISION {res['vision']}" + (f", GDD {res['game_design']}" if res["game_design"] else "")
+                  + f"; tasks {', '.join(res['tasks'])}" + (f" (deferred: {', '.join(res['deferred'])})" if res["deferred"] else ""))
+            print("\n" + res["summary_md"].strip() + f"\n\nnext: team cycle --product {a.slug} --dry-run")
+        else:
+            sys.exit("team onboard: one of --brief FILE, --answers [FILE], --status is required")
+    except onboard.OnboardingError as exc:
+        sys.exit(f"onboard: {exc}")
     return 0
 
 
@@ -266,6 +294,9 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("init"); s.add_argument("slug"); s.add_argument("--name"); s.add_argument("--host", required=True)
     s.add_argument("--repo"); s.add_argument("--channel", action="append"); s.add_argument("--target", action="append")
     s.add_argument("--budget", type=float, default=None); s.set_defaults(fn=cmd_init)
+    s = sub.add_parser("onboard"); s.add_argument("slug"); s.add_argument("--brief"); s.add_argument("--answers", nargs="?", const="")
+    s.add_argument("--status", action="store_true"); s.add_argument("--name"); s.add_argument("--host"); s.add_argument("--repo")
+    s.add_argument("--budget", type=float, default=None); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_onboard)
     s = sub.add_parser("cycle"); s.add_argument("--product", default="all"); s.add_argument("--phase"); s.add_argument("--cycle")
     s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_cycle)
     s = sub.add_parser("status"); s.add_argument("product", nargs="?", default="all"); s.set_defaults(fn=cmd_status)

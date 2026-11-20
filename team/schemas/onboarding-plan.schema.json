@@ -1,0 +1,68 @@
+{
+ "title": "onboarding-plan",
+ "description": "Step 2 of `team onboard`: brief + the owner's answers → VISION.md, GAME-DESIGN.md v1, product.yaml fields and the first backlog. The dispatcher writes the files and creates the tasks; the owner reads owner_summary_md.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["vision_md", "product", "backlog", "decisions", "owner_summary_md"],
+ "properties": {
+  "vision_md": {"type": "string", "maxLength": 16000, "description": "the full VISION.md, following the template given in the prompt; every placeholder filled, nothing invented about accounts the owner did not grant"},
+  "game_design_md": {"type": "string", "maxLength": 16000, "description": "GAME-DESIGN.md v1: core loop, rules, win/lose, players, session length, progression, what makes a round interesting, anti-patterns, balance tables as data with 'what to change if…'. Empty when the first backlog task asks the game-designer role to write it."},
+  "product": {
+   "type": "object", "additionalProperties": false,
+   "required": ["profile", "stage"],
+   "properties": {
+    "profile": {"type": "string", "enum": ["game", "site"]},
+    "stage": {"type": "string", "maxLength": 8, "description": "the current milestone id, e.g. M0"},
+    "stack": {"type": "string", "maxLength": 300},
+    "repo": {
+     "type": "object", "additionalProperties": false,
+     "properties": {
+      "kind": {"type": "string", "enum": ["static", "service"]},
+      "url": {"type": "string", "maxLength": 300},
+      "run_cmd": {"type": "string", "maxLength": 300},
+      "build_cmd": {"type": "string", "maxLength": 300},
+      "test_cmd": {"type": "string", "maxLength": 300},
+      "health_path": {"type": "string", "maxLength": 120},
+      "port": {"type": "integer"}
+     }
+    },
+    "deploy": {
+     "type": "object", "additionalProperties": false,
+     "properties": {
+      "mode": {"type": "string", "enum": ["git_pull", "service", "pending"]},
+      "host": {"type": "string", "maxLength": 200, "description": "empty or 'pending' until the owner hands the host over"}
+     }
+    },
+    "phase_gates": {
+     "type": "object", "additionalProperties": {"type": "string", "maxLength": 8},
+     "description": "cycle phase or check → the milestone from which it runs, e.g. {\"marketing\": \"M2\", \"seo\": \"M1\", \"persona\": \"M1\", \"geo\": \"M2\", \"voice\": \"M2\"}"
+    }
+   }
+  },
+  "backlog": {
+   "type": "array", "maxItems": 8,
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["title", "type", "role", "priority", "size", "problem", "scope", "acceptance", "goal", "state"],
+    "properties": {
+     "title": {"type": "string", "maxLength": 140},
+     "type": {"type": "string", "enum": ["milestone", "design", "defect", "quality", "research", "feature", "ops"]},
+     "role": {"type": "string", "enum": ["developer", "designer", "game-designer", "tester", "analyst"]},
+     "priority": {"type": "string", "enum": ["P0", "P1", "P2", "P3"]},
+     "size": {"type": "string", "enum": ["XS", "S", "M"]},
+     "problem": {"type": "string", "maxLength": 800},
+     "scope": {"type": "string", "maxLength": 800},
+     "acceptance": {"type": "array", "minItems": 1, "maxItems": 6, "items": {"type": "string", "maxLength": 300}},
+     "negative_cases": {"type": "array", "maxItems": 4, "items": {"type": "string", "maxLength": 300}},
+     "goal": {"type": "string", "maxLength": 120},
+     "depends_on": {"type": "array", "items": {"type": "string", "maxLength": 140}, "description": "titles of earlier tasks in this list"},
+     "state": {"type": "string", "enum": ["ready", "proposed", "deferred"], "description": "deferred = needs an account the owner did not grant; return_condition says what brings it back"},
+     "return_condition": {"type": "string", "maxLength": 300},
+     "repo_only": {"type": "boolean"}
+    }
+   }
+  },
+  "decisions": {"type": "array", "maxItems": 20, "items": {"type": "string", "maxLength": 300}, "description": "one line per default applied or choice made, for decisions.md"},
+  "owner_summary_md": {"type": "string", "maxLength": 2500, "description": "Russian, ≤ 200 words: what the team will build first, what waits for which account, what it will cost per day"}
+ }
+}

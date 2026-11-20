@@ -131,7 +131,8 @@ class Cycle:
                 return str(f)
         if self.p.raw.get("paused"):
             return "product.yaml: paused"
-        return None
+        from . import onboard
+        return onboard.not_finished(self.p)      # owner 20.11: a product in onboarding has no VISION yet; the cycle waits
 
     def budget_ok(self, cap_run: float) -> bool:
         spent, cap = self.store.spent_today(), self.p.daily_cap
