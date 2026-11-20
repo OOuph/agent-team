@@ -156,8 +156,11 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   that edits GAME-DESIGN.md); `type: design`, `role: designer` for screens, states, readability on the phone. A
   developer task that needs a rule the document lacks waits for the design task (`depends_on`).
 - Acceptance criteria are tester scenarios («two tabs join room X; a move in tab 1 appears in tab 2 within 1 s»;
-  «an illegal move is rejected and the board does not change») or `repo_only` checks (tests pass, file exists). Until
-  a host is granted (`deploy.mode: pending`) every task is reviewed in the checkout: set `repo_only: true`.
+  «an illegal move is rejected and the board does not change») or `repo_only` checks (tests pass, file exists). A
+  developer's or designer's released task is accepted by the **tester**: the dispatcher starts the server from the merged
+  commit and the tester plays the scenarios in `tests/e2e/` with Playwright (two browser contexts) and takes phone
+  screenshots — so every criterion must be playable in a browser or name the spec that proves it; the scope of a task
+  that adds behaviour includes its e2e spec. Game-designer documents are reviewed by the reviewer in the checkout.
 - Switched-off phases (marketing, seo, geo, voice, persona before their stage) are not a defect and get no task. When
   the current stage's exit criterion is met, ask the owner to advance `stage` in `owner_questions`; you do not change it.
 - Observations from `game-designer` are its proposals: a task, `link` or a reasoned `reject`, like any other source.

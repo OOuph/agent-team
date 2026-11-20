@@ -116,6 +116,7 @@ GDD_FILE = "GAME-DESIGN.md"                # game profile: the game designer's d
 DESIGN_FILE = "DESIGN.md"                  # game profile: the designer's visual system
 PROTOCOL_FILE = "PROTOCOL.md"              # service repository: the client ↔ server message contract
 BALANCE_DIR = "design/balance"             # game profile: balance tables as data
+SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, PROTOCOL.md
 
 
 def _read_tail(p: Path, n: int) -> str:
@@ -143,7 +144,12 @@ def service_block(product: Product, repo_dir: Path, role: str = "developer") -> 
            "the server owns the state (authoritative game loop), the client only renders and sends intents; an invalid move is "
            "rejected by the server. Commands the dispatcher and the host run (product.yaml `repo`): " + (_y(cmds).strip() if cmds else "(none set yet — add them to README)") + ".",
            f"`{PROTOCOL_FILE}` is the client ↔ server contract: change it only when the task names it in scope, and update both sides in the same commit. "
-           "Run the tests and start the server locally before reporting done; a task is not done while `test` fails or the health path does not answer."]
+           "Run the tests and start the server locally before reporting done; a task is not done while `test` fails or the health path does not answer.",
+           "Acceptance is played, not read: the tester role starts the server from your merged commit and runs `tests/e2e/*.spec.ts` with "
+           "Playwright (two browser contexts: player A acts, player B's page changes). Every acceptance criterion of your task needs a "
+           "scenario there, with `data-testid` hooks on the elements it uses (`room-code`, `status`, `error`, `cell-<r>-<c>`, …). A starter "
+           f"config, a two-player spec and a PROTOCOL skeleton are in the framework at `{SERVICE_TEMPLATES}` (copy, then adapt). "
+           "The server must honour `PORT` from the environment (or `{port}` in run_cmd) and answer the health path with 200."]
     if role == "designer":
         out.append(f"You are the designer: your files are `{DESIGN_FILE}`, styles and assets (SVG, CSS). Do not change server code or game rules; "
                    "a rule that looks wrong goes into `proposals`.")
@@ -179,6 +185,26 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
             + "\n\n# VISION\n" + product.vision()
             + service_block(product, repo_dir, role)
             + "\n\n# REPOSITORY NOTES" + (readme or "\n(no README — follow the conventions you find in the tree)") + "\n")
+
+
+def tester_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None, *, base_url: str,
+                  local: bool, checkout: Path, out_dir: Path, tests: str, server_notes: list[str] | None = None) -> str:
+    """The tester's prompt (game profile, slice 4): the task, the implementer's claim, where the server runs and what
+    `team-play` can do there, the dispatcher's unit-test run, the checkout to read."""
+    specs = sorted(str(p.relative_to(checkout)) for p in (checkout / "tests" / "e2e").glob("*.spec.*")) if (checkout / "tests" / "e2e").exists() else []
+    return (f"# PLAY-TEST of task {task['id']} — product `{product.slug}` — stage {product.stage}\n\n"
+            "# TASK\n" + _y(_task_brief(task))
+            + "\n\n# IMPLEMENTER'S REPORT (a claim, not evidence)\n" + (_y(result) if result else "(none)")
+            + "\n\n# PLAY-TEST SERVER\n"
+            + (f"Base URL: {base_url} — " + ("started by the dispatcher from commit " + (sha or "?") + " in a copy of the checkout; it is stopped after your run."
+               if local else "the deployed host (the merged commit should be live there; compare /healthz version with the expected commit).")
+               + "\n" + ("\n".join(f"- {n}" for n in (server_notes or [])))
+               + f"\nCheckout to read (Read/Glob/Grep): `{checkout}`. Review folder for screenshots and artifacts: `{out_dir}`.\n"
+               + "`team-play test` runs the Playwright scenarios of the checkout against the base URL; `team-play screenshot <url> --out name.png` "
+               "takes a phone-viewport picture; `team-play logs` shows the server log.\n"
+               + ("E2E specs present: " + ", ".join(specs) if specs else "No tests/e2e specs in the checkout: judge from screenshots, /healthz and the server log, and say in `limits` which spec file is missing."))
+            + "\n\n# TEST RUN (unit tests, by the dispatcher)\n" + (tests or "(none)")
+            + "\n\nPlay every acceptance criterion and negative case in the browsers; quote test lines and screenshot names as evidence.\n")
 
 
 def game_block(product: Product, gdd_dir: Path | None = None) -> str:

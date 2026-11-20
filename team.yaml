@@ -28,6 +28,7 @@ claude:
     onboarding: opus                # owner 20.11: brief → questions and accounts → VISION and backlog (team onboard), twice per product
     designer: sonnet                # owner 20.11, game profile: DESIGN.md, CSS tokens, SVG assets in the repository (same path as developer)
     game-designer: opus             # owner 20.11, game profile: GAME-DESIGN.md and balance tables → design-spec; the PO cuts it into tasks
+    tester: sonnet                  # owner 20.11, game profile: plays a released task in browsers (Playwright via team-play) in the review phase
 
 billing:                           # owner 04.11: "лимит расхода 100 в день, общий на всех; подписку не учитывай"
   daily_cap_usd_all: 100.0         # credits (real money) spent per UTC day by the whole team; runs inside the subscription are not counted
