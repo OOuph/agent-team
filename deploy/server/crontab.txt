@@ -1,4 +1,5 @@
 7 * * * * bash /home/ubuntu/agent-team/dispatcher/run-cycle.sh
+*/5 * * * * bash /home/ubuntu/agent-team/dispatcher/run-cycle-fast.sh
 0 2 * * * bash /home/ubuntu/agent-team/dispatcher/backup-state.sh
 25 7 * * * bash /home/ubuntu/agent-team/dispatcher/publish-diary.sh >> /home/ubuntu/agent-team/dispatcher/data/diary.log 2>&1
 */30 * * * * bash /home/ubuntu/agent-team/dispatcher/watchdog.sh >> /home/ubuntu/agent-team/dispatcher/data/watchdog.log 2>&1
