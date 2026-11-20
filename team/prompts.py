@@ -116,6 +116,15 @@ GDD_FILE = "GAME-DESIGN.md"                # game profile: the game designer's d
 DESIGN_FILE = "DESIGN.md"                  # game profile: the designer's visual system
 PROTOCOL_FILE = "PROTOCOL.md"              # service repository: the client ↔ server message contract
 BALANCE_DIR = "design/balance"             # game profile: balance tables as data
+# The game designer has no shell and returns COMPLETE documents, so the whole current text must travel in the prompt
+# (F18, ai-battles 20.11: GAME-DESIGN.md outgrew the old 12 000-char tail and balance.json the 3 000-char one — the
+# role saw a document without its head and rightly refused to overwrite it). `design: {gdd_chars, table_chars}` in
+# product.yaml overrides the limits.
+GDD_PROMPT_CHARS = 120000
+BALANCE_TABLE_CHARS = 40000
+BALANCE_TABLES_MAX = 8
+TRUNCATED_NOTE = ("(TRUNCATED: only the last {shown} of {total} characters are shown. Do NOT return this file in `files` — a rewrite "
+                  "from a truncated copy deletes content. Put the change into a new file and ask the PO to split the document.)\n")
 SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, tests/load, PROTOCOL.md
 LOAD_SCRIPT_REL = "tests/load/clients.ts"   # the repository's load script (`team-play load`, slice 6)
 GAME_METRICS_DOC = Path(__file__).parent.parent / "docs" / "game-metrics.md"   # the /_team/metrics.json contract a game server serves
@@ -126,6 +135,42 @@ def _read_tail(p: Path, n: int) -> str:
         return _tail(p.read_text(encoding="utf-8", errors="replace"), n) if p.exists() else ""
     except OSError:
         return ""
+
+
+def _design_limits(product: Product) -> tuple[int, int]:
+    cfg = product.raw.get("design") or {}
+    try:
+        return int(cfg.get("gdd_chars") or GDD_PROMPT_CHARS), int(cfg.get("table_chars") or BALANCE_TABLE_CHARS)
+    except (TypeError, ValueError):
+        return GDD_PROMPT_CHARS, BALANCE_TABLE_CHARS
+
+
+def _doc_for_rewrite(p: Path, limit: int) -> tuple[str, bool]:
+    """A document the role may return whole: the full text when it fits `limit`, else its tail with an explicit note."""
+    try:
+        text = p.read_text(encoding="utf-8", errors="replace") if p.exists() else ""
+    except OSError:
+        return "", False
+    if len(text) <= limit:
+        return text, False
+    return TRUNCATED_NOTE.format(shown=limit, total=len(text)) + text[-limit:], True
+
+
+def _balance_files(gdd_dir: Path) -> list[Path]:
+    bdir = gdd_dir / BALANCE_DIR
+    return sorted(f for f in bdir.glob("*") if f.is_file())[:BALANCE_TABLES_MAX] if bdir.exists() else []
+
+
+def truncated_design_docs(product: Product, gdd_dir: Path) -> set[str]:
+    """Repository-relative paths the game designer saw only in part: the dispatcher must not let it overwrite them."""
+    gdd_limit, table_limit = _design_limits(product)
+    out = set()
+    if _doc_for_rewrite(gdd_dir / GDD_FILE, gdd_limit)[1]:
+        out.add(GDD_FILE)
+    for f in _balance_files(gdd_dir):
+        if _doc_for_rewrite(f, table_limit)[1]:
+            out.add(f"{BALANCE_DIR}/{f.name}")
+    return out
 
 
 def safe_rel_path(path: str) -> bool:
@@ -246,8 +291,8 @@ def game_block(product: Product, gdd_dir: Path | None = None) -> str:
     gates = product.phase_gates
     closed = [f"{k} (from {v})" for k, v in gates.items() if not product.gate_open(k)]
     d = gdd_dir or product.repo_dir
-    gdd = _read_tail(d / GDD_FILE, 6000) or _read_tail(product.dir / GDD_FILE, 6000)
-    heads = [ln for ln in gdd.splitlines() if ln.startswith("#")][:30]
+    gdd = _doc_for_rewrite(d / GDD_FILE, GDD_PROMPT_CHARS)[0] or _doc_for_rewrite(product.dir / GDD_FILE, GDD_PROMPT_CHARS)[0]
+    heads = [ln for ln in gdd.splitlines() if ln.startswith("#")][:60]      # the outline of the whole document (was: of its last 6000 chars)
     return ("# GAME PROFILE\n"
             f"Stage `{product.stage}` (milestones in VISION). Switched off until a later stage: {', '.join(closed) or 'nothing'}. "
             "Rules: a task of the playable core is type `milestone` (outside the hypothesis rule before M2), a document or visual task is "
@@ -263,12 +308,11 @@ def game_block(product: Product, gdd_dir: Path | None = None) -> str:
 def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store) -> str:
     """The game designer's prompt: VISION, the task, the current GAME-DESIGN.md and balance tables, game metrics, what
     testers and the PO observed. No shell: everything travels here (owner 20.11)."""
-    gdd = _read_tail(gdd_dir / GDD_FILE, 12000)
+    gdd_limit, table_limit = _design_limits(product)
+    gdd, _ = _doc_for_rewrite(gdd_dir / GDD_FILE, gdd_limit)
     tables = ""
-    bdir = gdd_dir / BALANCE_DIR
-    if bdir.exists():
-        for f in sorted(bdir.glob("*"))[:8]:
-            tables += f"\n--- {BALANCE_DIR}/{f.name} ---\n" + _read_tail(f, 3000)
+    for f in _balance_files(gdd_dir):
+        tables += f"\n--- {BALANCE_DIR}/{f.name} ---\n" + _doc_for_rewrite(f, table_limit)[0]
     latest = product.dir / "metrics" / "latest.md"
     metrics = _read_tail(latest, 4000)
     obs = [o for o in store.observations() if o.get("status") in ("new", "triaged") and o.get("classification") in ("defect", "ux_friction", "value_gap", "feedback")][-15:]
