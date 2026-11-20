@@ -125,7 +125,6 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
         raise PlaytestError("repo.run_cmd is not set in product.yaml: the dispatcher cannot start the server")
     dest = prepare_copy(repo_dir, sha, work / "checkout")       # the tester's Playwright runs from here even against a deployed host
     log_path = work / "server.log"
-    port = free_port()
     log_fh = log_path.open("w", encoding="utf-8")
     try:
         inst = install_cmd_for(dest, install_cmd or str((product.raw.get("repo") or {}).get("install_cmd") or ""))
@@ -141,6 +140,9 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
             rc = _run(product.build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
             if rc != 0:
                 raise PlaytestError(f"build failed (exit {rc}): {product.build_cmd}\n" + _tail(log_path))
+        # the port is picked right before the server starts, not before install and build: with cycles of several
+        # products running side by side (F17) a port chosen minutes earlier may have been taken by another play-test
+        port = free_port()
         cmd = product.run_cmd.replace("{port}", str(port))
         env = clean_env()
         env.update({"PORT": str(port), "HOST": HOST, "BASE_URL": f"http://{HOST}:{port}"})

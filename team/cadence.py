@@ -2,8 +2,9 @@
 
 `product.yaml` may carry `cycle: {every_min: N}` (N = 5..60, see config.CYCLE_EVERY_MIN_RANGE). Such a product is still
 part of the hourly `team cycle --product all`; in between, `team cycle --due` (cron every 5 min through
-run-cycle-fast.sh, under the same data/cycle.lock) starts its cycle as soon as the last finished one is at least N
-minutes old. A product without the setting is never picked here: it stays on the hourly cron.
+run-cycle-fast.sh) starts its cycle as soon as the last finished one is at least N minutes old. A product without the
+setting is never picked here: it stays on the hourly cron. The two entries run side by side: each product has its own
+lock (team/locks.py), so a due product does not wait for the hourly pass over the others.
 
 The decision is read-only: the `cycles` table of the product's team.db, the STOP files, `paused` and the onboarding
 state. Nothing is written until a cycle really starts, so a product that is not due leaves no trace in its store.
@@ -54,6 +55,18 @@ def last_finished(p: Product) -> datetime | None:
         s.close()
     stamps = [t if t.tzinfo else t.replace(tzinfo=timezone.utc) for t in stamps if t]
     return max(stamps) if stamps else None
+
+
+def has_cycle(p: Product, cycle_id: str) -> bool:
+    """True when the product's store already has a cycle with this id (ids are UTC minutes: two entries started in the
+    same minute would otherwise write one run directory and one `cycles` row twice)."""
+    if not (p.dir / "team.db").exists():
+        return False
+    s = Store(p.dir)
+    try:
+        return any(c.get("cycle_id") == cycle_id for c in s.cycles(CYCLES_LOOKBACK))
+    finally:
+        s.close()
 
 
 def check(st: Settings, p: Product, now: datetime | None = None) -> Due:

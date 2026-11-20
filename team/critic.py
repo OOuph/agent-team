@@ -80,7 +80,9 @@ def load_seen(st: Settings) -> dict[str, list[str]]:
 def save_seen(st: Settings, seen: dict[str, list[str]]) -> None:
     p = seen_path(st)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp = p.with_suffix(".tmp")
+    tmp.write_text(json.dumps(seen, ensure_ascii=False, indent=1), encoding="utf-8")
+    tmp.replace(p)
 
 
 def _slug_for_heading(heading: str, hosts: dict[str, str]) -> str | None:
@@ -256,6 +258,16 @@ def ingest(st: Settings, product: Product, store: Store, all_products: list[Prod
     author = str(cfg.get("author") or "external critic")
     default_slug = str(cfg.get("default_product") or "agent-team")
     hosts = {p.host.lower(): p.slug for p in (all_products or [product]) if p.host}
+    from . import locks
+    # seen.json is one file for all products and their cycles run side by side (F17): read-modify-write under a lock
+    with locks.file_lock(seen_path(st)):
+        n = _ingest_new(st, product, store, d, hosts, author, default_slug)
+    if n:
+        store.event("critic.collected", product.slug, "dispatcher", {"cards": n})
+    return n
+
+
+def _ingest_new(st: Settings, product: Product, store: Store, d: Path, hosts: dict[str, str], author: str, default_slug: str) -> int:
     seen = load_seen(st)
     n = 0
     names = sorted({x.with_suffix("").name for x in d.iterdir() if x.suffix in (".md", ".json")})
@@ -293,6 +305,4 @@ def ingest(st: Settings, product: Product, store: Store, all_products: list[Prod
         seen.setdefault(f.name, []).append(product.slug)
         log.info("%s: critic report %s → %d card(s)", product.slug, f.name, len(mine))
     save_seen(st, seen)
-    if n:
-        store.event("critic.collected", product.slug, "dispatcher", {"cards": n})
     return n

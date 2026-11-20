@@ -34,6 +34,7 @@ cp .env.example .env            # CLAUDE_CODE_OAUTH_TOKEN (from `claude setup-to
 .venv/bin/team cycle --product my-site --dry-run
 .venv/bin/team cycle --product all          # cron this hourly: see run-cycle.sh
 .venv/bin/team cycle --due                  # optional, cron every 5 min (run-cycle-fast.sh): products with cycle.every_min in product.yaml
+# the two entries run side by side: one lock per product (data/locks/, team/locks.py); update the code with update-code.sh
 ```
 
 A product that is more than a static site (a networked game) starts from a brief instead: `team onboard my-game --brief brief.md`
