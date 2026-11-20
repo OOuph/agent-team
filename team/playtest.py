@@ -176,8 +176,10 @@ def stop(server: Server) -> None:
     if p is None or p.poll() is not None:
         return
     try:
-        os.killpg(os.getpgid(p.pid), 15)
+        pgid = os.getpgid(p.pid)
+        os.killpg(pgid, 15)
     except (ProcessLookupError, PermissionError, OSError):
+        pgid = None
         p.terminate()
     try:
         p.wait(timeout=STOP_GRACE_S)
@@ -187,6 +189,24 @@ def stop(server: Server) -> None:
         except (ProcessLookupError, PermissionError, OSError):
             p.kill()
         p.wait(timeout=STOP_GRACE_S)
+    _wait_group_gone(pgid)
+
+
+def _wait_group_gone(pgid: int | None, timeout_s: float = 3.0) -> None:
+    """The shell exits before its children; wait until the whole process group is gone (frees the port)."""
+    if pgid is None:
+        return
+    end = time.time() + timeout_s
+    while time.time() < end:
+        try:
+            os.killpg(pgid, 0)
+        except (ProcessLookupError, PermissionError, OSError):
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(pgid, 9)
+    except OSError:
+        pass
 
 
 def _tail(p: Path, n: int = LOG_TAIL_CHARS) -> str:
