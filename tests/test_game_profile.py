@@ -357,3 +357,49 @@ def test_game_without_repo_url_starts_a_local_repository(tmp_path: Path):
     s = Store(sp.dir)
     assert s.task(t2["id"])["state"] == "blocked"
     s.close()
+
+
+def test_game_designer_prompt_carries_the_whole_long_document(tmp_path: Path):
+    """F18 (ai-battles 20.11): GAME-DESIGN.md of 20 000 chars and a 4 500-char balance.json travel whole — the role returns
+    complete files, so a tail would make it delete the head. The PO's outline lists the headings of the whole document."""
+    st = _settings(tmp_path)
+    p = _game(st)
+    repo = p.repo_dir
+    repo.mkdir(parents=True, exist_ok=True)
+    head = "# AI Battles — GAME-DESIGN\n\n## 0. Research\nHEAD-MARKER\n"
+    body = "".join(f"## {i}. Section {i}\n" + "текст раздела " * 120 + "\n" for i in range(1, 13))
+    (repo / prompts.GDD_FILE).write_text(head + body + "## 13. Open questions\nTAIL-MARKER\n", encoding="utf-8")
+    assert len((repo / prompts.GDD_FILE).read_text(encoding="utf-8")) > 12000
+    (repo / prompts.BALANCE_DIR).mkdir(parents=True)
+    table = json.dumps({"stats": {f"s{i}": {"cost_per_level": i, "note": "x" * 60} for i in range(60)}, "last": "TABLE-TAIL"})
+    assert len(table) > 3000
+    (repo / prompts.BALANCE_DIR / "balance.json").write_text(table, encoding="utf-8")
+    store = Store(p.dir)
+    try:
+        prompt = prompts.game_designer_prompt(p, {"id": "T-0001", "title": "t", "role": "game-designer"}, repo, store)
+    finally:
+        store.close()
+    assert "HEAD-MARKER" in prompt and "TAIL-MARKER" in prompt and "TABLE-TAIL" in prompt and '"s0"' in prompt
+    assert "TRUNCATED" not in prompt and prompts.truncated_design_docs(p, repo) == set()
+    block = prompts.game_block(p, repo)
+    assert "0. Research" in block and "13. Open questions" in block
+
+
+def test_truncated_design_document_is_marked_and_never_overwritten(tmp_path: Path):
+    """A document over the limit (`design.gdd_chars` in product.yaml) is shown as a marked tail and reported as partial,
+    so exec_game_designer drops a rewrite of it instead of committing a document without its head."""
+    st = _settings(tmp_path)
+    p = _game(st)
+    p.raw["design"] = {"gdd_chars": 500, "table_chars": 200}
+    repo = p.repo_dir
+    repo.mkdir(parents=True, exist_ok=True)
+    (repo / prompts.GDD_FILE).write_text("# HEAD-MARKER\n" + "x" * 2000 + "\nTAIL-MARKER\n", encoding="utf-8")
+    (repo / prompts.BALANCE_DIR).mkdir(parents=True)
+    (repo / prompts.BALANCE_DIR / "small.json").write_text("{}", encoding="utf-8")
+    store = Store(p.dir)
+    try:
+        prompt = prompts.game_designer_prompt(p, {"id": "T-0002", "title": "t", "role": "game-designer"}, repo, store)
+    finally:
+        store.close()
+    assert "TRUNCATED: only the last 500" in prompt and "TAIL-MARKER" in prompt and "HEAD-MARKER" not in prompt
+    assert prompts.truncated_design_docs(p, repo) == {prompts.GDD_FILE}

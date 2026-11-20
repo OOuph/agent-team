@@ -1162,6 +1162,12 @@ class Cycle:
             return True
         res = rr.structured
         files = [f for f in (res.get("files") or []) if isinstance(f, dict) and f.get("path") and prompts.safe_rel_path(str(f["path"]))]
+        partial = prompts.truncated_design_docs(self.p, gdd_dir)        # F18: never overwrite a document the role saw only in part
+        refused = [str(f["path"]) for f in files if str(f["path"]) in partial]
+        if refused:
+            files = [f for f in files if str(f["path"]) not in partial]
+            log.warning("%s: %s: game designer's rewrite of %s refused (the prompt carried a truncated copy)", self.p.slug, t["id"], refused)
+            self.store.event("design.rewrite_refused", t["id"], "dispatcher", {"paths": refused})
         for q in res.get("open_questions") or []:
             self.store.ask(from_="game-designer", to="owner", question=f"{q.get('question', '')} (why the owner: {q.get('why_owner', '')})"[:1500], task_id=None)
         for pt in res.get("proposed_tasks") or []:
