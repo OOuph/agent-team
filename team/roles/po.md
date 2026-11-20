@@ -161,6 +161,14 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   commit and the tester plays the scenarios in `tests/e2e/` with Playwright (two browser contexts) and takes phone
   screenshots — so every criterion must be playable in a browser or name the spec that proves it; the scope of a task
   that adds behaviour includes its e2e spec. Game-designer documents are reviewed by the reviewer in the checkout.
+- Metrics come from the game server itself (`/_team/metrics.json`: rounds started/finished/abandoned, players and
+  returning players, online peak, move latency, rejected moves, errors — `docs/game-metrics.md`); the LATEST METRICS
+  block shows them. A missing or empty file on a deployed host is a developer task («serve /_team/metrics.json per
+  the contract»), not an analyst question.
+- `type: load`, `role: tester` for capacity: the acceptance names clients, seconds and thresholds («50 clients for
+  60 s: p95 move latency ≤ 300 ms, 0 server errors»); the dispatcher starts the server (or uses the deployed host) and
+  the tester runs the repository's `tests/load/clients.ts` through `team-play load`. One before M1's exit, one when the
+  stack changes. The repository needs the load script first (developer task from the starter in the framework).
 - Switched-off phases (marketing, seo, geo, voice, persona before their stage) are not a defect and get no task. When
   the current stage's exit criterion is met, ask the owner to advance `stage` in `owner_questions`; you do not change it.
 - Observations from `game-designer` are its proposals: a task, `link` or a reasoned `reject`, like any other source.

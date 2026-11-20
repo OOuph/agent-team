@@ -4,6 +4,7 @@ one allow-listed binary that runs Playwright in a fixed checkout against a fixed
   team-play test [--grep TEXT] [--spec PATH] [--project NAME]    run the repository's Playwright tests (tests/e2e) against BASE_URL
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
+  team-play load --clients N --seconds S [--rate R] [--script tests/load/clients.ts] [--moves]   N WebSocket clients against BASE_URL
 
 Environment set by the dispatcher: TEAM_PLAY_CWD (the checkout), TEAM_PLAY_BASE_URL (the server), TEAM_PLAY_OUT (where
 screenshots and reports go), TEAM_PLAY_SERVER_LOG, TEAM_PLAY_NPX (default `npx`), TEAM_PLAY_TIMEOUT_S. URLs must be on
@@ -31,6 +32,12 @@ GREP_DENIED = set('|;&$`"<>()')
 DEFAULT_VIEWPORT = (360, 740)        # the phone first (VISION: portrait, 360 px)
 MAX_VIEWPORT = 4000
 RESULTS_DIR = "test-results"         # Playwright's default output folder inside the checkout
+LOAD_SCRIPT = "tests/load/clients.ts"   # the repository's load script (starter: team/templates/service-repo/tests/load/clients.ts)
+LOAD_RUNNER = ["tsx"]                   # `npx tsx <script>`; TEAM_PLAY_LOAD_RUNNER overrides (e.g. "node" for a .js script)
+MAX_LOAD_CLIENTS = 200
+MAX_LOAD_SECONDS = 300
+LOAD_EXTRA_TIMEOUT_S = 120
+LOAD_KEYS = ("clients", "connected", "seconds", "messages", "samples", "p50_ms", "p95_ms", "max_ms", "errors", "disconnects", "rejected")
 
 
 def _env(name: str, default: str = "") -> str:
@@ -200,6 +207,67 @@ def cmd_logs(a: argparse.Namespace) -> int:
     return 0
 
 
+def parse_load_output(text: str) -> dict | None:
+    """The load script's last JSON object line (`{"clients": …}`); None when there is none."""
+    for line in reversed((text or "").splitlines()):
+        line = line.strip()
+        if line.startswith("{") and line.endswith("}"):
+            try:
+                d = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(d, dict):
+                return d
+    return None
+
+
+def load_summary(d: dict, base: str, seconds: float) -> str:
+    parts = [f"{k} {d[k]}" for k in LOAD_KEYS if k in d]
+    return f"load against {base}: " + ", ".join(parts) + f" · {seconds:.0f}s"
+
+
+def cmd_load(a: argparse.Namespace) -> int:
+    """`team-play load`: run the repository's load script (slice 6) with bounded clients/seconds, print its JSON summary."""
+    if not (1 <= a.clients <= MAX_LOAD_CLIENTS) or not (1 <= a.seconds <= MAX_LOAD_SECONDS):
+        sys.exit(f"team-play: --clients 1..{MAX_LOAD_CLIENTS}, --seconds 1..{MAX_LOAD_SECONDS}")
+    script = Path(a.script or LOAD_SCRIPT)
+    if ".." in script.parts or script.is_absolute():
+        sys.exit("team-play: --script is a path inside the checkout")
+    base = _env("TEAM_PLAY_BASE_URL")
+    if not base:
+        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to load")
+    if not (cwd() / script).exists():
+        sys.exit(f"team-play: {script} not found in the checkout — the repository needs a load script (starter: team/templates/service-repo/tests/load/clients.ts)")
+    runner = (_env("TEAM_PLAY_LOAD_RUNNER") or " ".join(LOAD_RUNNER)).split()
+    argv = [*npx(), *runner, str(script), "--base-url", base, "--clients", str(a.clients), "--seconds", str(a.seconds), "--rate", str(a.rate)]
+    if a.moves:
+        argv.append("--moves")
+    env = dict(os.environ)
+    env.update({"BASE_URL": base, "CI": "1"})
+    t0 = time.time()
+    try:
+        cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=a.seconds + LOAD_EXTRA_TIMEOUT_S, env=env)
+    except FileNotFoundError:
+        sys.exit(f"team-play: {argv[0]} not found — Node is not installed on this machine (friction for the retro)")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"team-play: load script did not finish within {a.seconds + LOAD_EXTRA_TIMEOUT_S}s")
+    took = time.time() - t0
+    out = out_dir()
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    raw_path = out / f"load-{stamp}.json"
+    d = parse_load_output(cp.stdout)
+    if d is None:
+        print(f"team-play: the load script printed no JSON summary (exit {cp.returncode}); output tail:\n{(cp.stdout + cp.stderr)[-2000:]}")
+        return 2
+    d = {**d, "base_url": base, "script": str(script), "exit": cp.returncode, "took_s": round(took, 1)}
+    raw_path.write_text(json.dumps(d, indent=1), encoding="utf-8")
+    print(load_summary(d, base, took) + f" · exit {cp.returncode}")
+    if cp.stderr.strip():
+        print("stderr: " + re.sub(r"\x1b\[[0-9;]*m", "", cp.stderr).strip()[-MAX_ERROR_CHARS:])
+    print(f"report: {raw_path}")
+    return 0 if cp.returncode == 0 else 1
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="team-play", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -208,6 +276,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--height", type=int); s.add_argument("--full-page", action="store_true"); s.add_argument("--wait-ms", type=int, default=800)
     s.set_defaults(fn=cmd_screenshot)
     s = sub.add_parser("logs"); s.add_argument("--tail", type=int, default=3000); s.set_defaults(fn=cmd_logs)
+    s = sub.add_parser("load"); s.add_argument("--clients", type=int, required=True); s.add_argument("--seconds", type=int, required=True)
+    s.add_argument("--rate", type=float, default=2.0); s.add_argument("--script"); s.add_argument("--moves", action="store_true"); s.set_defaults(fn=cmd_load)
     a = ap.parse_args(argv)
     return int(a.fn(a) or 0)
 

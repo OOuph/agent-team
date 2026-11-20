@@ -108,7 +108,7 @@
        "marketing",
        "ops",
        "milestone",
-       "design"
+       "design", "load"
       ]
      },
      "problem": {
@@ -165,7 +165,7 @@
        "marketer",
        "analyst",
        "designer",
-       "game-designer"
+       "game-designer", "tester"
       ]
      },
      "observations": {
