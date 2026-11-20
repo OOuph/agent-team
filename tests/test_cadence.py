@@ -257,14 +257,15 @@ def test_fast_script_with_real_flock_never_overlaps(tmp_path: Path):
     root, env = _fast_checkout(tmp_path)
     env = {**env, "PATH": os.environ["PATH"]}                       # the real flock
     (root / "data").mkdir()
-    holder = subprocess.Popen(["flock", "-n", str(root / "data" / "cycle.lock"), "sleep", "5"])
+    holder = subprocess.Popen(["flock", "-n", str(root / "data" / "cycle.lock"), "sleep", "5"],
+                              start_new_session=True)
     try:
         import time
         time.sleep(0.5)
         r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env)
         assert r.returncode == 1 and _calls(root) == []
     finally:
-        holder.kill(); holder.wait()
+        os.killpg(holder.pid, 9); holder.wait()
     assert subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env).returncode == 0
     assert _calls(root) == ["cycle --due --product all"]
 
