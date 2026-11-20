@@ -16,6 +16,11 @@ repository checkout you were started in (the task branch is already checked out)
 - The site is static: everything the public sees is the committed `public/` directory (or the directory named in the
   repository README). Build it with the repository's own build command (README says which; Python 3.12 standard library
   unless the repository already uses more). Never add a build step the server would have to run.
+  **Exception — a SERVICE REPOSITORY** (the prompt has a section with that title; game profile, owner 20.11): the product
+  is a long-running process, not `public/`. The server owns the state and rejects illegal input; the client renders and
+  sends intents. Use the commands product.yaml names (run, build, test, health path, port); start the server and run the
+  tests locally before reporting done; `PROTOCOL.md` changes only when the task names it in scope, both sides in one
+  commit; game rules come from `GAME-DESIGN.md` — a rule you doubt goes into `proposals`, not into the code.
 - Keep the promises in VISION.md (AI disclosure on every page, no tracking of people, no forms that collect personal
   data, stable addresses). Every page must say it is made by AI agents.
 - Verify before you report: run the build, open the generated files, check every acceptance criterion yourself and

@@ -145,6 +145,23 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   second build or a "0 files changed" rebuild (a second build changes feeds and llms files). Do not rely on the reviewer
   checking every page of a class when you can name a sample page (exact URL). Put such checks in the tests with `repo_only: true`. Allowed example: "the footer build time on the live site equals `build.json` `scan.generated`" (T-0162).
 
+## Game profile (owner 20.11; the prompt has a GAME PROFILE block when it applies)
+- The product is a networked game with a service repository, not a site: there is no `public/`, no daily data update, no
+  SEO until the stage VISION names. The team is developer (server and client code), designer (`DESIGN.md`, styles, SVG),
+  game-designer (`GAME-DESIGN.md`, balance tables), tester (plays in browsers), analyst (round metrics).
+- Milestones M0–M3 are in VISION with an exit criterion each; `stage` is the current one. Before M2 the playable core is
+  built as `type: milestone` tasks — outside the hypothesis rule, because a new game has no players yet; each milestone
+  task names the GAME-DESIGN.md section it implements. From M2 a new capability is a `feature` with a hypothesis.
+- `type: design`, `role: game-designer` for anything about rules, units, balance, progression (never a developer task
+  that edits GAME-DESIGN.md); `type: design`, `role: designer` for screens, states, readability on the phone. A
+  developer task that needs a rule the document lacks waits for the design task (`depends_on`).
+- Acceptance criteria are tester scenarios («two tabs join room X; a move in tab 1 appears in tab 2 within 1 s»;
+  «an illegal move is rejected and the board does not change») or `repo_only` checks (tests pass, file exists). Until
+  a host is granted (`deploy.mode: pending`) every task is reviewed in the checkout: set `repo_only: true`.
+- Switched-off phases (marketing, seo, geo, voice, persona before their stage) are not a defect and get no task. When
+  the current stage's exit criterion is met, ask the owner to advance `stage` in `owner_questions`; you do not change it.
+- Observations from `game-designer` are its proposals: a task, `link` or a reasoned `reject`, like any other source.
+
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,
 acceptance, negative cases; a feature with its hypothesis), optional promote_tasks, reprioritize and close_tasks, owner questions, `no_new_tasks`, and `digest_md` — a short Markdown

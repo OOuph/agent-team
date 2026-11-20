@@ -20,7 +20,8 @@ DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
                "models": {"po": "opus", "developer": "sonnet", "reviewer": "sonnet", "analyst": "sonnet",
-                          "marketer": "sonnet", "persona": "sonnet", "geo-probe": "sonnet", "onboarding": "opus"}},
+                          "marketer": "sonnet", "persona": "sonnet", "geo-probe": "sonnet", "onboarding": "opus",
+                          "designer": "sonnet", "game-designer": "opus"}},
     "budget": {"max_usd_per_product_per_day": 20.0, "max_usd_per_run": 3.0, "min_usd_per_run": 0.3, "unknown_cost_reserve_usd": 0.5, "warn_share": 0.8},
     "cycle": {"review_after_min": 6, "measure_after_h": 24, "max_review_fails": 2, "persona_every_n_cycles": 6,
               "digest_hour_utc": 7, "digest_hours_utc": [7, 19], "measure_every_h": 6, "seo_every_h": 12, "geo_every_h": 168, "voice_every_h": 84, "dev_idle_po_every_h": 12,
@@ -102,6 +103,16 @@ def _abs(p: str | Path) -> Path:
     return (p if p.is_absolute() else ROOT / p).resolve()
 
 
+MILESTONES = ("M0", "M1", "M2", "M3")      # game profile stages, in order (VISION.game.template.md)
+HYPOTHESIS_FROM_STAGE = "M2"               # from this stage a `milestone` task is a `feature` under the hypothesis rule
+
+
+def stage_index(stage: str) -> int:
+    """Position of a milestone id in MILESTONES; unknown ids sort after the known ones (an unknown stage opens no gate)."""
+    s = str(stage or "").strip().upper()
+    return MILESTONES.index(s) if s in MILESTONES else (len(MILESTONES) if s else -1)
+
+
 PRODUCT_DEFAULTS: dict[str, Any] = {
     "slug": "", "name": "", "host": "", "site_base": "", "repo": {"url": "", "branch": "main", "public_dir": "public"},
     "channels": {}, "targets": [], "budget_usd_per_day": None, "paused": False,
@@ -144,6 +155,53 @@ class Product:
     @property
     def public_dir(self) -> str:
         return str((self.raw.get("repo") or {}).get("public_dir") or "public")
+
+    # --- game profile (owner 20.11; SCHEME §11): a product that is a long-running service, not a static site ---------
+
+    @property
+    def profile(self) -> str:
+        """`site` (default: static pages on the droplet) or `game` (networked game: service repository, milestones, phase gates)."""
+        return str(self.raw.get("profile") or "site")
+
+    @property
+    def stage(self) -> str:
+        """Current milestone id (M0…M3) from product.yaml; `team onboard` writes it, the PO asks the owner to advance it."""
+        return str(self.raw.get("stage") or MILESTONES[0])
+
+    @property
+    def phase_gates(self) -> dict[str, str]:
+        """check/phase name → the milestone from which it runs (e.g. marketing: M2). Missing name = always on."""
+        g = self.raw.get("phase_gates") or {}
+        return {str(k): str(v) for k, v in g.items()} if isinstance(g, dict) else {}
+
+    def gate_open(self, name: str) -> bool:
+        """True when the phase/check may run at the product's current stage. A site profile has no gates."""
+        need = self.phase_gates.get(name)
+        if not need:
+            return True
+        return stage_index(self.stage) >= stage_index(need)
+
+    @property
+    def repo_kind(self) -> str:
+        """`static` (public/ is served as is) or `service` (a process: run_cmd, build_cmd, health_path, port)."""
+        return str((self.raw.get("repo") or {}).get("kind") or "static")
+
+    @property
+    def run_cmd(self) -> str:
+        return str((self.raw.get("repo") or {}).get("run_cmd") or "")
+
+    @property
+    def build_cmd(self) -> str:
+        return str((self.raw.get("repo") or {}).get("build_cmd") or "")
+
+    @property
+    def health_path(self) -> str:
+        return str((self.raw.get("repo") or {}).get("health_path") or "")
+
+    @property
+    def port(self) -> int | None:
+        v = (self.raw.get("repo") or {}).get("port")
+        return int(v) if isinstance(v, int) or (isinstance(v, str) and v.isdigit()) else None
 
     @property
     def repo_dir(self) -> Path:

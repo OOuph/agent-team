@@ -47,6 +47,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     answered_txt = "\n\n".join(_y({k: q.get(k) for k in ("id", "question", "answer", "answered_by", "answered")}) for q in answered) or "(none)"
     fw_txt = framework_context(product)
     mkt_txt = po_marketing_block(product, store, caps=channel_caps)
+    game_txt = game_block(product)
     return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
             f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
             + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
@@ -61,6 +62,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
             + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
             + (("\n\n# FRAMEWORK CONTEXT (this product is the framework itself)\n" + fw_txt) if fw_txt else "")
+            + (("\n\n" + game_txt) if game_txt else "")
             + (("\n\n" + mkt_txt) if mkt_txt else "")
             + "\n\n# VOICE OF THE USER (weekly research: real people's words about the problem)\n" + _voice_block(product)
             + "\n\n# READER EXPERIENCE (personas, scores 1–5)\n" + _ux_block(product)
@@ -110,8 +112,50 @@ def framework_context(product: Product) -> str:
     return "\n\n".join(parts)
 
 
+GDD_FILE = "GAME-DESIGN.md"                # game profile: the game designer's document in the repository (or the product folder before a repo exists)
+DESIGN_FILE = "DESIGN.md"                  # game profile: the designer's visual system
+PROTOCOL_FILE = "PROTOCOL.md"              # service repository: the client ↔ server message contract
+BALANCE_DIR = "design/balance"             # game profile: balance tables as data
+
+
+def _read_tail(p: Path, n: int) -> str:
+    try:
+        return _tail(p.read_text(encoding="utf-8", errors="replace"), n) if p.exists() else ""
+    except OSError:
+        return ""
+
+
+def safe_rel_path(path: str) -> bool:
+    """A repository-relative path a role may write: no absolute paths, no `..`, no .git."""
+    p = Path(path)
+    return bool(path) and not p.is_absolute() and ".." not in p.parts and ".git" not in p.parts and not path.startswith("/")
+
+
+def service_block(product: Product, repo_dir: Path, role: str = "developer") -> str:
+    """Game profile / service repository (owner 20.11): what replaces «the site is static» in the developer's prompt — the
+    commands the dispatcher and the host will run, the protocol contract and the design documents in the checkout."""
+    if product.repo_kind != "service" and product.profile != "game":
+        return ""
+    cmds = {k: v for k, v in (("run", product.run_cmd), ("build", product.build_cmd), ("test", product.test_cmd),
+                              ("health", product.health_path), ("port", product.port)) if v}
+    out = ["\n\n# SERVICE REPOSITORY (not a static site)",
+           f"Profile `{product.profile}`, stage `{product.stage}`. This repository is a long-running process, not a `public/` folder: "
+           "the server owns the state (authoritative game loop), the client only renders and sends intents; an invalid move is "
+           "rejected by the server. Commands the dispatcher and the host run (product.yaml `repo`): " + (_y(cmds).strip() if cmds else "(none set yet — add them to README)") + ".",
+           f"`{PROTOCOL_FILE}` is the client ↔ server contract: change it only when the task names it in scope, and update both sides in the same commit. "
+           "Run the tests and start the server locally before reporting done; a task is not done while `test` fails or the health path does not answer."]
+    if role == "designer":
+        out.append(f"You are the designer: your files are `{DESIGN_FILE}`, styles and assets (SVG, CSS). Do not change server code or game rules; "
+                   "a rule that looks wrong goes into `proposals`.")
+    for name, n in ((GDD_FILE, 4000), (PROTOCOL_FILE, 3000), (DESIGN_FILE, 2000 if role == "designer" else 800)):
+        txt = _read_tail(repo_dir / name, n)
+        if txt:
+            out.append(f"\n--- {name} ---\n{txt}")
+    return "\n".join(out)
+
+
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
-                     review: dict[str, Any] | None) -> str:
+                     review: dict[str, Any] | None, role: str = "developer") -> str:
     readme = ""
     seen: set[Path] = set()
     for name in ("README.md", "readme.md", "AGENTS.md"):
@@ -129,11 +173,58 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
              "you do here is merged. Report `done` with one self_check per criterion: `met: true` only when the evidence shows the "
              "approach gives what the goal needs, `met: false` with the output that rules it out. A clear «does not work» is a "
              "good result.\n\n") if task.get("probe_of") else ""
-    return (probe + f"# TASK {task['id']} — product `{product.slug}` ({product.site_base})\n\n"
-            f"You are in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
+    return (probe + f"# TASK {task['id']} — product `{product.slug}` ({product.site_base or 'no live site yet'})\n\n"
+            f"You are the `{role}` role in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
             "# TASK\n" + _y(_task_brief(task)) + prev + rev
             + "\n\n# VISION\n" + product.vision()
+            + service_block(product, repo_dir, role)
             + "\n\n# REPOSITORY NOTES" + (readme or "\n(no README — follow the conventions you find in the tree)") + "\n")
+
+
+def game_block(product: Product, gdd_dir: Path | None = None) -> str:
+    """What the PO sees on a game product (owner 20.11): stage, gates, the game design document's outline, the rules."""
+    if product.profile != "game":
+        return ""
+    gates = product.phase_gates
+    closed = [f"{k} (from {v})" for k, v in gates.items() if not product.gate_open(k)]
+    d = gdd_dir or product.repo_dir
+    gdd = _read_tail(d / GDD_FILE, 6000) or _read_tail(product.dir / GDD_FILE, 6000)
+    heads = [ln for ln in gdd.splitlines() if ln.startswith("#")][:30]
+    return ("# GAME PROFILE\n"
+            f"Stage `{product.stage}` (milestones in VISION). Switched off until a later stage: {', '.join(closed) or 'nothing'}. "
+            "Rules: a task of the playable core is type `milestone` (outside the hypothesis rule before M2), a document or visual task is "
+            "type `design` with role `game-designer` (GAME-DESIGN.md, balance tables) or `designer` (DESIGN.md, styles, SVG); the "
+            "developer owns server and client code (`repo.kind: service`, no static `public/`). Acceptance criteria are scenarios a "
+            "tester runs in a browser («two tabs join room X; a move in tab 1 appears in tab 2 within 1 s») or `repo_only` checks "
+            "(tests pass, file exists). Until a host is granted (`deploy.mode: pending`) every task is reviewed in the checkout. "
+            "Do not edit GAME-DESIGN.md through a developer task: a rule you doubt goes to the game designer as a `design` task. "
+            "The stage changes only by the owner (owner_questions when the exit criterion of the current stage is met).\n"
+            + ("\n## GAME-DESIGN.md outline\n" + "\n".join(heads) if heads else "\n(no GAME-DESIGN.md yet: the first design task writes it)"))
+
+
+def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store) -> str:
+    """The game designer's prompt: VISION, the task, the current GAME-DESIGN.md and balance tables, game metrics, what
+    testers and the PO observed. No shell: everything travels here (owner 20.11)."""
+    gdd = _read_tail(gdd_dir / GDD_FILE, 12000)
+    tables = ""
+    bdir = gdd_dir / BALANCE_DIR
+    if bdir.exists():
+        for f in sorted(bdir.glob("*"))[:8]:
+            tables += f"\n--- {BALANCE_DIR}/{f.name} ---\n" + _read_tail(f, 3000)
+    latest = product.dir / "metrics" / "latest.md"
+    metrics = _read_tail(latest, 4000)
+    obs = [o for o in store.observations() if o.get("status") in ("new", "triaged") and o.get("classification") in ("defect", "ux_friction", "value_gap", "feedback")][-15:]
+    return (f"# DESIGN TASK {task['id']} — product `{product.slug}` — stage {product.stage}\n\n"
+            "You return the design-spec schema: `files` are complete documents to write into the repository (paths relative to its root, "
+            f"e.g. `{GDD_FILE}`, `{BALANCE_DIR}/ships.json`); `balance_changes` say what changed and how the effect will be read in the "
+            "metrics; `proposed_tasks` are suggestions for the PO (not tasks yet); `open_questions` only for what changes the genre, "
+            "the audience or money (the owner decides those).\n\n"
+            "# TASK\n" + _y(_task_brief(task))
+            + "\n\n# VISION\n" + product.vision()
+            + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
+            + ("\n\n# BALANCE TABLES" + tables if tables else "")
+            + "\n\n# GAME METRICS\n" + (metrics or "(no metrics yet: no rounds have been played)")
+            + "\n\n# WHAT TESTERS, PLAYERS AND THE PO OBSERVED\n" + (_y([{k: o.get(k) for k in ("id", "title", "classification", "actual", "source")} for o in obs]) if obs else "(nothing yet)") + "\n")
 
 
 def reviewer_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None) -> str:
@@ -436,6 +527,9 @@ def po_marketing_block(product: Product, store: Store, caps: dict[str, Any] | No
     product without channels."""
     if not (product.raw.get("channels") or {}):
         return ""
+    if not product.gate_open("marketing"):           # game profile: no plan and no post tasks before the stage VISION names
+        return (f"# MARKETING — OFF until stage {product.phase_gates.get('marketing')} (now {product.stage}). Create no marketing or "
+                "content task; the marketer does not run on this product yet.")
     m = marketing_memory(product, store, caps=caps)
     age = m.get("plan_age_days")
     plan = str(m.get("plan_md") or "").strip()

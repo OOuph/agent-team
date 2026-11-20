@@ -26,6 +26,8 @@ claude:
     deputy: opus                    # deputy owner: answers owner questions by DEPUTY.md while the owner is away
     voice: opus                     # owner 07.11: weekly voice-of-user research, the PO ranks hypotheses on it
     onboarding: opus                # owner 20.11: brief → questions and accounts → VISION and backlog (team onboard), twice per product
+    designer: sonnet                # owner 20.11, game profile: DESIGN.md, CSS tokens, SVG assets in the repository (same path as developer)
+    game-designer: opus             # owner 20.11, game profile: GAME-DESIGN.md and balance tables → design-spec; the PO cuts it into tasks
 
 billing:                           # owner 04.11: "лимит расхода 100 в день, общий на всех; подписку не учитывай"
   daily_cap_usd_all: 100.0         # credits (real money) spent per UTC day by the whole team; runs inside the subscription are not counted
@@ -57,6 +59,8 @@ cycle:
     developer: 1                  # 03.11: a single seat starved the daily post behind P1/P2 developer tasks
     marketer: 1
     analyst: 1
+    designer: 1                     # game profile (owner 20.11); a site product simply never has tasks of these roles
+    game-designer: 1
 
 framework:                        # self-improvement: friction register → retro role → issues / pull requests on the framework repo
   retro_every_h: 1                # the retro role reads the register this often (0 = off); runs after the product cycles (owner 02.11: every cycle)
