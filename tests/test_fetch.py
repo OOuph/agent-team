@@ -73,3 +73,10 @@ def test_head(monkeypatch):
     out = run(monkeypatch, "0123456789" * 50, ["--head", "200"])
     assert "[head: first 200 of 500 chars]" in out and out.startswith("HTTP 200")
     assert out.endswith("0123456789" * 20 + "\n")
+
+
+def test_head_exactly_500_chars(monkeypatch):
+    body = "".join(str(i % 10) for i in range(2000))
+    out = run(monkeypatch, body, ["--head", "500"])
+    assert out.startswith("HTTP 200") and out.endswith(body[:500] + "\n")
+    assert body[:501] not in out
