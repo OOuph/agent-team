@@ -22,9 +22,17 @@ from typing import Any
 import yaml
 
 from . import geo, gitops, hypothesis, prompts, prfacts, publish, replan, voice
-from .config import Product, Settings
+from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
+
+GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
+PENDING_ROLES = ("tester",)                              # roles the PO/onboarding may name whose execute path comes in a later slice
+
+
+def _y_short(obj: Any, n: int = 400) -> str:
+    s = yaml.safe_dump(obj, sort_keys=False, allow_unicode=True, width=110)
+    return s if len(s) <= n else s[:n] + "…"
 
 log = logging.getLogger("team.cycle")
 
@@ -247,7 +255,7 @@ class Cycle:
         self.seo_check()
         n = len(self.store.cycles())
         every = int(self.st.cycle.get("persona_every_n_cycles", 6))
-        if every and n % every == 1:
+        if every and n % every == 1 and self.p.gate_open("persona"):      # game profile: personas from the stage VISION names
             self.run_personas()
 
     def collect_feedback(self) -> int:
@@ -326,7 +334,7 @@ class Cycle:
     def seo_check(self) -> None:
         """Programmatic SEO/GEO page checks every `seo_every_h` hours: defects become observation cards, the full table
         goes to metrics/seo-<date>.json for the analyst."""
-        if self.dry_run or not self.p.site_base:
+        if self.dry_run or not self.p.site_base or not self.p.gate_open("seo"):
             return
         from . import seocheck
         every = int(self.st.cycle.get("seo_every_h", 12))
@@ -438,8 +446,8 @@ class Cycle:
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         tools = env = None
         sha = t.get("released_sha")
-        if not t.get("repo_only") and only_raw_github_urls((result or {}).get("how_to_verify")):
-            t["repo_only"] = True                    # T-0017: nothing on the live site to check → read-only checkout
+        if not t.get("repo_only") and (only_raw_github_urls((result or {}).get("how_to_verify")) or not self.p.site_base):
+            t["repo_only"] = True                    # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
             self.store.save_task(t)
         if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
             try:
@@ -598,7 +606,7 @@ class Cycle:
                 self.store.event("task.duplicate_skipped", dup["id"], "po", {"title": rt["title"][:140], "not_before": rt.get("not_before")})
                 skipped.append(f"{rt['title'][:80]} → already open as {dup['id']}")
                 continue
-            new = self.store.create_task(title=rt["title"], type_=rt["type"], problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
+            new = self.store.create_task(title=rt["title"], type_=self.task_type_for_stage(str(rt["type"])), problem=rt["problem"], scope=rt["scope"], acceptance=rt["acceptance"],
                                    negative_cases=rt.get("negative_cases"), goal=rt["goal"], priority=rt["priority"], size=rt["size"],
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
                                    not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer",
@@ -630,13 +638,55 @@ class Cycle:
 
     # execute: one ready task → developer / marketer / analyst ------------------------------------
 
+    def ensure_local_repo(self) -> bool:
+        """Game profile without `repo.url` yet (owner 20.11: the owner creates GitHub repositories, the team must not wait):
+        the dispatcher starts a local git repository under data/repos/<slug> so design and code tasks can begin; one
+        observation asks the PO for the URL (the owner adds `repo.url`, then the local history is pushed by hand). A site
+        product keeps the old behaviour (blocked: no repository configured)."""
+        if self.p.profile != "game" or self.p.repo_url:
+            return False
+        repo = self.p.repo_dir
+        if (repo / ".git").exists():
+            return True
+        gitops.init_local(repo, self.p.repo_branch)
+        (repo / "README.md").write_text(f"# {self.p.raw.get('name') or self.p.slug}\n\nStarted by agent-team; no remote yet.\n", encoding="utf-8")
+        gitops.git(repo, "add", "-A")
+        gitops.git(repo, "commit", "-q", "-m", "init: local repository started by the dispatcher")
+        self.store.event("repo.local_init", self.p.slug, "dispatcher", {"path": str(repo)})
+        self.store.add_observation({"title": "Repository is local only: ask the owner for a GitHub URL (repo.url) and a host",
+                                    "classification": "need_hypothesis", "source": "dispatcher", "url": self.p.site_base,
+                                    "actual": f"work happens in {repo}; nothing is pushed until repo.url is set", "fingerprint": f"local-repo-{self.p.slug}"})
+        return True
+
+    def pending_role(self, t: dict[str, Any]) -> bool:
+        """True for a task whose role has no execute path yet (PENDING_ROLES); the first time an event is written."""
+        role = str(t.get("role") or "developer")
+        if role not in PENDING_ROLES:
+            return False
+        if not t.get("role_pending_noted"):
+            self.store.event("task.role_not_available", t["id"], "dispatcher", {"role": role})
+            t["role_pending_noted"] = True
+            self.store.save_task(t)
+        return True
+
+    def task_type_for_stage(self, type_: str) -> str:
+        """Owner 20.11: a `milestone` task (the playable core, outside the hypothesis rule) exists only before stage M2; from
+        M2 on the PO's `milestone` is a `feature` and the hypothesis rule applies as for any product."""
+        if type_ == "milestone" and self.p.profile == "game" and stage_index(self.p.stage) >= stage_index(HYPOTHESIS_FROM_STAGE):
+            return "feature"
+        return type_
+
     def execute_slots(self) -> dict[str, int]:
         """How many tasks per role one cycle may start. `cycle.execute_slots` (team.yaml, overridable in product.yaml) —
         03.11: with a single `max_execute_per_cycle` the daily content task starved behind P1/P2 developer tasks
         (release-radar T-0009 missed its 06:30 slot); content and measurement now have their own seats."""
         slots = self.p.raw.get("execute_slots") or self.st.cycle.get("execute_slots")
         if isinstance(slots, dict) and slots:
-            return {str(k): int(v) for k, v in slots.items()}
+            out = {str(k): int(v) for k, v in slots.items()}
+            if self.p.profile == "game":              # owner 20.11: the design roles always have a seat on a game product
+                for r, n in GAME_ROLE_SLOTS.items():
+                    out.setdefault(r, n)
+            return out
         return {"*": int(self.st.cycle.get("max_execute_per_cycle", 1))}
 
     def phase_execute(self) -> None:
@@ -653,6 +703,8 @@ class Cycle:
         for t in sorted(self.store.tasks(["in_progress", "ready"]), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", ""))):
             if all(used.get(k, 0) >= v for k, v in slots.items()):
                 break
+            if self.pending_role(t):
+                continue        # a role the cycle cannot run yet (tester: slice 4): the task waits in ready, noted once
             key = seat(str(t.get("role") or "developer"))
             if key is None:
                 continue        # this role's seat for the cycle is taken
@@ -821,6 +873,9 @@ class Cycle:
     def execute_task(self, t: dict[str, Any]) -> bool:
         if self.guard_replan(t) or self.guard_no_commit_loop(t):
             return False
+        role = str(t.get("role") or "developer")
+        if self.pending_role(t):
+            return False
         run_id = f"{self.cycle_id}-exec-{t['id']}"
         if not self.store.claim(t["id"], str(t.get("role")), run_id):
             return False
@@ -830,10 +885,13 @@ class Cycle:
         else:
             t["assignee_run"] = run_id
             self.store.save_task(t)
-        role = str(t.get("role") or "developer")
         try:
             if role == "developer":
                 return self.exec_developer(t, run_id)
+            if role == "designer":                    # owner 20.11: same path as the developer, its own card and model
+                return self.exec_developer(t, run_id, role="designer")
+            if role == "game-designer":
+                return self.exec_game_designer(t, run_id)
             if role == "marketer":
                 return self.exec_marketer(t, run_id)
             if role == "analyst":
@@ -843,17 +901,18 @@ class Cycle:
         finally:
             self.store.release(t["id"])
 
-    def exec_developer(self, t: dict[str, Any], run_id: str) -> bool:
+    def exec_developer(self, t: dict[str, Any], run_id: str, role: str = "developer") -> bool:
         repo = self.p.repo_dir
         if self.p.repo_url:
             gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
         elif not (repo / ".git").exists():
-            self.store.transition(t["id"], "blocked", "dispatcher", "no repository configured", force=True)
-            return True
+            if not self.ensure_local_repo():
+                self.store.transition(t["id"], "blocked", "dispatcher", "no repository configured", force=True)
+                return True
         branch = gitops.start_task_branch(repo, t["id"], self.p.repo_branch)
-        prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"))
+        prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role)
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
-        rr = self.role_run("developer", prompt, "task-result", cwd=repo, label=f"dev-{t['id']}", cap=cap,
+        rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"])
         if rr is None:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
@@ -922,6 +981,75 @@ class Cycle:
             self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
         self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
+        return True
+
+    def exec_game_designer(self, t: dict[str, Any], run_id: str) -> bool:
+        """Game designer (owner 20.11, game profile): writes GAME-DESIGN.md and balance tables as a `design-spec`; the
+        dispatcher commits the files to the repository on the task branch and merges them (released, repo_only → the reviewer
+        reads the checkout), or into the product folder when there is no repository yet (accepted). Proposed tasks become
+        observations for the PO; questions outside VISION go to the owner."""
+        repo = self.p.repo_dir
+        if self.p.repo_url:
+            gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
+        has_repo = (repo / ".git").exists() or self.ensure_local_repo()
+        gdd_dir = repo if has_repo else self.p.dir
+        prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store)
+        cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
+        work = self.p.work_dir / self.cycle_id / f"gd-{t['id']}"
+        rr = self.role_run("game-designer", prompt, "design-spec", cwd=work, label=f"gd-{t['id']}", cap=cap, allowed_tools=[], max_turns=8)
+        if rr is None:
+            self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
+            return False
+        if not (rr.ok and rr.structured):
+            attempts = int(t.get("attempts") or 0) + 1
+            self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": f"run failed: {rr.error}"[:400]})
+            self.store.transition(t["id"], "blocked" if attempts >= 3 else "ready", "dispatcher", f"run failed: {rr.error}"[:300], force=True,
+                                  attempts=attempts, assignee_run=None)
+            return True
+        res = rr.structured
+        files = [f for f in (res.get("files") or []) if isinstance(f, dict) and f.get("path") and prompts.safe_rel_path(str(f["path"]))]
+        for q in res.get("open_questions") or []:
+            self.store.ask(from_="game-designer", to="owner", question=f"{q.get('question', '')} (why the owner: {q.get('why_owner', '')})"[:1500], task_id=None)
+        for pt in res.get("proposed_tasks") or []:
+            title = str(pt.get("title") or "")[:140]
+            self.store.add_observation({"title": title, "classification": "need_hypothesis", "source": "game-designer", "task": t["id"],
+                                        "actual": _y_short(pt), "url": self.p.site_base, "fingerprint": fingerprint("gd", "proposal", "", title)})
+        result = {"run_id": run_id, "status": "done" if files else "blocked", "summary": str(res.get("summary") or "")[:1200],
+                  "changes": [f["path"] for f in files], "how_to_verify": [], "self_check": [],
+                  "balance_changes": res.get("balance_changes") or [], "friction": res.get("friction") or []}
+        if not files:
+            self.store.add_result(t["id"], result)
+            self.store.ask(from_="game-designer", to="po", question=f"Task {t['id']}: the game designer returned no files "
+                           f"({_short_text(res.get('summary'), 200)}). Re-state what document or table it must produce, or close the task.",
+                           task_id=t["id"], blocks=[t["id"]])
+            return True
+        if has_repo:
+            branch = gitops.start_task_branch(repo, t["id"], self.p.repo_branch)
+            for f in files:
+                p = repo / f["path"]
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(str(f.get("content") or ""), encoding="utf-8")
+            gitops.git(repo, "add", "-A")
+            gitops.git(repo, "commit", "-q", "-m", f"{t['id']}: game design — {', '.join(f['path'] for f in files)[:120]}")
+            result["branch"], result["commit"] = branch, gitops.head(repo)
+            self.store.add_result(t["id"], result)
+            try:
+                sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch)
+            except gitops.GitError as exc:
+                self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
+                return True
+            t = self.store.task(t["id"]) or t
+            t["repo_only"] = True                    # the deliverable is a document in the repository: the reviewer reads the checkout
+            self.store.save_task(t)
+            self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
+            return True
+        for f in files:                              # no repository yet: the documents live in the product folder until one exists
+            p = self.p.dir / f["path"]
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(str(f.get("content") or ""), encoding="utf-8")
+        self.store.add_result(t["id"], result)
+        self.store.transition(t["id"], "accepted", "dispatcher", f"design files written to the product folder: {', '.join(f['path'] for f in files)[:200]}",
+                              force=True, accepted_at=utcnow())
         return True
 
     def release_as_pull_request(self, t: dict[str, Any], repo: Path, res: dict[str, Any]) -> bool:
@@ -1323,6 +1451,8 @@ class Cycle:
     # geo: weekly control questions to AI search -------------------------------------------------
 
     def phase_geo(self) -> None:
+        if not self.p.gate_open("geo"):
+            return
         every_h = int(self.st.cycle.get("geo_every_h", 168))
         last = sorted((self.p.dir / "metrics").glob("geo-*.json"))
         if last:
@@ -1349,6 +1479,8 @@ class Cycle:
     # voice: weekly voice-of-user research ---------------------------------------------------------
 
     def phase_voice(self) -> None:
+        if not self.p.gate_open("voice"):
+            return
         if not voice.due(self.p.dir, int(self.st.cycle.get("voice_every_h", voice.EVERY_H_DEFAULT)), _now()):
             return
         if self.runner is None or self.dry_run or not voice.claim_cycle(self.st.data_dir, self.cycle_id):

@@ -106,7 +106,9 @@
        "research",
        "content",
        "marketing",
-       "ops"
+       "ops",
+       "milestone",
+       "design"
       ]
      },
      "problem": {
@@ -161,7 +163,9 @@
       "enum": [
        "developer",
        "marketer",
-       "analyst"
+       "analyst",
+       "designer",
+       "game-designer"
       ]
      },
      "observations": {

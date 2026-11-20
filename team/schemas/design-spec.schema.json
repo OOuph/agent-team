@@ -1,0 +1,59 @@
+{
+ "title": "design-spec",
+ "description": "Result of a game-designer run (game profile, owner 20.11): complete documents to write into the repository (GAME-DESIGN.md, balance tables), what changed in the balance and how to read the effect, suggestions for the PO, questions for the owner.",
+ "type": "object",
+ "additionalProperties": false,
+ "required": ["summary", "files"],
+ "properties": {
+  "summary": {"type": "string", "maxLength": 1200, "description": "what this run decided and why, 2–6 sentences"},
+  "files": {
+   "type": "array", "maxItems": 8,
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["path", "content"],
+    "properties": {
+     "path": {"type": "string", "maxLength": 200, "description": "repository-relative: GAME-DESIGN.md, design/balance/<name>.json, docs/rules.md"},
+     "content": {"type": "string", "maxLength": 40000, "description": "the COMPLETE file, not a diff"}
+    }
+   }
+  },
+  "balance_changes": {
+   "type": "array", "maxItems": 12,
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["what", "why", "expected_effect", "read_in"],
+    "properties": {
+     "what": {"type": "string", "maxLength": 300},
+     "why": {"type": "string", "maxLength": 400, "description": "the observation, metric or rule it answers"},
+     "expected_effect": {"type": "string", "maxLength": 300},
+     "read_in": {"type": "string", "maxLength": 200, "description": "which metric or tester scenario will show whether it worked, and after how many rounds"}
+    }
+   }
+  },
+  "proposed_tasks": {
+   "type": "array", "maxItems": 6,
+   "description": "suggestions for the PO; they become observations, the PO decides",
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["title", "type", "role", "problem", "acceptance"],
+    "properties": {
+     "title": {"type": "string", "maxLength": 140},
+     "type": {"type": "string", "enum": ["milestone", "design", "defect", "quality", "feature"]},
+     "role": {"type": "string", "enum": ["developer", "designer", "game-designer", "tester"]},
+     "problem": {"type": "string", "maxLength": 600},
+     "acceptance": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "maxLength": 300}}
+    }
+   }
+  },
+  "open_questions": {
+   "type": "array", "maxItems": 3,
+   "description": "only what changes the genre, the audience or money — the owner decides",
+   "items": {
+    "type": "object", "additionalProperties": false,
+    "required": ["question", "why_owner"],
+    "properties": {"question": {"type": "string", "maxLength": 500}, "why_owner": {"type": "string", "maxLength": 300}}
+   }
+  },
+  "friction": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 300}, "description": "where the framework got in the way: missing input, unclear task, schema that did not fit"}
+ }
+}
