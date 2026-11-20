@@ -116,7 +116,9 @@ GDD_FILE = "GAME-DESIGN.md"                # game profile: the game designer's d
 DESIGN_FILE = "DESIGN.md"                  # game profile: the designer's visual system
 PROTOCOL_FILE = "PROTOCOL.md"              # service repository: the client ↔ server message contract
 BALANCE_DIR = "design/balance"             # game profile: balance tables as data
-SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, PROTOCOL.md
+SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, tests/load, PROTOCOL.md
+LOAD_SCRIPT_REL = "tests/load/clients.ts"   # the repository's load script (`team-play load`, slice 6)
+GAME_METRICS_DOC = Path(__file__).parent.parent / "docs" / "game-metrics.md"   # the /_team/metrics.json contract a game server serves
 
 
 def _read_tail(p: Path, n: int) -> str:
@@ -149,7 +151,11 @@ def service_block(product: Product, repo_dir: Path, role: str = "developer") -> 
            "Playwright (two browser contexts: player A acts, player B's page changes). Every acceptance criterion of your task needs a "
            "scenario there, with `data-testid` hooks on the elements it uses (`room-code`, `status`, `error`, `cell-<r>-<c>`, …). A starter "
            f"config, a two-player spec and a PROTOCOL skeleton are in the framework at `{SERVICE_TEMPLATES}` (copy, then adapt). "
-           "The server must honour `PORT` from the environment (or `{port}` in run_cmd) and answer the health path with 200."]
+           "The server must honour `PORT` from the environment (or `{port}` in run_cmd) and answer the health path with 200. "
+           f"On the host it also gets `DATA_DIR` (files and SQLite live there, they survive releases) and `RELEASE_SHA`. "
+           f"It serves its own metrics at `/_team/metrics.json` — the contract is `{GAME_METRICS_DOC}` in the framework (kind, days, rounds, "
+           "players, latency, rejected moves); the PO, analyst and game designer read nothing else about play. A load task (role tester) runs "
+           f"`tests/load/clients.ts` (starter in `{SERVICE_TEMPLATES}/tests/load/`) with N WebSocket clients: keep it runnable."]
     if role == "designer":
         out.append(f"You are the designer: your files are `{DESIGN_FILE}`, styles and assets (SVG, CSS). Do not change server code or game rules; "
                    "a rule that looks wrong goes into `proposals`.")
@@ -205,6 +211,32 @@ def tester_prompt(product: Product, task: dict[str, Any], result: dict[str, Any]
                + ("E2E specs present: " + ", ".join(specs) if specs else "No tests/e2e specs in the checkout: judge from screenshots, /healthz and the server log, and say in `limits` which spec file is missing."))
             + "\n\n# TEST RUN (unit tests, by the dispatcher)\n" + (tests or "(none)")
             + "\n\nPlay every acceptance criterion and negative case in the browsers; quote test lines and screenshot names as evidence.\n")
+
+
+def load_prompt(product: Product, task: dict[str, Any], sha: str | None, *, base_url: str, local: bool, checkout: Path, out_dir: Path,
+                server_notes: list[str] | None = None) -> str:
+    """The tester's prompt for a `load` task (slice 6): the thresholds are in the task's acceptance; `team-play load` runs the
+    repository's load script; metrics and the server log before/after are the evidence."""
+    script = checkout / LOAD_SCRIPT_REL
+    latest = _read_tail(product.dir / "metrics" / "latest.md", 2500)
+    return (f"# LOAD TASK {task['id']} — product `{product.slug}` — stage {product.stage}\n\n"
+            "# TASK (the acceptance criteria hold the thresholds: clients, seconds, p95 latency, errors)\n" + _y(_task_brief(task))
+            + "\n\n# SERVER UNDER LOAD\n"
+            + (f"Base URL: {base_url} — " + ("started by the dispatcher from commit " + (sha or "?") + " in a copy of the checkout; stopped after your run."
+               if local else "the deployed host: real players may be online, keep the run inside the task's numbers.")
+               + "\n" + "\n".join(f"- {n}" for n in (server_notes or [])))
+            + f"\nCheckout to read: `{checkout}`. Review folder: `{out_dir}`.\n"
+            + (f"Load script present: `{LOAD_SCRIPT_REL}`." if script.exists()
+               else f"No `{LOAD_SCRIPT_REL}` in the checkout: `team-play load` cannot run; verdict `inconclusive`, and say in `limits` that the repository needs the script "
+                    f"(starter in the framework's `{SERVICE_TEMPLATES}/tests/load/`).")
+            + "\n\n# HOW\n"
+            "1. `team-fetch <base>/healthz` and `team-fetch <base>/_team/metrics.json` before the run (version, errors, online).\n"
+            "2. `team-play load --clients N --seconds S [--rate R] [--moves]` with the task's numbers (start smaller if the task allows a ramp); quote the summary line.\n"
+            "3. `team-play logs` and the metrics again after the run: server errors, disconnects, rejected moves.\n"
+            "4. `test-report`: `latency_ms` {p50, p95, samples, how: 'team-play load N clients S s'}; one `scenarios` entry per run with `clients`; "
+            "`pass` only when every threshold in the acceptance is met by the numbers you quote, `fail` names the first one missed, "
+            "`inconclusive` when the script or the server did not run. A crash or a stack trace under load is a `reproducible_defect` observation.\n"
+            + "\n# LATEST GAME METRICS (before this run)\n" + (latest or "(none yet)") + "\n")
 
 
 def game_block(product: Product, gdd_dir: Path | None = None) -> str:
@@ -274,6 +306,46 @@ def _top(d: dict[str, Any] | None, n: int) -> str:
     return ", ".join(f"{k} {v}" for k, v in items) or "—"
 
 
+GAME_METRIC_KEYS = ("rounds_started", "rounds_finished", "players", "online_peak", "move_latency_ms")   # docs/game-metrics.md
+
+
+def is_game_metrics(data: dict[str, Any]) -> bool:
+    """A metrics file the game server produced (docs/game-metrics.md): `kind: game`, or a day with round fields."""
+    if str(data.get("kind") or "") == "game":
+        return True
+    days = data.get("days") or {}
+    return any(isinstance(d, dict) and any(k in d for k in GAME_METRIC_KEYS) for d in days.values())
+
+
+def _num(d: dict[str, Any] | None, key: str, sub: str | None = None) -> str:
+    v = (d or {}).get(key)
+    if sub is not None:
+        v = v.get(sub) if isinstance(v, dict) else None
+    return "—" if v is None else str(v)
+
+
+def game_metrics_digest(days: dict[str, Any], generated: str = "", max_days: int = 7) -> str:
+    """Newest day first; the fields the PO, analyst and game designer read (docs/game-metrics.md). Missing fields print —."""
+    out = [f"Game metrics served by the game server (docs/game-metrics.md); snapshot generated {generated or '?'}. "
+           "finished/started = rounds completed; abandoned = left before the end; first_mover_wins/finished = balance signal; "
+           "rejected_moves = intents the server refused (unclear UI when high)."]
+    for day in sorted(days, reverse=True)[:max_days]:
+        d = days[day] or {}
+        if not isinstance(d, dict):
+            continue
+        res = d.get("by_result") or {}
+        out.append("\n".join([
+            f"## {day}",
+            f"- rounds: started {_num(d, 'rounds_started')}, finished {_num(d, 'rounds_finished')}, abandoned {_num(d, 'rounds_abandoned')}"
+            + (f"; by result: {_top(res, 5)}" if res else ""),
+            f"- players: {_num(d, 'players')} (returning {_num(d, 'returning_players')}), online peak {_num(d, 'online_peak')}",
+            f"- round length s: median {_num(d, 'round_length_s', 'median')}, p90 {_num(d, 'round_length_s', 'p90')}",
+            f"- move latency ms: p50 {_num(d, 'move_latency_ms', 'p50')}, p95 {_num(d, 'move_latency_ms', 'p95')} ({_num(d, 'move_latency_ms', 'samples')} samples)",
+            f"- moves {_num(d, 'moves')}, rejected {_num(d, 'rejected_moves')}, disconnects {_num(d, 'disconnects')}, reconnects {_num(d, 'reconnects')}, "
+            f"server errors {_num(d, 'errors')}, first-mover wins {_num(d, 'first_mover_wins')}"]))
+    return "\n\n".join(out)
+
+
 def metrics_digest(files: list[Path], max_days: int = 7) -> str:
     """Compact per-day view of the site metrics for the analyst (ops 04.11, release-radar Q-0009): every metrics file is a
     multi-day snapshot of ~35 KB, and cutting each file to its first 5000 chars left the analyst with only the oldest day.
@@ -291,6 +363,8 @@ def metrics_digest(files: list[Path], max_days: int = 7) -> str:
         generated = str(data.get("generated") or generated)
     if not days:
         return "(no metrics files yet)"
+    if is_game_metrics({"days": days}):
+        return game_metrics_digest(days, generated, max_days=max_days)
     out = [f"Snapshot generated {generated or '?'}; humans = after the strict bot filter (04.11); "
            "'returns' = human sources seen on an earlier day too (G2); by_src = visits that came with ?src=<channel>."]
     for day in sorted(days, reverse=True)[:max_days]:

@@ -26,7 +26,7 @@ TASK_STATES = ("proposed", "ready", "claimed", "in_progress", "review", "accepte
                "blocked", "waiting_owner", "rejected", "deferred")
 TERMINAL = ("done", "rejected")
 TASK_TYPES = ("feature", "defect", "quality", "research", "content", "marketing", "ops",
-              "milestone", "design")   # owner 20.11: game profile — a milestone task is outside the hypothesis rule until M2; design = designer / game-designer
+              "milestone", "design", "load")   # owner 20.11: game profile — milestone (outside the hypothesis rule until M2), design (designer / game-designer), load (tester: N clients vs a threshold)
 PRIORITIES = ("P0", "P1", "P2", "P3")
 TRANSITIONS: dict[str, tuple[str, ...]] = {
     "proposed": ("ready", "rejected", "deferred"),

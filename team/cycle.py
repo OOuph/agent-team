@@ -26,8 +26,9 @@ from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 
-GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
-PENDING_ROLES = ("tester",)                              # the tester runs in the review phase; a tester TASK (load test, slice 6) has no execute path yet
+GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1, "tester": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
+PENDING_ROLES: tuple[str, ...] = ()                      # roles without an execute path (none since slice 6: a tester task = load test)
+LOAD_TASK_TYPES = ("load",)                               # tester tasks: N clients against a threshold (slice 6, docs/game-metrics.md)
 PLAYTEST_ROLES = ("developer", "designer")               # whose released tasks the tester plays (game profile)
 TESTER_CAP_USD = 1.5
 TESTER_MAX_TURNS = 40
@@ -947,6 +948,8 @@ class Cycle:
                 return self.exec_developer(t, run_id, role="designer")
             if role == "game-designer":
                 return self.exec_game_designer(t, run_id)
+            if role == "tester":                      # slice 6: a load task — the tester plays N clients against a threshold
+                return self.exec_tester(t, run_id)
             if role == "marketer":
                 return self.exec_marketer(t, run_id)
             if role == "analyst":
@@ -1037,6 +1040,80 @@ class Cycle:
             return True
         self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
         self.deploy_after_merge(t, sha)
+        return True
+
+    def exec_tester(self, t: dict[str, Any], run_id: str) -> bool:
+        """A tester task (type `load`, slice 6): the dispatcher starts the server from the repository's HEAD (or uses the
+        deployed host), the tester runs the repository's load script through `team-play load`, reads metrics and the log,
+        and returns a `test-report`. pass → `accepted` (the numbers are in the result); fail → `done` with the first missed
+        threshold and the tester's observations for the PO; inconclusive or no server → `blocked` with a PO question."""
+        repo = self.p.repo_dir
+        if self.p.repo_url:
+            gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
+        if not (repo / ".git").exists():
+            self.store.transition(t["id"], "blocked", "dispatcher", "no repository to load-test", force=True)
+            self.store.ask(from_="tester", to="po", question=f"Task {t['id']}: there is no repository yet, nothing to load-test. Defer it until the server exists.",
+                           task_id=t["id"], blocks=[t["id"]])
+            return True
+        sha = gitops.head(repo)
+        work = self.p.work_dir / self.cycle_id / f"load-{t['id']}"
+        out_dir = self.p.dir / "reviews" / t["id"]
+        out_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            server = playtest.start(self.p, repo, sha, work)
+        except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
+            reason = str(exc)[:1200]
+            self.store.event("playtest.failed", t["id"], "dispatcher", {"reason": reason[:400], "load": True})
+            self.store.add_observation({"title": f"Server could not start for load task {t['id']}: {reason.splitlines()[0][:90]}",
+                                        "classification": "environment_error", "source": "dispatcher", "task": t["id"], "url": self.p.site_base,
+                                        "actual": reason[:400], "fingerprint": f"load-failed-{t['id']}", "run_id": run_id})
+            self.store.transition(t["id"], "blocked", "dispatcher", f"server not started: {reason.splitlines()[0][:200]}", force=True, assignee_run=None)
+            self.store.ask(from_="tester", to="po", question=f"Load task {t['id']}: the dispatcher could not start the server from {sha[:10]}: "
+                           f"{reason.splitlines()[0][:300]}. Fix the run_cmd/health (developer task) or defer the load test.", task_id=t["id"], blocks=[t["id"]])
+            return True
+        hosts = self._allowed_hosts("tester").split(",") + [playtest.HOST]
+        env = {"TEAM_PLAY_CWD": str(server.dest), "TEAM_PLAY_BASE_URL": server.base_url, "TEAM_PLAY_OUT": str(out_dir),
+               "TEAM_PLAY_SERVER_LOG": str(server.log_path or ""), "TEAM_ALLOWED_HOSTS": ",".join(dict.fromkeys(h for h in hosts if h))}
+        prompt = prompts.load_prompt(self.p, t, sha, base_url=server.base_url, local=server.local, checkout=server.dest, out_dir=out_dir,
+                                     server_notes=server.notes)
+        self.store.event("playtest.started", t["id"], "dispatcher", {"base_url": server.base_url, "local": server.local, "load": True})
+        cap = float(t.get("budget_usd") or TESTER_CAP_USD)
+        try:
+            rr = self.role_run("tester", prompt, "test-report", cwd=work, label=f"load-{t['id']}", cap=cap, max_turns=TESTER_MAX_TURNS,
+                               allowed_tools=list(TESTER_TOOLS), env_extra=env)
+        finally:
+            playtest.stop(server)
+        if rr is None:
+            self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
+            return False
+        if not (rr.ok and rr.structured):
+            attempts = int(t.get("attempts") or 0) + 1
+            self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": f"run failed: {rr.error}"[:400]})
+            self.store.transition(t["id"], "blocked" if attempts >= 3 else "ready", "dispatcher", f"run failed: {rr.error}"[:300], force=True,
+                                  attempts=attempts, assignee_run=None)
+            return True
+        rep = rr.structured
+        verdict = str(rep.get("verdict") or "inconclusive")
+        for o in rep.get("observations") or []:
+            self.store.add_observation({**o, "source": "tester", "task": t["id"], "run_id": run_id,
+                                        "fingerprint": fingerprint("tester", o.get("classification", ""), o.get("url", ""), o.get("title", ""))})
+        self.store.add_result(t["id"], {"run_id": run_id, "status": "done" if verdict != "inconclusive" else "blocked", "verdict": verdict,
+                                        "summary": str(rep.get("summary") or "")[:1200], "latency_ms": rep.get("latency_ms") or {},
+                                        "scenarios": rep.get("scenarios") or [], "criteria": rep.get("criteria") or [],
+                                        "first_failure": rep.get("first_failure") or "", "limits": rep.get("limits") or "", "commit": sha,
+                                        "friction": rep.get("friction") or []})
+        (out_dir / f"load-report-{run_id}.yaml").write_text(yaml.safe_dump(rep, allow_unicode=True, sort_keys=False), encoding="utf-8")
+        lat = rep.get("latency_ms") or {}
+        note = f"load {verdict}: p50 {lat.get('p50', '?')} p95 {lat.get('p95', '?')} ms — {_short_text(rep.get('summary'), 200)}"
+        if verdict == "pass":
+            self.store.transition(t["id"], "accepted", "tester", note, force=True, accepted_at=utcnow(), released_sha=sha, assignee_run=None)
+        elif verdict == "fail":
+            self.store.transition(t["id"], "done", "tester", f"{note} | first failure: {_short_text(rep.get('first_failure'), 200)}", force=True, assignee_run=None)
+        else:
+            self.store.transition(t["id"], "blocked", "tester", note, force=True, assignee_run=None)
+            self.store.ask(from_="tester", to="po", question=f"Load task {t['id']} is inconclusive: {_short_text(rep.get('summary'), 300)} "
+                           f"Limits: {_short_text(rep.get('limits'), 200)}. Add the load script (developer task) or re-state the thresholds.",
+                           task_id=t["id"], blocks=[t["id"]])
         return True
 
     def deploy_after_merge(self, t: dict[str, Any], sha: str) -> bool:
@@ -1765,7 +1842,33 @@ def fingerprint(scope: str, cls: str, url: str, title: str) -> str:
     return hashlib.sha1(f"{scope}|{cls}|{path}|{t}".encode()).hexdigest()[:12]
 
 
+def game_metrics_md(data: dict[str, Any]) -> str:
+    """metrics/latest.md for a game product (docs/game-metrics.md): one row per day, newest last, plus the live counters."""
+    days = data.get("days") or {}
+    now = data.get("now") or {}
+
+    def g(d: dict[str, Any], k: str, sub: str | None = None) -> Any:
+        v = d.get(k)
+        if sub is not None:
+            v = v.get(sub) if isinstance(v, dict) else None
+        return "—" if v is None else v
+
+    lines = [f"# game metrics {data.get('host', '')} — generated {data.get('generated', '')} (version {data.get('version', '?')})", "",
+             f"Now: online {now.get('online', '—')}, rooms open {now.get('rooms_open', '—')}, playing {now.get('rooms_playing', '—')}", "",
+             "| day | started | finished | abandoned | players | returning | online peak | round median s | move p50/p95 ms | rejected | disconnects | errors | first-mover wins |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    for day in sorted(days)[-10:]:
+        d = days[day] if isinstance(days[day], dict) else {}
+        lines.append(f"| {day} | {g(d, 'rounds_started')} | {g(d, 'rounds_finished')} | {g(d, 'rounds_abandoned')} | {g(d, 'players')} | "
+                     f"{g(d, 'returning_players')} | {g(d, 'online_peak')} | {g(d, 'round_length_s', 'median')} | "
+                     f"{g(d, 'move_latency_ms', 'p50')}/{g(d, 'move_latency_ms', 'p95')} | {g(d, 'rejected_moves')} | {g(d, 'disconnects')} | "
+                     f"{g(d, 'errors')} | {g(d, 'first_mover_wins')} |")
+    return "\n".join(lines) + "\n"
+
+
 def metrics_md(data: dict[str, Any]) -> str:
+    if prompts.is_game_metrics(data):
+        return game_metrics_md(data)
     days = data.get("days") or {}
     lines = [f"# metrics {data.get('host', '')} — generated {data.get('generated', '')}", "",
              "| day | humans | engaged | returns | agents | crawlers | targets |", "|---|---|---|---|---|---|---|"]

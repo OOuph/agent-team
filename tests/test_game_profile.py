@@ -276,7 +276,11 @@ def test_unsafe_paths_from_the_game_designer_are_dropped(tmp_path: Path):
     assert not prompts.safe_rel_path("../x.md") and not prompts.safe_rel_path("/etc/passwd") and not prompts.safe_rel_path(".git/config") and not prompts.safe_rel_path("")
 
 
-def test_pending_role_waits_without_a_lease_and_slots_include_design_roles(tmp_path: Path):
+def test_pending_role_waits_without_a_lease_and_slots_include_design_roles(tmp_path: Path, monkeypatch):
+    """A role without an execute path waits in `ready` with one event. Since slice 6 every game role executes, so the
+    mechanism is checked with PENDING_ROLES patched back to the slice-3 state."""
+    import team.cycle as cycle_mod
+    monkeypatch.setattr(cycle_mod, "PENDING_ROLES", ("tester",))
     st = _settings(tmp_path)
     p = _game(st)
     s = Store(p.dir)
@@ -284,7 +288,7 @@ def test_pending_role_waits_without_a_lease_and_slots_include_design_roles(tmp_p
     s.close()
     r = FakeRunner()
     cyc = Cycle(st, p, r, "c1")
-    assert cyc.execute_slots() == {"developer": 1, "marketer": 1, "analyst": 1, "designer": 1, "game-designer": 1}
+    assert cyc.execute_slots() == {"developer": 1, "marketer": 1, "analyst": 1, "designer": 1, "game-designer": 1, "tester": 1}
     cyc.run(["execute"])
     cyc.store.close()
     assert r.calls == []
