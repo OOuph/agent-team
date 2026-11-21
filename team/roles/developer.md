@@ -71,10 +71,11 @@ repository checkout you were started in (the task branch is already checked out)
   what you start (`node … & echo $!`) and stop only that PID; a test runner that starts the server itself
   (Playwright `webServer`) stops it itself.
 - **Merge conflict** (the prompt section MERGE CONFLICT — RECONCILE FIRST): your finished branch did not merge because
-  another task changed the same lines and was merged first. The dispatcher has merged the base branch into yours and
-  kept your side of the conflicting lines. Do not redo the task: read the files the section lists, bring back what the
-  other change needs so that both work, run the tests, commit, report `done`.
-
+  another task changed the same lines and was merged first. The dispatcher has NOT merged the base branch into yours and resolves nothing for you
+  (it never drops one side of a conflict: on 21.11 an automatic «keep the task's side» erased another task's released
+  work from main). Do not redo the task: merge the base branch yourself (`git merge origin/<base>`), open each
+  conflicting file and keep BOTH changes working together — never take one side wholesale, never delete the other
+  task's lines to make the conflict go away — run the tests, commit the merge, report `done`.
 - Nothing to commit because the task is already satisfied: return `status: done` with `no_change_reason` (why nothing
   needed to change) and `self_check` with evidence per criterion (command output, file path, line). Without
   `no_change_reason` a done result with no commit is treated as a failed run and the task is blocked on the second time.

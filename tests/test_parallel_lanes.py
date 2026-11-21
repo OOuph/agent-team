@@ -429,16 +429,21 @@ def test_a_merge_conflict_returns_the_second_task_to_its_author_without_crashing
     assert len(obs) == 1 and obs[0]["classification"] == "environment_error" and obs[0]["task"] == lost and "README.md" in obs[0]["title"]
     assert [e["detail"]["count"] for e in s.events() if e["kind"] == "merge.conflict"] == [1] and not s.questions(["open"])
     s.close()
-    # next cycle: the author gets the conflict text, reconciles on a branch that already has the base merged in, and it merges
+    # next cycle: the author gets the conflict text; the dispatcher has NOT merged the base for it (F39: `-X ours` dropped the
+    # other side without a trace) — the role merges the base itself, keeps both sides, and then the branch merges
+    def reconcile(cwd, n):
+        gitops.git(cwd, "merge", "--no-edit", "main", check=False)          # conflicts in README.md, left for the role
+        _commit(cwd, "README.md", "line one\nline two — developer and designer\nline three\n", "reconcile: both sides kept")
     r2 = LaneRunner()
-    r2.work[role] = lambda cwd, n: _commit(cwd, "README.md", "line one\nline two — developer and designer\nline three\n", "reconcile")
+    r2.work[role] = reconcile
     cyc = Cycle(st, p, r2, "c2")
     cyc.run(["execute"])
     cyc.store.close()
     assert r2.calls == [role]
     pr = r2.prompts[role][0]
     assert "# MERGE CONFLICT — RECONCILE FIRST, DO NOT REDO THE TASK" in pr and "Conflicting files: `README.md`" in pr
-    assert f"line two — {other}" in pr and "it kept YOUR side" in pr
+    assert f"line two — {other}" in pr and "did NOT merge `main` into your branch" in pr and "git merge origin/main" in pr
+    assert "kept YOUR side" not in pr
     t = _state(p, lost)
     assert t["state"] == "released" and not t.get(MERGE_CONFLICT)
     assert "line two — developer and designer" in (p.repo_dir / "README.md").read_text(encoding="utf-8")
@@ -1206,3 +1211,27 @@ def test_a_run_profile_written_while_the_po_was_running_is_shown_to_it_next_time
     cyc.run(["triage"])
     cyc.store.close()
     assert "# RUN TIME" not in r.prompts["po"][2]                           # once
+
+
+def test_base_conflict_at_start_is_never_resolved_silently(tmp_path: Path):
+    """ai-battles 21.11 (F39): a continuing task branch that conflicts with the base used to get `merge -X ours` at start: the
+    base's side of the conflicting hunks vanished, the branch then merged cleanly and the base LOST the other task's lines
+    (T-0038 erased what T-0068 and T-0071 had released). The branch now stays without the base and nothing is dropped."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    gitops.git(repo, "init", "-q", "-b", "main"); gitops.git(repo, "config", "user.email", "t@example.com"); gitops.git(repo, "config", "user.name", "t")
+    _commit(repo, "style.css", "a{color:red}\n", "base")
+    wt = tmp_path / "wt" / "T-1"
+    br = gitops.start_task_worktree(repo, wt, "T-1")
+    _commit(wt, "style.css", "a{color:red}\n.menu{display:flex}\n", "task: menu")                  # the task appends its block
+    _commit(repo, "style.css", "a{color:red}\n.fullscreen{display:none}\n", "other task released")  # main appended another one
+    assert gitops.start_task_worktree(repo, wt, "T-1") == br                                        # next attempt: conflict at start
+    assert (wt / "style.css").read_text(encoding="utf-8") == "a{color:red}\n.menu{display:flex}\n"   # as the attempt left it
+    assert gitops.git(wt, "status", "--porcelain") == ""                                            # no half-finished merge
+    assert gitops.git(wt, "rev-list", "--count", "HEAD..main") == "1"                                # the base is NOT merged in
+    try:
+        gitops.merge_and_push(repo, "T-1", "main", worktree=wt)
+        raise AssertionError("the merge must conflict")
+    except gitops.MergeConflict as e:
+        assert "style.css" in e.files
+    assert ".fullscreen{display:none}" in (repo / "style.css").read_text(encoding="utf-8")          # main keeps the other task's lines
