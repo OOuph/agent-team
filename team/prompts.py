@@ -315,12 +315,13 @@ def conflict_block(conflict: dict[str, Any] | None, base: str = "main") -> str:
             f"Your previous run finished, but its branch did not merge into `{base}`: another task of this product was working at the "
             f"same time in its own checkout, changed the same lines and was merged first. Nothing of your branch was merged. "
             f"Conflicting files: {files}.\n"
-            f"Before this run started the dispatcher merged `{base}` into your branch (`git log --oneline -5` shows it); where the two "
-            "sides conflicted it kept YOUR side, so the other task's change to those lines is missing in this checkout. What the "
-            f"other side did:\n```\n{text or '(no text recorded)'}\n```\n"
-            f"Do this first: read each conflicting file, bring back what the other change needs so that BOTH changes work "
-            f"(`git diff {base}...HEAD -- <file>` shows your side), run the tests, commit. Then report `done` as usual — the rest of "
-            "your task is already on this branch."
+            f"The dispatcher did NOT merge `{base}` into your branch and resolved nothing for you (it never drops one side of a "
+            f"conflict). What the other side did:\n```\n{text or '(no text recorded)'}\n```\n"
+            f"Do this first: run `git fetch origin 2>/dev/null; git merge origin/{base}` (in a repository without a remote: `git merge {base}`), "
+            f"open every conflicting file and resolve it so that BOTH changes are kept and work together — never take one side "
+            f"wholesale, never delete the other task's lines to make the conflict go away (`git diff {base}...HEAD -- <file>` shows "
+            f"your side, `git diff HEAD...origin/{base} -- <file>` the other one). Run the tests, commit the merge. Then report `done` "
+            "as usual — the rest of your task is already on this branch."
             + (f" This is conflict {c.get('count')} in a row on this task." if int(c.get("count") or 1) > 1 else ""))
 
 

@@ -113,19 +113,18 @@ def _checkout_task_branch(repo_dir: Path, br: str, base: str, base_ref: str, sta
                 git(repo_dir, "merge", "-q", "--no-edit", base_ref)
                 return br
             except GitError:
-                log.warning("task branch %s conflicts with %s; keeping the earlier attempt's side", br, base)
+                # ai-battles 21.11 (F39): the fallback used to be `merge -X ours` (then `-s ours`) — the base's side of every
+                # conflicting hunk was dropped WITHOUT a trace, the branch then merged cleanly into the base and the base lost
+                # the other tasks' work (T-0038 erased 45 lines of CSS, 99 lines of tests and a client change that T-0068,
+                # T-0071 and a hotfix had released hours before). A conflict is never resolved silently any more: the
+                # branch stays as the earlier attempt left it, WITHOUT the base. The merge into the base at the end of the
+                # run then raises MergeConflict, nothing is merged, and the role gets the MERGE CONFLICT block and merges
+                # the base itself, by hand, keeping both sides.
+                log.warning("task branch %s conflicts with %s: left without the base merge — the role reconciles it, "
+                            "nothing is resolved automatically", br, base)
                 git(repo_dir, "merge", "--abort", check=False)
                 git(repo_dir, "reset", "--hard", check=False)
-            try:
-                git(repo_dir, "merge", "-q", "--no-edit", "-X", "ours", base_ref)
                 return br
-            except GitError:
-                git(repo_dir, "merge", "--abort", check=False)
-                git(repo_dir, "reset", "--hard", check=False)
-            # last resort (e.g. modify/delete): base content, but the earlier commit stays in the history of the branch
-            git(repo_dir, "checkout", "-q", "-B", br, base_ref)
-            git(repo_dir, "merge", "-q", "--no-edit", "-s", "ours", cand)
-            return br
     git(repo_dir, "checkout", "-q", "-B", br, start_point or base_ref)
     return br
 
