@@ -285,6 +285,8 @@ def check(product: Product, store: Store, now: datetime | None = None) -> list[S
     """One Status per direction: due or not, and why. Read-only."""
     now = now or datetime.now(timezone.utc)
     ds, problems = load(product)
+    for pr in problems:
+        log.error("standing: %s", pr)
     if not ds:
         return []
     all_tasks = store.tasks()
