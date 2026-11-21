@@ -202,10 +202,11 @@ def test_status_shows_the_cadence(tmp_path: Path, monkeypatch, capsys):
 
 # ------------------------------------------------------------------ run-cycle-fast.sh (the cron entry)
 
-FAKE_TEAM = "#!/usr/bin/env bash\necho \"$@\" >> \"$(dirname \"$0\")/../../team-calls.txt\"\n"
-# util-linux `flock` is not on every developer machine; the stub keeps the contract the script relies on:
-# `flock -n LOCK cmd…` runs cmd, or exits 1 at once when the lock is held (here: when LOCK.held exists).
-FAKE_FLOCK = "#!/usr/bin/env bash\n[ \"$1\" = -n ] || exit 64\nlock=\"$2\"; shift 2\necho \"$lock\" >> flock-locks.txt\n[ -e \"$lock.held\" ] && exit 1\nexec \"$@\"\n"
+# The stand-in for .venv/bin/team: records its arguments and exits with TEAM_FAKE_RC (75 = `team cycle` started nothing).
+FAKE_TEAM = "#!/usr/bin/env bash\necho \"$@\" >> \"$(dirname \"$0\")/../../team-calls.txt\"\nexit \"${TEAM_FAKE_RC:-0}\"\n"
+# Since F17 the locks are taken inside `team cycle` (team/locks.py, tests/test_locks.py); a `flock` around the whole
+# process would bring the one-cycle-at-a-time behaviour back, so the script must not call it at all.
+FAKE_FLOCK = "#!/usr/bin/env bash\necho \"$@\" >> flock-calls.txt\nexit 1\n"
 
 
 def _fast_checkout(tmp_path: Path) -> tuple[Path, dict[str, str]]:
@@ -225,48 +226,45 @@ def _calls(root: Path) -> list[str]:
     return f.read_text().splitlines() if f.exists() else []
 
 
-def test_fast_script_runs_due_cycle_under_the_hourly_lock(tmp_path: Path):
+def test_fast_script_runs_due_check_without_a_lock_around_the_process(tmp_path: Path):
     root, env = _fast_checkout(tmp_path)
-    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env, cwd=tmp_path, capture_output=True, text=True)
+    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env, cwd=root, capture_output=True, text=True)
     assert r.returncode == 0, r.stderr
     assert _calls(root) == ["cycle --due --product all"]
-    assert (root / "flock-locks.txt").read_text().split() == ["data/cycle.lock"]
-    assert "flock -n data/cycle.lock" in (REPO / "run-cycle.sh").read_text()        # the very lock of the hourly entry
+    assert not (root / "flock-calls.txt").exists()                                   # no flock in the script: F17
+    for script in ("run-cycle.sh", "run-cycle-fast.sh"):                              # neither cron entry wraps `team cycle`
+        code = [ln for ln in (REPO / script).read_text().splitlines() if ln.strip() and not ln.lstrip().startswith("#")]
+        assert not any("flock" in ln for ln in code), script
     assert not (root / "data" / "framework" / "last-good").exists()                 # the rollback point stays hourly
 
-    subprocess.run(["bash", str(root / "run-cycle-fast.sh"), "ai-battles"], env=env, check=True)
+    subprocess.run(["bash", str(root / "run-cycle-fast.sh"), "ai-battles"], env=env, cwd=root, check=True)
     assert _calls(root)[-1] == "cycle --due --product ai-battles"
 
 
-def test_fast_script_does_nothing_while_a_cycle_holds_the_lock_or_stop_is_set(tmp_path: Path):
+def test_fast_script_passes_the_exit_code_on_and_respects_the_global_stop(tmp_path: Path):
     root, env = _fast_checkout(tmp_path)
-    (root / "data").mkdir()
-    (root / "data" / "cycle.lock.held").write_text("")              # the hourly cycle is running
-    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env)
-    assert r.returncode == 1 and _calls(root) == []
-    (root / "data" / "cycle.lock.held").unlink()
-    (root / "flock-locks.txt").unlink()
+    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env={**env, "TEAM_FAKE_RC": "75"}, cwd=root)
+    assert r.returncode == 75 and _calls(root) == ["cycle --due --product all"]     # code update in progress: the next tick looks again
 
     (root / "STOP").write_text("owner\n")
-    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env)
-    assert r.returncode == 0 and _calls(root) == [] and not (root / "flock-locks.txt").exists()
+    r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env, cwd=root)
+    assert r.returncode == 0 and len(_calls(root)) == 1                              # STOP: `team` is not even started
 
 
-@pytest.mark.skipif(shutil.which("flock") is None, reason="util-linux flock not installed")
-def test_fast_script_with_real_flock_never_overlaps(tmp_path: Path):
+def test_hourly_script_records_last_good_only_after_a_pass_that_ran(tmp_path: Path):
     root, env = _fast_checkout(tmp_path)
-    env = {**env, "PATH": os.environ["PATH"]}                       # the real flock
-    (root / "data").mkdir()
-    holder = subprocess.Popen(["flock", "-n", str(root / "data" / "cycle.lock"), "sleep", "5"])
-    try:
-        import time
-        time.sleep(0.5)
-        r = subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env)
-        assert r.returncode == 1 and _calls(root) == []
-    finally:
-        holder.kill(); holder.wait()
-    assert subprocess.run(["bash", str(root / "run-cycle-fast.sh")], env=env).returncode == 0
-    assert _calls(root) == ["cycle --due --product all"]
+    shutil.copy(REPO / "run-cycle.sh", root / "run-cycle.sh")
+    subprocess.run(["git", "init", "-q", str(root)], check=True)
+    git = ["git", "-C", str(root), "-c", "user.name=t", "-c", "user.email=t@example.com"]
+    subprocess.run([*git, "commit", "-q", "--allow-empty", "-m", "init"], check=True)
+    head = subprocess.run([*git, "rev-parse", "HEAD"], capture_output=True, text=True, check=True).stdout.strip()
+    good = root / "data" / "framework" / "last-good"
+
+    r = subprocess.run(["bash", str(root / "run-cycle.sh")], env={**env, "TEAM_FAKE_RC": "75"}, cwd=root)
+    assert r.returncode == 75 and not good.exists()                 # nothing was started (another pass, code update): not "good"
+    r = subprocess.run(["bash", str(root / "run-cycle.sh")], env=env, cwd=root)
+    assert r.returncode == 0 and good.read_text().strip() == head
+    assert _calls(root) == ["cycle --product all"] * 2 and not (root / "flock-calls.txt").exists()
 
 
 def test_server_crontab_has_one_fast_line_for_all_products():

@@ -1289,7 +1289,7 @@ class Cycle:
             return True
         try:
             sha = gitops.merge_pull_request(url, auto=True)
-            gitops.update_running_checkout(self.st.root, self.p.repo_branch)
+            self.update_own_code(t, sha)
         except gitops.GitError as exc:
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url}; merge failed: {gitops.redact(str(exc))[:200]}", force=True, pr_url=url, assignee_run=None)
             return True
@@ -1297,6 +1297,20 @@ class Cycle:
         self.store.transition(t["id"], "done", "dispatcher", "framework change live; the watchdog rolls back if the next cycles fail", force=True)
         self.store.event("framework.merged", t["id"], "dispatcher", {"sha": sha, "pr": url, "files": touched[:20]})
         return True
+
+    def update_own_code(self, t: dict[str, Any], sha: str) -> None:
+        """Fast-forward the dispatcher's own checkout after a self-merge, alone on the code (friction F17): the gate is
+        closed for new cycles and the running cycles of the other products are waited for (team.yaml
+        `locks.code_update_wait_s`). If one of them outlives the wait the update is made anyway — the merge is already on
+        GitHub, and a checkout left behind would be the worse state — and the event `code.update_not_exclusive` says so."""
+        from . import locks
+        with locks.code_update(self.st) as alone:
+            if not alone:
+                wait_s = locks.cfg(self.st)["code_update_wait_s"]
+                log.warning("%s: %s merged as %s; another cycle was still running after %.0fs, the checkout is updated under it", self.p.slug, t["id"], sha[:10], wait_s)
+                self.store.event("code.update_not_exclusive", t["id"], "dispatcher", {"sha": sha, "waited_s": wait_s})
+            head = gitops.update_running_checkout(self.st.root, self.p.repo_branch)
+            log.info("%s: dispatcher checkout %s after the merge of %s (exclusive=%s)", self.p.slug, (head or "not updated")[:10], t["id"], alone)
 
     def canary(self, repo: Path, product: str) -> tuple[bool, str]:
         """A dry-run cycle of one product on the candidate code, on a COPY of the product's state: every phase must
@@ -1319,7 +1333,13 @@ class Cycle:
             shutil.rmtree(root)
         (root / "products").mkdir(parents=True)
         (root / "data").mkdir()
-        shutil.copytree(src, root / "products" / product, ignore=shutil.ignore_patterns("*.lock", "work", "runs"))
+        from . import locks
+        # the state is copied while the canary product's own cycle is not writing it (it may run in another process, F17)
+        own = product == self.p.slug                # then this very cycle holds the lock
+        with locks.product_cycle(self.st, product, note=f"canary state copy {cyc}", wait_s=0.0 if own else locks.cfg(self.st)["canary_state_wait_s"]) as quiet:
+            if not quiet and not own:
+                log.warning("canary: the cycle of %s is still running; its state is copied as it is", product)
+            shutil.copytree(src, root / "products" / product, ignore=shutil.ignore_patterns("*.lock", "work", "runs"))
         before = _canary_snapshot(root / "products" / product)
         for name in ("team.yaml", "DEPUTY.md"):
             if (self.st.root / name).exists():

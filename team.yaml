@@ -63,6 +63,13 @@ cycle:
     designer: 1                     # game profile (owner 20.11); a site product simply never has tasks of these roles
     game-designer: 1
 
+locks:                            # team/locks.py, SCHEME §3 «Блокировки циклов» (friction F17): cycles of different products run side by side
+  start_wait_s: 20                # a starting cycle waits this long when the code lock is held exclusively for a moment (watchdog rollback, `flock data/cycle.lock …`); a closed gate is never waited for
+  code_update_wait_s: 1800        # the self-merge waits this long for the running cycles of the other products before it fast-forwards the dispatcher checkout
+  restore_wait_s: 300             # after its own code update the cycle waits this long to hold the code lock shared again
+  canary_state_wait_s: 120        # the canary waits this long for the canary product's own cycle before copying its state
+  poll_s: 1.0                     # step of the waits above
+
 framework:                        # self-improvement: friction register → retro role → issues / pull requests on the framework repo
   retro_every_h: 1                # the retro role reads the register this often (0 = off); runs after the product cycles (owner 02.11: every cycle)
   repo: OOuph/agent-team          # where proposals are filed as issues (GITHUB_TOKEN needs issues:write on it)

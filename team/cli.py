@@ -5,6 +5,7 @@
   team deploy <slug> [--sha S | --rollback] [--force] [--show]   service deploy by hand (deploy.mode: service; the cycle does it after a merge)
   team cycle [--product SLUG|all] [--phase collect,review,...] [--dry-run] [--cycle ID]
   team cycle --due              only products with product.yaml `cycle.every_min` whose last finished cycle is that old (run-cycle-fast.sh)
+                                one lock per product (team/locks.py): a product whose cycle is running is skipped; exit 75 = nothing started
   team status [SLUG]            cadence, task counts, spend, open questions, last cycles
   team tasks SLUG [--state s]   list tasks
   team task SLUG new|move|show  create / transition / print a task
@@ -22,6 +23,7 @@ import logging
 import os
 import shutil
 import sys
+from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -34,6 +36,7 @@ from .store import TASK_STATES, Store, summary
 
 log = logging.getLogger("team")
 ROLES_DIR = Path(__file__).parent / "roles"
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(process)d] %(name)s: %(message)s"    # watchdog.sh reads the first 19 characters (the time)
 
 
 def _products(st: C.Settings, which: str | None) -> list[C.Product]:
@@ -113,44 +116,83 @@ def cmd_deploy(st: C.Settings, a: argparse.Namespace) -> int:
 
 
 def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
+    """One cycle per selected product, each under its own lock (team/locks.py, friction F17): a product whose cycle is
+    already running in another process is skipped, the others are not held up by it. Exit 75 when nothing was started
+    because the dispatcher's code is being updated or another hourly pass is running."""
+    from . import cadence, locks
     products = _products(st, a.product)
+    phases = [p.strip() for p in a.phase.split(",")] if a.phase else None
+    if phases and any(p not in PHASES for p in phases):
+        sys.exit(f"phases: {PHASES}")
     if a.due:
-        # Fast entry (run-cycle-fast.sh, cron every 5 min, same lock as the hourly one): only the products on a cadence
-        # that are due now. The framework's own hourly work (rollback check, friction, retro, critic) stays with `all`.
-        from . import cadence
+        # Fast entry (run-cycle-fast.sh, cron every 5 min): only the products on a cadence that are due now. The look is
+        # read-only and needs no lock. The framework's own hourly work (rollback check, friction, retro, critic) stays with `all`.
         n_all = len(products)
         products = cadence.due_products(st, products)
         log.log(logging.INFO if products else logging.DEBUG, "cycle --due: %d of %d product(s) due: %s", len(products), n_all,
                 ", ".join(p.slug for p in products) or "none")
         if not products:
             return 0
+    full = a.product == "all" and not phases and not a.due      # the hourly pass over every product
+    with ExitStack() as held:
+        if not held.enter_context(locks.cycles(st)):
+            log.warning("cycle: nothing started — the dispatcher code is being updated (%s or %s is held)", locks.gate_path(st), locks.code_lock_path(st))
+            return locks.EX_TEMPFAIL
+        if full and not held.enter_context(locks.hourly_pass(st)):
+            log.warning("cycle: nothing started — another hourly pass is running (%s)", locks.hourly_pass_path(st))
+            return locks.EX_TEMPFAIL
+        return _run_cycles(st, a, products, phases, full)
+
+
+def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product], phases: list[str] | None, full: bool) -> int:
+    """The body of `team cycle`, with the code lock held shared (and the hourly-pass lock for the full pass)."""
+    from . import cadence, locks
     roles = load_roles(ROLES_DIR)
     runner = Runner(st.claude, roles) if roles else None
     cycle_id = a.cycle or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
-    phases = [p.strip() for p in a.phase.split(",")] if a.phase else None
-    if phases and any(p not in PHASES for p in phases):
-        sys.exit(f"phases: {PHASES}")
-    rc = 0
-    full = a.product == "all" and not phases and not a.due      # the hourly pass over every product
     if full and not a.dry_run:
         from . import friction as _fr
         _fr.check_rollback(st, Path(__file__).resolve().parent.parent)
+    ran: list[str] = []
+    skipped: list[str] = []
     for p in products:
-        (p.runs_dir / cycle_id).mkdir(parents=True, exist_ok=True)
-        fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
-        fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
-        logging.getLogger().addHandler(fh)
-        try:
-            res = Cycle(st, p, runner, cycle_id, dry_run=a.dry_run).run(phases)
-            print(f"{p.slug}: {res}")
-        finally:
-            logging.getLogger().removeHandler(fh)
+        with locks.product_cycle(st, p.slug, note=f"cycle={cycle_id} entry={'due' if a.due else a.product}") as free:
+            why = None
+            if not free:
+                why = f"its cycle is already running (lock {locks.product_lock_path(st, p.slug)})"
+            elif a.due and not cadence.check(st, p).due:
+                why = "no longer due: another entry finished its cycle while this one was busy"     # the list was made before the locks
+            elif not a.cycle and cadence.has_cycle(p, cycle_id):
+                why = f"cycle {cycle_id} of this product was already started by another entry in the same minute"
+            if why:
+                log.info("cycle %s: skipped — %s", p.slug, why)
+                print(f"{p.slug}: skipped ({why})")
+                skipped.append(p.slug)
+                continue
+            (p.runs_dir / cycle_id).mkdir(parents=True, exist_ok=True)
+            fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
+            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            logging.getLogger().addHandler(fh)
+            try:
+                res = Cycle(st, p, runner, cycle_id, dry_run=a.dry_run).run(phases)
+                print(f"{p.slug}: {res}")
+                ran.append(p.slug)
+            finally:
+                logging.getLogger().removeHandler(fh)
+                fh.close()
+    log.log(logging.INFO if skipped else logging.DEBUG, "cycle %s: ran %s; skipped %s", cycle_id, ", ".join(ran) or "none", ", ".join(skipped) or "none")
     if full:
         from . import friction, retro
         try:
             friction.collect_all(st, _products(st, "all"))
             if retro.due(st) and not a.dry_run:
-                print(f"retro: {retro.run_retro(st, runner)}")
+                # the retro writes tasks into the framework product's store: not while that product's own cycle runs there
+                fw = str((st.raw.get("framework") or {}).get("product") or "")
+                with locks.product_cycle(st, fw, note=f"retro cycle={cycle_id}") if fw else nullcontext(True) as free:
+                    if free:
+                        print(f"retro: {retro.run_retro(st, runner)}")
+                    else:
+                        log.info("retro: put off to the next pass — the cycle of %s is running", fw)
         except Exception as exc:  # noqa: BLE001 — the framework's own loop must never break the products' one
             log.exception("friction/retro failed: %s", exc)
         if not a.dry_run:
@@ -159,7 +201,7 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
                 critic.write_responses(st, _products(st, "all"))     # what we did with the external critic's findings
             except Exception as exc:  # noqa: BLE001
                 log.warning("critic responses failed: %s", exc)
-    return rc
+    return 0
 
 
 def _cadence_line(st: C.Settings, p: C.Product) -> str:
@@ -167,6 +209,9 @@ def _cadence_line(st: C.Settings, p: C.Product) -> str:
     if not p.cycle_every_min:
         return p.cadence
     from . import cadence
+    from . import locks
+    if locks.product_busy(st, p.slug):
+        return f"{p.cadence} · cycle running now"
     d = cadence.check(st, p)
     return f"{p.cadence} · " + ("due now" if d.due else (f"next in {d.wait_min:.0f} min" if d.wait_min else d.reason))
 
@@ -375,7 +420,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("autonomy-check"); s.add_argument("--send", action="store_true"); s.add_argument("--json", action="store_true")
     s.add_argument("--no-tests", action="store_true"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_autonomy)
     a = ap.parse_args(argv)
-    logging.basicConfig(level=a.log_level.upper(), format="%(asctime)s %(levelname)s %(name)s: %(message)s", stream=sys.stderr)
+    # the pid tells the lines of parallel cycles apart in data/cron.log (two cron entries append to it at once)
+    logging.basicConfig(level=a.log_level.upper(), format=LOG_FORMAT, stream=sys.stderr)
     st = C.load()
     return int(a.fn(st, a) or 0)
 
