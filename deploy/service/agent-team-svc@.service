@@ -9,7 +9,10 @@ Type=simple
 User=__USER__
 Group=__USER__
 ExecStart=/opt/agent-team/bin/svc-run.sh %i
-Restart=on-failure
+# always, not on-failure (ai-battles 21.11, F36): a role ran `pkill -f dist/server/index.js` to stop its own test server and
+# stopped the live one too (same user, same command line); the server exits 0 on SIGTERM, so on-failure left the game
+# down for 14 minutes. `systemctl stop` (deploy-service.sh, the old colour) still stops an instance for good.
+Restart=always
 RestartSec=3
 TimeoutStopSec=20
 KillMode=mixed

@@ -247,10 +247,16 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
     out = ""
     if budget_s:
         total, wrap = max(1, round(budget_s / 60)), max(1, round(budget_s * BUDGET_WRAP_UP_SHARE / 60))
-        started = (now or datetime.now(timezone.utc)).strftime("%H:%M")
+        t0 = now or datetime.now(timezone.utc)
+        started, stops, wrap_at = (t.strftime("%H:%M") for t in (t0, t0 + timedelta(seconds=budget_s), t0 + timedelta(minutes=wrap)))
+        # ai-battles 21.11 (F35): the sentence used to read «stops this run 45 minutes after its start (≈ 18:00 UTC …)» with the START
+        # time in the brackets; the developer took it for the stop time, saw the clock at 18:00 and returned `partial` in ten
+        # seconds — twice per task, and three partials blocked T-0044 and T-0038 as stuck. Both ends are now named.
         out += ("\n\n# TIME BUDGET OF THIS RUN\n"
-                f"The dispatcher stops this run {total} minutes after its start (≈ {started} UTC; `date -u +%H:%M` shows the clock) — a hard "
-                f"limit of {budget_s} s that includes every command you wait for. When about two thirds of it are used (≈ {wrap} minutes): "
+                f"This run STARTED at ≈ {started} UTC and has a fresh budget of {total} minutes: the dispatcher stops it at ≈ {stops} UTC, "
+                f"not earlier (`date -u +%H:%M` shows the clock). Time used by earlier runs of this task does not count, and a clock "
+                f"that shows about {started} means the run has just begun — do the work. The limit is hard, {budget_s} s, and includes "
+                f"every command you wait for. When about two thirds of it are used (≈ {wrap} minutes, about {wrap_at} UTC): "
                 "stop starting new work, make sure the tree builds and the tests you already have pass, commit, and return "
                 "`status: partial` with a `summary` that says what is done and lists what is left. A partial result is continued next "
                 "cycle on this branch with your summary in front of the next run; a run stopped by the limit loses its reasoning. "

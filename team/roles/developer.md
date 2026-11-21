@@ -64,6 +64,12 @@ repository checkout you were started in (the task branch is already checked out)
   branches one after another. So: stay on your branch in your directory; if you start a server or browser tests, use
   the port the prompt gives you (`TEAM_PORT`), not the repository's default one, and stop what you started; if
   dependencies are missing in a new checkout, install them first.
+- **Never stop a process by its name** (ai-battles 21.11, F36): no `pkill`, `killall`, `pgrep … | xargs kill` and no
+  `kill` of a PID you found by a command-line pattern or by a port you did not open. The live service of the product
+  runs on this host under the same user with the same command line as your test server, and other roles run their
+  own servers beside you: `pkill -f dist/server/index.js` stopped the live game for 14 minutes. Remember the PID of
+  what you start (`node … & echo $!`) and stop only that PID; a test runner that starts the server itself
+  (Playwright `webServer`) stops it itself.
 - **Merge conflict** (the prompt section MERGE CONFLICT — RECONCILE FIRST): your finished branch did not merge because
   another task changed the same lines and was merged first. The dispatcher has merged the base branch into yours and
   kept your side of the conflicting lines. Do not redo the task: read the files the section lists, bring back what the

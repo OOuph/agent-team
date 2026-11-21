@@ -267,6 +267,9 @@ def test_install_and_add_service_scripts_parse_and_render(tmp_path: Path):
         assert subprocess.run(["bash", "-n", str(DEPLOY_DIR / f)]).returncode == 0
     unit = (DEPLOY_DIR / "agent-team-svc@.service").read_text()
     assert "ExecStart=/opt/agent-team/bin/svc-run.sh %i" in unit and "User=__USER__" in unit
+    # F36 (ai-battles 21.11): a role's `pkill -f` stopped the live server, which exits 0 on SIGTERM — it must come back by itself
+    assert "\nRestart=always\n" in unit and "\nRestart=on-failure" not in unit
+    assert "pkill" in (DEPLOY_DIR.parent.parent / "team" / "roles" / "developer.md").read_text()
     assert "NOPASSWD: /opt/agent-team/bin/deploy-service.sh" in (DEPLOY_DIR / "agent-team-deploy.sudoers").read_text()
     tpl = (DEPLOY_DIR / "service.conf.template").read_text()
     assert "proxy_pass http://svc___SLUG_U__;" in tpl and "Upgrade $http_upgrade" in tpl and "/_team/metrics.json" in tpl

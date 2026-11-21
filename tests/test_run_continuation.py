@@ -162,7 +162,7 @@ def test_run_gets_its_limit_and_the_prompt_names_the_budget(tmp_path: Path):
         r = FakeRunner(["done"])
         _exec(st, p, r, "c1")
         role, prompt = r.prompts[0]
-        assert "# TIME BUDGET OF THIS RUN" in prompt and f"stops this run {minutes} minutes after its start" in prompt
+        assert "# TIME BUDGET OF THIS RUN" in prompt and f"has a fresh budget of {minutes} minutes" in prompt
         assert f"≈ {wrap} minutes" in prompt and "`status: partial`" in prompt and "lists what is left" in prompt
         assert "# CONTINUATION" not in prompt
         assert r.kw[0]["timeout_s"] == secs and r.kw[0]["inactivity_s"] == 300
@@ -388,3 +388,16 @@ def test_a_clean_tree_at_the_kill_still_continues(tmp_path: Path):
     _exec(st, p, r, "c2")
     prompt = r.prompts[-1][1]
     assert "# CONTINUATION — DO NOT START OVER" in prompt and "Nothing uncommitted was left; the branch is 1 commit(s) ahead of main" in prompt
+
+
+def test_budget_block_names_start_and_stop_clock() -> None:
+    """ai-battles 21.11 (F35): the block printed the start time where the role read a stop time; two developer runs per
+    task returned `partial` in ten seconds («the run started at the time limit») and the tasks were blocked as stuck."""
+    from datetime import datetime, timezone
+    from team import prompts
+    txt = prompts.budget_block(2700, now=datetime(2026, 11, 21, 18, 0, tzinfo=timezone.utc))
+    assert "STARTED at ≈ 18:00 UTC" in txt and "stops it at ≈ 18:45 UTC" in txt and "about 18:30 UTC" in txt
+    assert "fresh budget of 45 minutes" in txt and "does not count" in txt
+    assert "minutes after its start (≈ 18:00" not in txt
+    late = prompts.budget_block(1500, now=datetime(2026, 11, 21, 23, 50, tzinfo=timezone.utc))
+    assert "STARTED at ≈ 23:50 UTC" in late and "stops it at ≈ 00:15 UTC" in late
