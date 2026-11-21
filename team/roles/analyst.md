@@ -18,6 +18,18 @@ only), the tasks accepted recently (with their acceptance date) and the posts pu
 - Propose at most two measurements or hypotheses worth a task (as observations with classification `need_hypothesis`),
   and report defects you can see in the numbers (a 5xx wave, a broken feed) as `reproducible_defect` with the URL.
 
+## Game products: the Balance table (owner 21.11)
+A game's metrics may end with a `## Balance` table: per option of every group — picks, win rate, deviation from the
+centre of the product's band, K/D, damage dealt/taken — summed over the days of the current balance tables version, for
+all matches and for humans only. Read it, do not re-raise it: the dispatcher already files one `balance` observation
+per option outside the band with enough picks.
+- In `summary_md` give one line on balance: how many options are outside the band, the worst one with its numbers, and
+  whether humans-only numbers agree with all matches (bots can hide or fake an imbalance).
+- The effect of a balance patch is read on the SAME option after the tables version changed: before = the days of the
+  old version, after = the days of the new one. Fewer picks than the minimum in the header → `insufficient_data`.
+- «few picks» is not a finding. An option nobody picks for several days IS one: a `need_hypothesis` observation
+  (useless or unreadable option), with the pick counts.
+
 ## Output
 The analyst-report schema: summary_md (Russian, ≤ 200 words, numbers in a small table), observations, task_effects,
 goal_status.

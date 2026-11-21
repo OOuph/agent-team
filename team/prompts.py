@@ -24,7 +24,8 @@ def _y(obj: Any) -> str:
 
 def _task_brief(t: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "repo_only", "not_before", "blocked_by", "problem", "scope",
-            "acceptance", "negative_cases", "observations", "links", "continues", "probe_of", "review_fails", "created")
+            "acceptance", "negative_cases", "observations", "links", "continues", "probe_of", "review_fails", "created",
+            "standing", "docs")                     # owner 21.11: a standing direction's task says so (team/standing.py)
     out = {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
     if t.get("hypothesis"):
         from . import hypothesis
@@ -47,7 +48,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     answered_txt = "\n\n".join(_y({k: q.get(k) for k in ("id", "question", "answer", "answered_by", "answered")}) for q in answered) or "(none)"
     fw_txt = framework_context(product)
     mkt_txt = po_marketing_block(product, store, caps=channel_caps)
-    game_txt = game_block(product)
+    game_txt = "\n\n".join(x for x in (game_block(product), standing_block(product, store)) if x)
     return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
             f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
             + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
@@ -123,6 +124,10 @@ BALANCE_DIR = "design/balance"             # game profile: balance tables as dat
 GDD_PROMPT_CHARS = 120000
 BALANCE_TABLE_CHARS = 40000
 BALANCE_TABLES_MAX = 8
+TASK_DOC_CHARS = 40000                     # a task's own document (`docs`, standing directions): the design-spec limit of one returned file
+TASK_DOCS_MAX = 4
+GD_METRICS_CHARS = 8000                    # metrics/latest.md in the game designer's prompt (day table + the balance table)
+GD_OBS_CLASSES = ("defect", "ux_friction", "value_gap", "feedback", "balance")   # observation classes the game designer reads
 TRUNCATED_NOTE = ("(TRUNCATED: only the last {shown} of {total} characters are shown. Do NOT return this file in `files` — a rewrite "
                   "from a truncated copy deletes content. Put the change into a new file and ask the PO to split the document.)\n")
 SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, tests/load, PROTOCOL.md
@@ -161,12 +166,22 @@ def _balance_files(gdd_dir: Path) -> list[Path]:
     return sorted(f for f in bdir.glob("*") if f.is_file())[:BALANCE_TABLES_MAX] if bdir.exists() else []
 
 
-def truncated_design_docs(product: Product, gdd_dir: Path) -> set[str]:
+def task_docs(task: dict[str, Any] | None) -> list[str]:
+    """Repository-relative documents a task maintains (`docs` of a standing direction, team/standing.py): the game designer
+    gets each of them whole and returns it complete. Unsafe paths are dropped."""
+    docs = (task or {}).get("docs") or []
+    return [str(d) for d in (docs if isinstance(docs, list) else [docs]) if str(d).strip() and safe_rel_path(str(d))][:TASK_DOCS_MAX]
+
+
+def truncated_design_docs(product: Product, gdd_dir: Path, task: dict[str, Any] | None = None) -> set[str]:
     """Repository-relative paths the game designer saw only in part: the dispatcher must not let it overwrite them."""
     gdd_limit, table_limit = _design_limits(product)
     out = set()
     if _doc_for_rewrite(gdd_dir / GDD_FILE, gdd_limit)[1]:
         out.add(GDD_FILE)
+    for d in task_docs(task):
+        if _doc_for_rewrite(gdd_dir / d, TASK_DOC_CHARS)[1]:
+            out.add(d)
     for f in _balance_files(gdd_dir):
         if _doc_for_rewrite(f, table_limit)[1]:
             out.add(f"{BALANCE_DIR}/{f.name}")
@@ -199,7 +214,8 @@ def service_block(product: Product, repo_dir: Path, role: str = "developer") -> 
            "The server must honour `PORT` from the environment (or `{port}` in run_cmd) and answer the health path with 200. "
            f"On the host it also gets `DATA_DIR` (files and SQLite live there, they survive releases) and `RELEASE_SHA`. "
            f"It serves its own metrics at `/_team/metrics.json` — the contract is `{GAME_METRICS_DOC}` in the framework (kind, days, rounds, "
-           "players, latency, rejected moves); the PO, analyst and game designer read nothing else about play. A load task (role tester) runs "
+           "players, latency, rejected moves, and the optional `balance` block: picks and wins per option, stamped with the balance "
+           "tables version); the PO, analyst and game designer read nothing else about play. A load task (role tester) runs "
            f"`tests/load/clients.ts` (starter in `{SERVICE_TEMPLATES}/tests/load/`) with N WebSocket clients: keep it runnable."]
     if role == "designer":
         out.append(f"You are the designer: your files are `{DESIGN_FILE}`, styles and assets (SVG, CSS). Do not change server code or game rules; "
@@ -305,6 +321,21 @@ def game_block(product: Product, gdd_dir: Path | None = None) -> str:
             + ("\n## GAME-DESIGN.md outline\n" + "\n".join(heads) if heads else "\n(no GAME-DESIGN.md yet: the first design task writes it)"))
 
 
+def standing_block(product: Product, store: Store) -> str:
+    """What the PO sees about standing directions (owner 21.11, team/standing.py): which exist, their cadence, which task
+    is open or when the next one comes. Empty for a product without directions (every non-game product by default)."""
+    from . import standing
+    lines = standing.status_lines(product, store)
+    if not lines:
+        return ""
+    return ("# STANDING DIRECTIONS (the dispatcher creates these tasks itself)\n"
+            "Recurring work that one task cannot close. A task with `standing: <id>` in the backlog belongs to its direction: do not "
+            "create a second one for the same purpose, do not close it as a duplicate of an earlier, finished one, and do not wait "
+            "for it with other work. When YOU create a task for a direction (a `balance` observation → a game-designer task at "
+            "once), set `standing: <id>` on it: the dispatcher then counts it as the direction's task.\n"
+            + "\n".join(f"- {ln}" for ln in lines))
+
+
 def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store) -> str:
     """The game designer's prompt: VISION, the task, the current GAME-DESIGN.md and balance tables, game metrics, what
     testers and the PO observed. No shell: everything travels here (owner 20.11)."""
@@ -314,8 +345,20 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
     for f in _balance_files(gdd_dir):
         tables += f"\n--- {BALANCE_DIR}/{f.name} ---\n" + _doc_for_rewrite(f, table_limit)[0]
     latest = product.dir / "metrics" / "latest.md"
-    metrics = _read_tail(latest, 4000)
-    obs = [o for o in store.observations() if o.get("status") in ("new", "triaged") and o.get("classification") in ("defect", "ux_friction", "value_gap", "feedback")][-15:]
+    metrics = _read_tail(latest, GD_METRICS_CHARS)
+    obs = [o for o in store.observations() if o.get("status") in ("new", "triaged") and o.get("classification") in GD_OBS_CLASSES][-15:]
+    docs = ""
+    for d in task_docs(task):                # a standing direction's own document (mechanics catalogue, balance reading): whole, to be returned whole
+        docs += f"\n--- {d} ---\n" + (_doc_for_rewrite(gdd_dir / d, TASK_DOC_CHARS)[0] or "(does not exist yet — this task creates it)")
+    from . import balance
+    sim_path = balance.settings(product.raw).sim_report
+    sim = _read_tail(gdd_dir / sim_path, balance.SIM_REPORT_CHARS) if safe_rel_path(sim_path) else ""
+    sim_txt = ""
+    if sim:
+        sim_txt = f"\n\n# SIMULATION REPORT (`{sim_path}`, written by the repository's own simulation — read it, do not return it)\n" + sim
+    elif task.get("standing"):
+        sim_txt = (f"\n\n# SIMULATION REPORT\n(none: the repository has no `{sim_path}` — product.yaml `balance.sim_report` names the path. "
+                   "Judge from the match data, say in `friction` that the simulation report is missing, and propose the developer task that writes it.)")
     return (f"# DESIGN TASK {task['id']} — product `{product.slug}` — stage {product.stage}\n\n"
             "You return the design-spec schema: `files` are complete documents to write into the repository (paths relative to its root, "
             f"e.g. `{GDD_FILE}`, `{BALANCE_DIR}/ships.json`); `balance_changes` say what changed and how the effect will be read in the "
@@ -325,7 +368,9 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
             + ("\n\n# BALANCE TABLES" + tables if tables else "")
+            + ("\n\n# DOCUMENTS OF THIS TASK (return each one COMPLETE in `files`)" + docs if docs else "")
             + "\n\n# GAME METRICS\n" + (metrics or "(no metrics yet: no rounds have been played)")
+            + sim_txt
             + "\n\n# WHAT TESTERS, PLAYERS AND THE PO OBSERVED\n" + (_y([{k: o.get(k) for k in ("id", "title", "classification", "actual", "source")} for o in obs]) if obs else "(nothing yet)") + "\n")
 
 
@@ -368,8 +413,9 @@ def _num(d: dict[str, Any] | None, key: str, sub: str | None = None) -> str:
     return "—" if v is None else str(v)
 
 
-def game_metrics_digest(days: dict[str, Any], generated: str = "", max_days: int = 7) -> str:
-    """Newest day first; the fields the PO, analyst and game designer read (docs/game-metrics.md). Missing fields print —."""
+def game_metrics_digest(days: dict[str, Any], generated: str = "", max_days: int = 7, balance_cfg: Any = None) -> str:
+    """Newest day first; the fields the PO, analyst and game designer read (docs/game-metrics.md). Missing fields print —.
+    The balance table (team/balance.py) follows the days when the server sends the optional `balance` block."""
     out = [f"Game metrics served by the game server (docs/game-metrics.md); snapshot generated {generated or '?'}. "
            "finished/started = rounds completed; abandoned = left before the end; first_mover_wins/finished = balance signal; "
            "rejected_moves = intents the server refused (unclear UI when high)."]
@@ -387,10 +433,14 @@ def game_metrics_digest(days: dict[str, Any], generated: str = "", max_days: int
             f"- move latency ms: p50 {_num(d, 'move_latency_ms', 'p50')}, p95 {_num(d, 'move_latency_ms', 'p95')} ({_num(d, 'move_latency_ms', 'samples')} samples)",
             f"- moves {_num(d, 'moves')}, rejected {_num(d, 'rejected_moves')}, disconnects {_num(d, 'disconnects')}, reconnects {_num(d, 'reconnects')}, "
             f"server errors {_num(d, 'errors')}, first-mover wins {_num(d, 'first_mover_wins')}"]))
+    from . import balance
+    bal = balance.render_md(days, balance_cfg)
+    if bal:
+        out.append(bal.rstrip("\n"))
     return "\n\n".join(out)
 
 
-def metrics_digest(files: list[Path], max_days: int = 7) -> str:
+def metrics_digest(files: list[Path], max_days: int = 7, balance_cfg: Any = None) -> str:
     """Compact per-day view of the site metrics for the analyst (ops 04.11, release-radar Q-0009): every metrics file is a
     multi-day snapshot of ~35 KB, and cutting each file to its first 5000 chars left the analyst with only the oldest day.
     Days are merged across files (the newest file wins), newest day first; raw top_pages lists are reduced to the top 5."""
@@ -408,7 +458,7 @@ def metrics_digest(files: list[Path], max_days: int = 7) -> str:
     if not days:
         return "(no metrics files yet)"
     if is_game_metrics({"days": days}):
-        return game_metrics_digest(days, generated, max_days=max_days)
+        return game_metrics_digest(days, generated, max_days=max_days, balance_cfg=balance_cfg)
     out = [f"Snapshot generated {generated or '?'}; humans = after the strict bot filter (04.11); "
            "'returns' = human sources seen on an earlier day too (G2); by_src = visits that came with ?src=<channel>."]
     for day in sorted(days, reverse=True)[:max_days]:

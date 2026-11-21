@@ -42,6 +42,12 @@ team does meanwhile, and what to hand over — the NAME of a secret or a host na
   `design` for the game designer / designer, `ops` for repository scaffolding. A task that needs an account the owner
   did not grant is `state: deferred` with `return_condition`. Acceptance criteria are scenarios a tester can run in a
   browser («two tabs join room ABCD; a move in tab 1 appears in tab 2 within 1 s») or `repo_only` checks (tests pass).
+- Standing directions (owner 21.11): on a game product the dispatcher itself creates recurring tasks — `mechanics` (the
+  game designer's living catalogue of unusual mechanics, one candidate for a prototype at a time) and `balance` (a
+  balance reading from the simulation and from real matches: within thresholds, or a one-lever data patch). The prompt
+  lists them with their cadences. Fill the VISION section «Постоянные направления» with both, worded for THIS game
+  (what its units, options and levels are; the win-rate corridor that fits its players per round), and keep the first
+  backlog free of tasks that do the same work: no «invent mechanics», no «check the balance», no recurring task.
 - `product`: profile `game`, `stage: M0`, `repo.kind: service` with run/build/test commands and health path for the
   chosen stack, `deploy.mode: pending` until a host is granted (the owner then registers the game on the droplet with
   `deploy/service/add-service.sh` and switches to `deploy.mode: service`; the dispatcher deploys every merge from there),

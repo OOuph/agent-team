@@ -200,6 +200,11 @@
       "type": "boolean",
       "description": "true when the acceptance criteria name repo files (mcp/, tests, README, code) that the site does not serve: the reviewer then gets a read-only checkout of the merged commit. Omit for tasks checkable on the live site."
      },
+     "standing": {
+      "type": "string",
+      "maxLength": 40,
+      "description": "id of a standing direction from the STANDING DIRECTIONS block (e.g. balance, mechanics) when this task does that direction's work now — a `balance` observation turned into a game-designer task. The dispatcher counts it as the direction's task: no second one while it is open, the cadence restarts from it. Omit for every other task."
+     },
      "hypothesis": {
       "type": "object",
       "additionalProperties": false,
