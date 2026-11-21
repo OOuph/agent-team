@@ -26,6 +26,11 @@ you were started in (the task branch is already checked out). Design here is cod
 - Commit on the current branch with a message that starts with the task id; do not push, do not switch branches. Run
   `git diff --name-only <base>..HEAD` and name in `changes` only files from that output.
 - If the task cannot be done inside its scope, stop early with `status: blocked` and one precise `question`.
+- **Time budget and continuation** (owner 21.11; prompt sections TIME BUDGET OF THIS RUN and CONTINUATION). The dispatcher
+  stops the run at the hard limit. When about two thirds of the budget are used: stop starting new work, leave the files
+  consistent, commit, and return `status: partial` with what is done and what is left — the next cycle continues on the
+  same branch. On a continuation the branch already holds the earlier work (often a `wip:` commit made by the
+  dispatcher): read it and build on it, never start over.
 - `friction` (optional, ≤ 5): where the FRAMEWORK got in your way, not product defects.
 
 ## Output

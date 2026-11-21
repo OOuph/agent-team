@@ -257,6 +257,11 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
     elif a.action == "show":
         t = s.task(a.id)
         print(yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=110) if t else "not found")
+        if t:                                          # owner 21.11: where the time of the task's runs went (team/runprofile.py)
+            from . import runprofile
+            profiles = runprofile.task_runs_md(p, a.id)
+            if profiles:
+                print(profiles)
     s.close()
     return 0
 

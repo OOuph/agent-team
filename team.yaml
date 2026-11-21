@@ -9,9 +9,17 @@ paths:
 claude:
   binary: claude                  # overridden on the server by CLAUDE_BINARY in .env (…/node_modules/.bin/claude)
   auth: oauth_token               # oauth_token = CLAUDE_CODE_OAUTH_TOKEN (owner's plan, `claude setup-token`); api_key = ANTHROPIC_API_KEY
-  timeout_s: 1500                 # hard cap of one role run
+  timeout_s: 1500                 # hard cap of one role run — the default for every role (per role and per product: `roles` below)
   inactivity_s: 300               # no stream-json line for this long → the run is killed (watchdog, Paperclip #18586 lesson)
   max_turns: 60
+  # Time budget per role (owner 21.11, frictions F23/F30; SCHEME §3 «Бюджет времени, продолжение и профиль прогона»).
+  # Layers, the later one wins: timeout_s / inactivity_s above → roles.<role> → roles_by_repo_kind.<repo.kind>.<role>
+  # → product.yaml `roles: {<role>: {timeout_s, inactivity_s}}`. Hard ceiling 3600 s (team/config.py
+  # RUN_TIMEOUT_CEILING_S): a higher value is clamped with a WARNING. The effective limit is in the log and in run.json.
+  roles: {}                       # e.g. designer: {timeout_s: 1800}   reviewer: {inactivity_s: 420}
+  roles_by_repo_kind:             # defaults by `repo.kind` of the product (static / service)
+    service:
+      developer: {timeout_s: 2700}   # a service repository: install, build, start the server and play e2e specs in one run (was 1500)
   models:
     po: opus
     developer: sonnet
@@ -56,6 +64,9 @@ cycle:
   voice_cap_usd: 3.0
   max_ready: 3
   max_execute_per_cycle: 1        # one implementation task per product per cycle; WIP stays low
+  max_continuations: 3            # owner 21.11: a developer/designer run stopped by the time limit is continued next cycle from a `wip:` commit on
+                                  # task/<id>; after this many continuations the task is blocked and the PO is asked to split it
+                                  # (product.yaml `cycle: {max_continuations: N}` overrides; 0 = never continue)
   execute_slots:                  # seats per role per cycle (overrides max_execute_per_cycle when present; product.yaml may override)
     developer: 1                  # 03.11: a single seat starved the daily post behind P1/P2 developer tasks
     marketer: 1
@@ -94,6 +105,16 @@ gsc:                              # owner 10.11: Google Search Console via a ser
   days: 28
   inspect_per_day: 50             # URL Inspection, random sample (owner 10.11): quota is 2,000/day per property, we use ≤ 150 on formachines.ai
   reinspect_days: 7
+
+run_profile:                      # owner 21.11: where the time of a run went (team/runprofile.py; no model call). product.yaml `run_profile` overrides.
+  enabled: true                   # the profile goes into run.json of every run; `team task <slug> show --id T` prints it
+  event_min_s: 300                # a run at least this long, or stopped by a limit, also gets the `run.profile` event → one line in the PO prompt
+  top_calls: 5                    # longest calls kept (first 160 characters, secrets redacted)
+  repeat_threshold: 3             # flag: the same normalised command more than this many times
+  dominant_share: 0.6             # flag: one category above this share of the time inside tool calls (and ≥ dominant_min_s = 120 s)
+  max_full_e2e: 1                 # flag: more than this many full e2e runs (no spec file, no grep filter)
+  extra_categories: []            # rules in front of the built-in ones (install, e2e, unit_tests, build, git, read_search, edit, shell, other),
+                                  # e.g. - {name: e2e, tools: [Bash], pattern: '\bmake play-test\b'}; `categories:` replaces the whole list
 
 replan:                           # owner 11.11: a goal stuck N times → the PO gives 3 alternatives → probes → the owner (team/replan.py)
   threshold: 3                    # failed attempts (partial/blocked/error/no commit) over the chain of tasks of one goal

@@ -36,6 +36,7 @@ TELEGRAM_CHUNK = 3500
 MAX_ITEMS = 12            # per role per product in the ledger text (the JSON keeps everything)
 REPORT_RUN_CAP_USD = 1.0
 REPORT_MAX_TURNS = 4
+RUN_TIME_MIN_ROLE_S = 60  # a role whose runs took less than this in the window is left out of the «run time» table (unless a run was killed)
 
 
 # ------------------------------------------------------------------ time helpers
@@ -166,8 +167,14 @@ def product_ledger(p: Product, store: Store, since: datetime) -> dict[str, Any]:
         spend[str(role)] = round(float(usd or 0), 2)
 
     roles = {r: v for r, v in roles.items() if v["tasks"] or v["items"]}
+    try:                                                 # owner 21.11: where the run time of the window went (team/runprofile.py)
+        from . import runprofile
+        run_time = runprofile.period_summary(p, since)
+    except Exception as exc:  # noqa: BLE001 — the report must go out even when a run.json is odd
+        log.warning("%s: run time summary failed: %s", p.slug, exc)
+        run_time = {"runs": 0, "wall_s": 0.0, "tool_s": 0.0, "killed": 0, "roles": {}}
     return {"product": p.slug, "name": p.raw.get("name") or p.slug, "site": p.site_base, "roles": roles, "po": po,
-            "dispatcher": disp, "spend_usd": spend, "critic": crit}
+            "dispatcher": disp, "spend_usd": spend, "critic": crit, "run_time": run_time}
 
 
 def framework_items(st: Settings, since: datetime) -> dict[str, Any]:
@@ -238,6 +245,23 @@ def _fmt_task(t: dict[str, Any]) -> str:
     return s
 
 
+def run_time_md(rt: dict[str, Any]) -> list[str]:
+    """«Куда ушло время прогонов» — a small table per product: per role the runs, minutes, the share inside tool calls,
+    the top categories and how many runs a limit stopped (owner 21.11; numbers from run.json, team/runprofile.py)."""
+    roles = {r: v for r, v in (rt.get("roles") or {}).items() if v.get("wall_s", 0) >= RUN_TIME_MIN_ROLE_S or v.get("killed")}
+    if not roles:
+        return []
+    out = [f"**Куда ушло время прогонов:** {rt.get('runs', 0)} прогонов, {float(rt.get('wall_s') or 0) / 60:.0f} мин"
+           + (f", остановлено по лимиту {rt['killed']}" if rt.get("killed") else ""),
+           "| роль | прогонов | мин | в инструментах | на что (сек) | стоп по лимиту | флаги |", "|---|---|---|---|---|---|---|"]
+    for role, v in roles.items():
+        wall, tool = float(v.get("wall_s") or 0), float(v.get("tool_s") or 0)
+        cats = ", ".join(f"{name} {s:.0f}" for name, s in v.get("categories") or []) or "—"
+        flags = ", ".join(f"{k}×{n}" for k, n in sorted((v.get("flags") or {}).items())) or "—"
+        out.append(f"| {role} | {v.get('runs', 0)} | {wall / 60:.0f} | {(100 * tool / wall if wall else 0):.0f} % | {cats} | {v.get('killed', 0)} | {flags} |")
+    return out
+
+
 def ledger_md(led: dict[str, Any]) -> str:
     lines = [f"# Ведомость ролей за {led['hours']:.0f} ч — {led['since'][:16]} → {led['until'][:16]} UTC", ""]
     for p in led["products"]:
@@ -285,6 +309,7 @@ def ledger_md(led: dict[str, Any]) -> str:
             lines.append(f"**Внешний критик:** карточек {c['cards']}, решения PO: " + (", ".join(f"{k} {v}" for k, v in sorted(c["decided"].items())) or "ещё не разобраны") + f"; задач создано {c['tasks']}")
         if p["spend_usd"]:
             lines.append("Расход: " + ", ".join(f"{r} ${u:.2f}" for r, u in sorted(p["spend_usd"].items())) + f" = ${sum(p['spend_usd'].values()):.2f}")
+        lines += run_time_md(p.get("run_time") or {})
         lines.append("")
     fw = led["framework"]
     if fw["retro"] or fw["builds"] or fw.get("critic_reports"):
@@ -325,7 +350,10 @@ def compact_for_prompt(led: dict[str, Any]) -> dict[str, Any]:
         po["implemented"] = po["implemented"][:20]
         po["owner_questions"] = po["owner_questions"][:2]
         out["products"].append({"product": p["product"], "name": p["name"], "site": p["site"], "roles": roles, "po": po,
-                                "dispatcher": p["dispatcher"], "spend_usd": p["spend_usd"], "external_critic": p.get("critic")})
+                                "dispatcher": p["dispatcher"], "spend_usd": p["spend_usd"], "external_critic": p.get("critic"),
+                                "run_time_seconds_by_role": {r: {k: v.get(k) for k in ("runs", "wall_s", "tool_s", "killed", "categories")}
+                                                             for r, v in ((p.get("run_time") or {}).get("roles") or {}).items()
+                                                             if v.get("wall_s", 0) >= RUN_TIME_MIN_ROLE_S or v.get("killed")}})
     return out
 
 
