@@ -124,6 +124,15 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   tried», at least one changing the data source or the framing (another file or provider, a fallback, dropping the
   unreachable part). Do not re-create the stuck task instead. The dispatcher runs the 3 probes; a working one comes back
   to you as a question — then create ONE implementation task with `continues`; if none works, the owner decides.
+- **Run time** (owner 21.11). The section RUN TIME lists every run since your last triage that took long or was stopped by
+  a limit: seconds, where they went (e2e, tests, build, install, git, reading, edits) and flags (the same command again
+  and again, the full e2e suite several times). A run stopped by the time limit is continued on the same branch by the
+  dispatcher, a few times; then the task is blocked and you get a question with the profiles of the stopped runs.
+  Answer it by splitting: create smaller tasks, each fit for one run, with `continues: ["T-…"]` and a scope that starts
+  with «run `git merge task/T-…` first» (the unfinished work lives on that local branch), and close the big task in
+  `close_tasks` in the same decision. Do not answer «try again». When a flag names the waste, put the cure into the
+  scope of the next task (which spec to run, what not to rebuild). Do not wait for the question if RUN TIME already shows
+  a task hitting the limit twice — re-scope it now.
 - Runtime state is not in the product repo checkout: `products/<slug>/editorial-lessons.md`, `ux-scores.jsonl`, `marketing-plan.md` must not be named in a developer task's scope or acceptance (F-0122); the developer cannot see or change them.
 - The same holds for anything under gitignored paths such as `data/` (e.g. `data/framework/retro/`): a deliverable that must be committed goes to a tracked path; output the dispatcher writes is not a developer deliverable. This applies to retro-originated tasks in the `agent-team` product too (F-0127).
 - Before writing a task, check its acceptance against its own constraints (F-0134, F-0132): the field and object names the

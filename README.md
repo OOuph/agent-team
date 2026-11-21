@@ -47,6 +47,14 @@ Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team task <
 `team ask <slug> --text ...`, `team answer`, `team obs`, `team lesson`, `team stop|resume`, `team deploy <slug>`,
 `team digest`, `team report`, `team export-public`, `team friction`, `team retro`, `team gsc`, `team autonomy-check`.
 
+Run time (SCHEME.md §3): every role run has a hard limit and an inactivity watchdog. Keys, the later one wins:
+`claude.timeout_s` / `claude.inactivity_s` (team.yaml, all roles) → `claude.roles.<role>` → `claude.roles_by_repo_kind.<kind>.<role>`
+(ships 2700 s for the developer of a service repository) → `roles: {<role>: {timeout_s, inactivity_s}}` in product.yaml; nothing
+goes above 3600 s. A developer or designer run stopped by the limit is not restarted: its work is kept as a `wip:` commit on
+the task branch and the next cycle continues it, up to `cycle.max_continuations` times (team.yaml, or `cycle:` in
+product.yaml), then the PO is asked to split the task. `run_profile` (team.yaml) sets how the time of a run is broken
+down; `team task <slug> show --id T` prints where each run of a task spent its time.
+
 Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`; a game server (long-running
 process, blue/green releases, health check, rollback, `team deploy`) in `deploy/service/`. Tests: `pytest -q`.
 

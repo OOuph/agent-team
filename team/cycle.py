@@ -25,6 +25,18 @@ from . import geo, gitops, hypothesis, playtest, prompts, prfacts, publish, repl
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
+from . import runprofile                                  # own lines: the import lists above are edited by other branches
+from .runner import killed_kind
+
+# run continuation (owner 21.11, frictions F23/F30): a run stopped by the time limit is continued, not restarted
+CONTINUE_ROLES = ("developer", "designer")               # roles that work in a product repository checkout
+INTERRUPTED = "interrupted"                               # result status of a run the dispatcher stopped: not a failed attempt for the replan counter
+WIP_WHY = {"timeout": "run stopped by the time limit, continues next cycle",          # text of the service commit, by reason
+           "inactivity": "run stopped by the inactivity watchdog, continues next cycle",
+           "partial": "partial result, continues next cycle"}
+QUESTION_PROFILES_MAX = 4                                 # stopped runs listed in the «split this task» question to the PO
+QUESTION_PROFILE_CHARS = 230                              # characters per run in that question, at most
+QUESTION_MAX_CHARS = 1480                                 # the store keeps 1500 characters of a question: the profile lines are cut to fit
 
 GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1, "tester": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
 PENDING_ROLES: tuple[str, ...] = ()                      # roles without an execute path (none since slice 6: a tester task = load test)
@@ -135,6 +147,7 @@ class Cycle:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.phases_done: list[str] = []
         self.n_runs = 0
+        self.last_profile: dict[str, Any] | None = None      # run profile of the latest role_run (team/runprofile.py)
 
     # ------------------------------------------------------------ guards
 
@@ -188,18 +201,43 @@ class Cycle:
                "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
                "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
         model = model or (self.p.raw.get("models") or {}).get(role)   # explicit override (series editing), else product.yaml per role
+        limits = self.p.run_limits(role)                              # owner 21.11: the time budget is per role and per product
+        log.info("%s: run %s time budget: timeout %ds (%s), inactivity %ds (%s)", self.p.slug, run_id, limits["timeout_s"],
+                 limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
         rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
-                             allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns)
+                             allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
+                             timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]))
         cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
         self.store.book_spend(run_id, role, cost, rr.cost_usd is not None)
         for kind in billing.observe(self.st, rr.limit_info, run_id, notify=billing.owner_notify(), cost=cost):
             self.store.event(f"billing.{kind}", self.p.slug, "dispatcher", {"run": run_id, "line": billing.status_line(self.st)})
         rec = {"run_id": run_id, "role": role, "ok": rr.ok, "error": rr.error, "cost_usd": cost, "cost_reported": rr.cost_usd is not None,
                "num_turns": rr.num_turns, "duration_s": round(rr.duration_s, 1), "session_id": rr.session_id,
-               "denials": rr.denials, "structured": rr.structured, "finished": utcnow()}
+               "denials": rr.denials, "structured": rr.structured, "finished": utcnow(),
+               "limits": limits, "killed": killed_kind(rr), "profile": self.profile_run(rr, role, run_id, limits)}
         (rd / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
         return rr
+
+    def profile_run(self, rr: RunResult, role: str, run_id: str, limits: dict[str, Any]) -> dict[str, Any] | None:
+        """Where the run's time went (team/runprofile.py): computed from the events of every run and kept in run.json; a
+        run longer than `run_profile.event_min_s` or stopped by a limit also gets the compact `run.profile` event the PO
+        prompt and the report read. No model call; a failure here never fails the run."""
+        self.last_profile = None
+        cfg = runprofile.settings_for(self.p)
+        if not cfg.get("enabled", True):
+            return None
+        try:
+            prof = runprofile.build(list(getattr(rr, "events", None) or []), wall_s=float(rr.duration_s or 0.0),
+                                    started=float(getattr(rr, "started", 0.0) or 0.0) or None, killed=killed_kind(rr),
+                                    limit_s=int(limits["timeout_s"]), cfg=cfg)
+            if runprofile.worth_event(prof, cfg):
+                self.store.event(runprofile.RUN_EVENT, run_id, role, runprofile.event_detail(prof, role=role, run_id=run_id))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: run profile of %s failed: %s", self.p.slug, run_id, exc)
+            return None
+        self.last_profile = prof
+        return prof
 
     def _allowed_hosts(self, role: str | None = None) -> str:
         """Hosts team-fetch may open for a run: the product site, product extra_hosts, the publishing channels, and the
@@ -963,7 +1001,8 @@ class Cycle:
                 self.store.transition(t["id"], "blocked", "dispatcher", "no repository configured", force=True)
                 return True
         branch = gitops.start_task_branch(repo, t["id"], self.p.repo_branch)
-        prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role)
+        prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
+                                          budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo))
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"])
@@ -971,6 +1010,8 @@ class Cycle:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False
         if not (rr.ok and rr.structured):
+            if self.continue_interrupted(t, rr, run_id, repo, role):
+                return True                                 # owner 21.11: stopped by a limit → wip commit, the next cycle continues
             attempts = int(t.get("attempts") or 0) + 1
             note = f"run failed: {rr.error}"
             self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": note[:400]})
@@ -981,6 +1022,14 @@ class Cycle:
             return True
         res = rr.structured
         res["run_id"] = run_id
+        if res.get("status") == "partial" and not replan.is_probe(t):
+            try:                                        # uncommitted work of a partial result survives the next attempt's reset
+                wip = self.save_wip(t, repo, "partial", run_id)
+            except gitops.GitError as exc:
+                log.warning("%s: %s partial result — uncommitted work not saved: %s", self.p.slug, t["id"], gitops.redact(str(exc))[:300])
+                wip = None
+            if wip:
+                res["wip_commit"], res["wip_files"] = wip["commit"], wip["files"]
         res["commit"] = gitops.head(repo)
         self.store.add_result(t["id"], res)
         if replan.is_probe(t):
@@ -1036,6 +1085,100 @@ class Cycle:
         self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
         self.deploy_after_merge(t, sha)
         return True
+
+    # run continuation: a run stopped by the time limit is continued, not restarted (owner 21.11, frictions F23/F30) ------
+
+    def save_wip(self, t: dict[str, Any], repo: Path, reason: str, run_id: str) -> dict[str, Any] | None:
+        """Commit whatever the run left in the working tree to `task/<id>` as a service commit and record `run.wip_saved`.
+        Returns `{commit, files, stat}`; None when the tree was clean. The commit stays on the task branch of the local
+        checkout: it is not pushed and nothing is merged or deployed here — only a later normal run releases the task.
+        Raises gitops.GitError when the work could not be saved (wrong branch, git failure)."""
+        wip = gitops.save_wip(repo, t["id"], WIP_WHY.get(reason, f"{reason}, continues next cycle"))
+        if wip:
+            self.store.event("run.wip_saved", t["id"], "dispatcher", {"run": run_id, "files": wip["files"], "commit": wip["commit"],
+                                                                      "branch": f"task/{t['id']}", "reason": reason})
+        return wip
+
+    def continue_interrupted(self, t: dict[str, Any], rr: RunResult, run_id: str, repo: Path, role: str) -> bool:
+        """A repository role's run that the dispatcher stopped (hard time limit or inactivity watchdog): the unfinished work
+        is saved as a wip commit on the task branch and the task stays `in_progress`, so the next cycle CONTINUES it (the
+        prompt names the commit and the run profile and forbids starting over). After `cycle.max_continuations`
+        continuations the task is blocked with a question to the PO that carries the profiles of the stopped runs, so
+        the PO splits it instead of burning more runs. Returns False when this is not such a run or the work could not be
+        saved — the caller then handles it as any failed run."""
+        kind = killed_kind(rr)
+        if kind is None or role not in CONTINUE_ROLES:
+            return False
+        try:
+            wip = self.save_wip(t, repo, kind, run_id)
+        except (gitops.GitError, OSError, subprocess.SubprocessError) as exc:
+            log.error("%s: %s — unfinished work of run %s NOT saved: %s", self.p.slug, t["id"], run_id, gitops.redact(str(exc))[:300])
+            self.store.event("run.wip_failed", t["id"], "dispatcher", {"run": run_id, "error": gitops.redact(str(exc))[:300]})
+            return False
+        prof = self.last_profile
+        secs = int(round(rr.duration_s or 0))
+        limit_s = int(self.p.run_limits(role)["timeout_s"])
+        what = runprofile.KILLED_TEXT.get(kind, kind).replace("killed by", "stopped by")
+        summary = (f"run {what} after {secs} s; "
+                   + (f"{wip['files']} file(s) of unfinished work saved on task/{t['id']} as wip commit {wip['commit'][:10]}" if wip
+                      else "the working tree was clean, nothing uncommitted to save"))
+        result = {"run_id": run_id, "role": role, "status": INTERRUPTED, "killed": kind, "summary": summary, "duration_s": secs, "limit_s": limit_s}
+        if wip:
+            result.update(wip_commit=wip["commit"], wip_files=wip["files"])
+        if prof:
+            result.update(profile_line=runprofile.line(prof, role=role, task=t["id"]), profile_md=runprofile.render(prof))
+        self.store.add_result(t["id"], result)
+        used, allowed = int(t.get("continuations") or 0), self.p.max_continuations
+        if used >= allowed:
+            log.warning("%s: %s stopped by a limit again after %d continuation(s) — blocked, the PO splits it", self.p.slug, t["id"], used)
+            # the question first: it moves the task to `blocked` and sets `blocked_by`; then the note that says why
+            self.store.ask(from_="dispatcher", to="po", question=self.split_question(t["id"], limit_s), task_id=t["id"], blocks=[t["id"]])
+            self.store.transition(t["id"], "blocked", "dispatcher", f"{summary}; {used} continuation(s) used (max {allowed}): the PO splits it",
+                                  force=True, assignee_run=None)
+            self.store.event("task.continuations_exhausted", t["id"], "dispatcher", {"continuations": used, "max": allowed})
+            return True
+        log.info("%s: %s %s — continuation %d of %d next cycle", self.p.slug, t["id"], summary, used + 1, allowed)
+        self.store.transition(t["id"], "in_progress", "dispatcher", f"{summary} — continues next cycle (continuation {used + 1}/{allowed})",
+                              force=True, continuations=used + 1, assignee_run=None)
+        return True
+
+    def split_question(self, task_id: str, limit_s: int) -> str:
+        """The question that blocks a task after its last allowed continuation: what the stopped runs spent their time on."""
+        t = self.store.task(task_id) or {"id": task_id}
+        stopped = [r for r in t.get("results") or [] if r.get("status") == INTERRUPTED]
+        shown = stopped[-QUESTION_PROFILES_MAX:]
+        ahead = gitops.git(self.p.repo_dir, "rev-list", "--count", f"{self.p.repo_branch}..task/{task_id}", check=False) or "?"
+        head = (f"Task {task_id} ({_short_text(t.get('title'), 80)}) was stopped by the run time limit {len(stopped)} times "
+                f"(limit {limit_s} s per run) and is not finished: it is too big for one run. Split it into smaller tasks or cut its "
+                f"scope, then close it; do not re-ready it unchanged. The unfinished work is on the local branch task/{task_id} "
+                f"({ahead} commit(s) ahead of {self.p.repo_branch}): a successor names it in `continues` and its scope starts with "
+                f"«run `git merge task/{task_id}` first». Where the time went ("
+                + (f"last {len(shown)} of {len(stopped)} stopped runs; " if len(stopped) > len(shown) else "")
+                + f"full profiles: `team task {self.p.slug} show --id {task_id}`):")
+        per_line = max(60, min(QUESTION_PROFILE_CHARS, (QUESTION_MAX_CHARS - len(head)) // max(1, len(shown)) - 3))   # the lines must fit
+        return head + "".join(f"\n- {_short_text(r.get('profile_line') or r.get('summary'), per_line)}" for r in shown)
+
+    def continuation_context(self, t: dict[str, Any], repo: Path) -> dict[str, Any] | None:
+        """What the next prompt of a continued task says about the earlier run: the wip commit and its `--stat`, the run
+        profile, how many continuations are left. None when the task's latest attempt was not cut short."""
+        last = None
+        for r in reversed(t.get("results") or []):
+            if r.get("status") == "done":
+                break                                   # a normal run came after: nothing to continue
+            if r.get("status") == INTERRUPTED or r.get("wip_commit"):
+                last = r
+                break
+        if last is None:
+            return None
+        sha = str(last.get("wip_commit") or "")
+        held = bool(sha) and gitops.is_ancestor(repo, sha)
+        if sha and not held:
+            log.warning("%s: %s wip commit %s is not on the task branch any more", self.p.slug, t["id"], sha[:10])
+        return {"reason": str(last.get("killed") or last.get("status") or ""), "duration_s": last.get("duration_s"), "limit_s": last.get("limit_s"),
+                "wip_commit": sha if held else "", "wip_lost": bool(sha) and not held, "wip_files": last.get("wip_files"),
+                "stat": gitops.commit_stat(repo, sha) if held else "", "profile_md": str(last.get("profile_md") or ""),
+                "used": int(t.get("continuations") or 0), "max": self.p.max_continuations,
+                "ahead": gitops.commits_ahead(repo, self.p.repo_branch), "base": self.p.repo_branch}
 
     def exec_tester(self, t: dict[str, Any], run_id: str) -> bool:
         """A tester task (type `load`, slice 6): the dispatcher starts the server from the repository's HEAD (or uses the

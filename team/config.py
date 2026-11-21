@@ -19,13 +19,19 @@ ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.paren
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
+               # time budget per role (owner 21.11, F23/F30): {<role>: {timeout_s, inactivity_s}}; product.yaml `roles` overrides
+               "roles": {},
+               # shipped defaults by repository kind (data, not code): the developer of a service repository builds, starts
+               # a server and plays e2e specs inside one run
+               "roles_by_repo_kind": {"service": {"developer": {"timeout_s": 2700}}},
                "models": {"po": "opus", "developer": "sonnet", "reviewer": "sonnet", "analyst": "sonnet",
                           "marketer": "sonnet", "persona": "sonnet", "geo-probe": "sonnet", "onboarding": "opus",
                           "designer": "sonnet", "game-designer": "opus", "tester": "sonnet"}},
     "budget": {"max_usd_per_product_per_day": 20.0, "max_usd_per_run": 3.0, "min_usd_per_run": 0.3, "unknown_cost_reserve_usd": 0.5, "warn_share": 0.8},
     "cycle": {"review_after_min": 6, "measure_after_h": 24, "max_review_fails": 2, "persona_every_n_cycles": 6,
               "digest_hour_utc": 7, "digest_hours_utc": [7, 19], "measure_every_h": 6, "seo_every_h": 12, "geo_every_h": 168, "voice_every_h": 84, "dev_idle_po_every_h": 12,
-              "max_ready": 3, "max_execute_per_cycle": 1},
+              "max_ready": 3, "max_execute_per_cycle": 1,
+              "max_continuations": 3},      # runs stopped by the time limit that may be continued per task before the PO splits it
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -132,6 +138,59 @@ def parse_cycle_every_min(raw: dict[str, Any], where: str = "product.yaml") -> i
     if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
         raise ValueError(f"{where}: cycle.every_min must be a whole number of minutes {lo}..{hi}, got {v!r}")
     return v
+
+
+RUN_TIMEOUT_CEILING_S = 3600               # hard ceiling of one role run, whatever team.yaml / product.yaml say (owner 21.11)
+RUN_LIMIT_KEYS = ("timeout_s", "inactivity_s")
+RUN_LIMIT_FALLBACK = {"timeout_s": 1500, "inactivity_s": 300}   # only when `claude.<key>` itself is missing or invalid
+
+
+def _limit_value(v: Any, where: str) -> int | None:
+    """A positive whole number of seconds, or None (absent). A wrong value is logged and skipped, so a typo in one
+    layer falls back to the layer below instead of starting a run with no limit."""
+    if v is None:
+        return None
+    if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+        log.warning("%s: %r is not a positive number of seconds — ignored", where, v)
+        return None
+    return int(v)
+
+
+def run_limits(st: "Settings", product: "Product | None", role: str) -> dict[str, Any]:
+    """Time budget of one role run: `{timeout_s, inactivity_s, source: {key: where it came from}}`.
+
+    Layers, the later one wins: `claude.<key>` (global) → `claude.roles.<role>` (team.yaml) →
+    `claude.roles_by_repo_kind.<repo.kind>.<role>` (team.yaml; ships 2700 s for the developer of a service repository)
+    → `roles.<role>` of product.yaml. `timeout_s` above RUN_TIMEOUT_CEILING_S is clamped with a WARNING; the
+    inactivity watchdog is never longer than the hard limit."""
+    claude = st.raw.get("claude") or {}
+    out: dict[str, Any] = {"source": {}}
+    kind = product.repo_kind if product is not None else ""
+    slug = product.slug if product is not None else "-"
+    layers: list[tuple[str, Any]] = [
+        ("claude", claude),
+        (f"claude.roles.{role}", (claude.get("roles") or {}).get(role)),
+        (f"claude.roles_by_repo_kind.{kind}.{role}", ((claude.get("roles_by_repo_kind") or {}).get(kind) or {}).get(role)),
+        (f"product.yaml roles.{role}", ((product.raw.get("roles") or {}).get(role) if product is not None else None)),
+    ]
+    for key in RUN_LIMIT_KEYS:
+        out[key], out["source"][key] = RUN_LIMIT_FALLBACK[key], "built-in"
+        for where, block in layers:
+            if block is not None and not isinstance(block, dict):
+                log.warning("%s: %s must be a mapping like {timeout_s: 2700}, got %r — ignored", slug, where, block)
+                continue
+            v = _limit_value((block or {}).get(key), f"{slug}: {where}.{key}")
+            if v is not None:
+                out[key], out["source"][key] = v, where
+    if out["timeout_s"] > RUN_TIMEOUT_CEILING_S:
+        log.warning("%s: %s timeout_s=%d (%s) is above the hard ceiling %d s — clamped", slug, role, out["timeout_s"],
+                    out["source"]["timeout_s"], RUN_TIMEOUT_CEILING_S)
+        out["timeout_s"], out["clamped_from"] = RUN_TIMEOUT_CEILING_S, out["timeout_s"]
+    if out["inactivity_s"] > out["timeout_s"]:
+        log.debug("%s: %s inactivity_s=%d is longer than timeout_s=%d — lowered to it", slug, role, out["inactivity_s"], out["timeout_s"])
+        out["inactivity_s"] = out["timeout_s"]
+    log.debug("%s: run limits for %s: %s", slug, role, out)
+    return out
 
 
 PRODUCT_DEFAULTS: dict[str, Any] = {
@@ -267,6 +326,29 @@ class Product:
         """Human-readable cadence for `team status`."""
         n = self.cycle_every_min
         return f"cycle every {n} min" if n else "hourly"
+
+    # --- run time budget and continuation (owner 21.11, frictions F23/F30) ---------------------------------------------
+
+    def run_limits(self, role: str) -> dict[str, Any]:
+        """`{timeout_s, inactivity_s, source}` for one run of `role` on this product (see `run_limits` above)."""
+        return run_limits(self.st, self, role)
+
+    @property
+    def max_continuations(self) -> int:
+        """How many times a task whose run was stopped by the time limit is continued before it goes to the PO to be
+        split: `cycle.max_continuations` of product.yaml, else of team.yaml. 0 = never continue."""
+        own = self.raw.get("cycle")
+        v = own.get("max_continuations") if isinstance(own, dict) else None
+        if v is None:
+            v = self.st.cycle.get("max_continuations")
+        default = int(DEFAULTS["cycle"]["max_continuations"])
+        if v is None:
+            return default
+        try:
+            return max(0, int(v))
+        except (TypeError, ValueError):
+            log.warning("%s: cycle.max_continuations=%r is not a number — %d in use", self.slug, v, default)
+            return default
 
     @property
     def daily_cap(self) -> float:

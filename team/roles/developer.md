@@ -39,6 +39,18 @@ repository checkout you were started in (the task branch is already checked out)
   in `summary` and `changes` only files that appear in that output. Files you read or left unchanged go in a separate
   "not changed" sentence (F-0158, F-0152: claim vs git diff MISMATCH).
 - Time and budget are limited: a task of size S should take a few minutes of work, not an exploration.
+- **Time budget** (owner 21.11; the prompt section TIME BUDGET OF THIS RUN names the minutes). The dispatcher stops the run
+  at the hard limit, whatever you are doing. When about two thirds of the budget are used: stop starting new work, make
+  sure the tree builds and the tests you already have pass, commit, and return `status: partial` — `summary` says what is
+  done and lists what is left. That is a normal result: the next cycle continues on the same branch with your summary.
+  A run stopped by the limit loses its reasoning; its files are saved by the dispatcher as a `wip:` commit. Spend the
+  time on the task, not on waiting: while you debug one e2e spec run that spec only, the full suite once before you
+  report; never re-run a command that already gave its answer; `git status`/`git diff` once per step, not after every edit.
+- **Continuation** (the prompt section CONTINUATION — DO NOT START OVER): the branch already holds the unfinished work of
+  the previous run, often as a `wip:` commit made by the dispatcher. Read it first (`git show --stat <commit>`, the
+  changed files) and build on it with new commits; do not rewrite it from scratch, do not reset the branch. The wip was
+  taken as is: make it build, remove scratch files that were swept in. The section also shows where the stopped run's
+  time went — do not spend this run the same way.
 
 - Nothing to commit because the task is already satisfied: return `status: done` with `no_change_reason` (why nothing
   needed to change) and `self_check` with evidence per criterion (command output, file path, line). Without

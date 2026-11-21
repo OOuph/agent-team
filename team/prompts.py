@@ -57,6 +57,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
                if dev_idle and not idle else "")
             + "\n\n# VISION\n" + product.vision()
             + (("\n\n" + stuck_md) if stuck_md else "")
+            + run_time_block(product, store)
             + "\n\n# BACKLOG (open tasks)\n" + (_y([_task_brief(t) for t in tasks]) if tasks else "(empty)")
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
@@ -211,8 +212,69 @@ def service_block(product: Product, repo_dir: Path, role: str = "developer") -> 
     return "\n".join(out)
 
 
+BUDGET_WRAP_UP_SHARE = 2 / 3               # share of a run's time budget after which a repository role stops starting new work
+
+
+def run_time_block(product: Product, store: Store) -> str:
+    """`# RUN TIME` for the PO (owner 21.11, team/runprofile.py): one line per run since its last triage that took long
+    or was stopped by a limit — «developer T-0042: 1500 s (tools 1252 s), e2e 99 % in 20 calls, killed by the time
+    limit» — so it re-scopes a task that does not fit into a run. Empty when there was no such run."""
+    from . import runprofile
+    txt = runprofile.po_block(store, product)
+    return ("\n\n" + txt) if txt else ""
+
+
+def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = None, *, now: datetime | None = None) -> str:
+    """Owner 21.11 (frictions F23/F30): a role that works in a repository knows the time budget of its run and, on a
+    continuation, what the stopped run left behind and where its time went. `continuation` comes from
+    `Cycle.continuation_context` (wip commit, its --stat, the run profile, continuations used / allowed)."""
+    out = ""
+    if budget_s:
+        total, wrap = max(1, round(budget_s / 60)), max(1, round(budget_s * BUDGET_WRAP_UP_SHARE / 60))
+        started = (now or datetime.now(timezone.utc)).strftime("%H:%M")
+        out += ("\n\n# TIME BUDGET OF THIS RUN\n"
+                f"The dispatcher stops this run {total} minutes after its start (≈ {started} UTC; `date -u +%H:%M` shows the clock) — a hard "
+                f"limit of {budget_s} s that includes every command you wait for. When about two thirds of it are used (≈ {wrap} minutes): "
+                "stop starting new work, make sure the tree builds and the tests you already have pass, commit, and return "
+                "`status: partial` with a `summary` that says what is done and lists what is left. A partial result is continued next "
+                "cycle on this branch with your summary in front of the next run; a run stopped by the limit loses its reasoning. "
+                "Long commands eat the same budget: while you work on one e2e spec run that spec, and the full suite once before "
+                "you report; do not repeat a command that already gave its answer.")
+    c = continuation
+    if c:
+        why = {"timeout": "was stopped by the time limit", "inactivity": "was stopped by the inactivity watchdog (no output for too long)",
+               "partial": "returned a partial result"}.get(str(c.get("reason")), "did not finish")
+        after = f" after {c['duration_s']} s" if c.get("duration_s") and c.get("reason") != "partial" else ""
+        out += f"\n\n# CONTINUATION — DO NOT START OVER\nThe previous run of this task {why}{after}."
+        if c.get("wip_commit"):
+            out += (f" The dispatcher saved its uncommitted work on this branch as the service commit `{str(c['wip_commit'])[:10]}` "
+                    f"(«wip: …», {c.get('wip_files') or '?'} file(s)):\n```\n{c.get('stat') or '(no stat)'}\n```\n"
+                    f"Start with `git show --stat {str(c['wip_commit'])[:10]}` and `git log --oneline {c.get('base') or 'main'}..HEAD`, read the "
+                    "changed files, and continue from there. Do not rewrite what is already written, do not reset the branch or drop that "
+                    "commit: build on it with new commits. It was taken as is — it may not build and may hold scratch files (test output, "
+                    "logs); fix or remove them before you report done.")
+        elif c.get("wip_lost"):
+            out += (" Its service commit is not on this branch any more; `git log --oneline "
+                    f"{c.get('base') or 'main'}..HEAD` shows what the branch holds — continue from that.")
+        else:
+            out += (f" Nothing uncommitted was left; the branch is {c.get('ahead') or 0} commit(s) ahead of {c.get('base') or 'main'} "
+                    f"(`git log --oneline {c.get('base') or 'main'}..HEAD`) — read them and continue from there, do not redo them.")
+        if c.get("profile_md"):
+            out += ("\nWhere the stopped run spent its time (% = share of the time inside tool calls):\n" + str(c["profile_md"])
+                    + "\nDo not spend this run the same way: fix the cause instead of re-running the same command.")
+        if c.get("reason") != "partial":
+            left = int(c.get("max") or 0) - int(c.get("used") or 0)
+            out += (f"\nThis is continuation {c.get('used')} of {c.get('max')}"
+                    + (f"; after {left} more stopped run(s) the task is blocked and the PO splits it." if left > 0
+                       else ": if this run is stopped too, the task is blocked and the PO splits it.")
+                    + " If what is left does not fit into this run, return `partial` early with a precise list of what is left.")
+    return out
+
+
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
-                     review: dict[str, Any] | None, role: str = "developer") -> str:
+                     review: dict[str, Any] | None, role: str = "developer", *, budget_s: int | None = None,
+                     continuation: dict[str, Any] | None = None) -> str:
+    previous = [{k: v for k, v in r.items() if k != "profile_md"} for r in previous]     # the profile is shown once, in the continuation block
     readme = ""
     seen: set[Path] = set()
     for name in ("README.md", "readme.md", "AGENTS.md"):
@@ -233,6 +295,7 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
     return (probe + f"# TASK {task['id']} — product `{product.slug}` ({product.site_base or 'no live site yet'})\n\n"
             f"You are the `{role}` role in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
             "# TASK\n" + _y(_task_brief(task)) + prev + rev
+            + budget_block(budget_s, continuation)
             + "\n\n# VISION\n" + product.vision()
             + service_block(product, repo_dir, role)
             + "\n\n# REPOSITORY NOTES" + (readme or "\n(no README — follow the conventions you find in the tree)") + "\n")

@@ -145,6 +145,60 @@ def dirty_tracked(repo_dir: Path) -> bool:
     return bool(git(repo_dir, "status", "--porcelain", "--untracked-files=no", check=False))
 
 
+WIP_PREFIX = "wip:"                     # subject prefix of a service commit the dispatcher makes for an unfinished run
+WIP_LOCK_WAIT_S = 2.0                   # a killed run may leave .git/index.lock behind: wait this long, remove it, retry once
+WIP_STAT_CHARS = 1500                   # `git show --stat` of a wip commit as shown in prompts and questions
+
+
+def wip_message(task_id: str, why: str) -> str:
+    return f"{WIP_PREFIX} {task_id} — {why}"
+
+
+def save_wip(repo_dir: Path, task_id: str, why: str) -> dict | None:
+    """Commit everything in the working tree to `task/<id>` as a service commit (owner 21.11, F23: a run stopped by the
+    time limit left its work uncommitted and the next attempt's `reset --hard` destroyed it). Returns
+    `{commit, files, stat}`, or None when the tree is clean. Only ever commits on the task branch — a checkout that
+    stands on any other branch is refused (GitError), so a wip can never land on the base branch — and never pushes."""
+    br = f"task/{task_id}"
+    cur = git(repo_dir, "rev-parse", "--abbrev-ref", "HEAD", check=False)
+    if cur != br:
+        raise GitError(f"wip not saved: the checkout is on {cur or '?'}, not on {br}")
+    if not dirty(repo_dir):
+        log.info("wip %s: working tree is clean, nothing to save", task_id)
+        return None
+    for attempt in (1, 2):
+        try:
+            git(repo_dir, "add", "-A")
+            git(repo_dir, "commit", "-q", "--no-verify", "-m", wip_message(task_id, why))   # no hooks: the tree may not even build
+            break
+        except GitError as exc:
+            lock = repo_dir / ".git" / "index.lock"
+            if attempt == 2 or "index.lock" not in str(exc):
+                raise
+            log.warning("wip %s: %s — waiting %.0fs, removing the stale lock and retrying", task_id, redact(str(exc))[:200], WIP_LOCK_WAIT_S)
+            time.sleep(WIP_LOCK_WAIT_S)
+            if lock.exists():
+                lock.unlink()
+    sha = head(repo_dir)
+    files = [ln for ln in git(repo_dir, "diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha, check=False).splitlines() if ln.strip()]
+    log.info("wip %s: %d file(s) saved in %s on %s", task_id, len(files), sha[:10], br)
+    return {"commit": sha, "files": len(files), "stat": commit_stat(repo_dir, sha)}
+
+
+def commit_stat(repo_dir: Path, sha: str) -> str:
+    """`git show --stat` of one commit without the message, cut to WIP_STAT_CHARS; empty when the commit is unknown."""
+    out = git(repo_dir, "show", "--stat", "--format=", sha, check=False).strip()
+    return out if len(out) <= WIP_STAT_CHARS else out[:WIP_STAT_CHARS] + "\n… [cut]"
+
+
+def is_ancestor(repo_dir: Path, sha: str, ref: str = "HEAD") -> bool:
+    """True when `sha` is in the history of `ref` (a wip commit that the task branch still holds)."""
+    if not sha:
+        return False
+    cp = subprocess.run(["git", "merge-base", "--is-ancestor", sha, ref], cwd=str(repo_dir), capture_output=True, text=True, timeout=60)
+    return cp.returncode == 0
+
+
 def merge_and_push(repo_dir: Path, task_id: str, base: str = "main") -> str:
     """task/<id> → base with a merge commit, push when a remote exists. Returns the new base head."""
     br = f"task/{task_id}"
