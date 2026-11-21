@@ -340,14 +340,22 @@ def test_a_wip_commit_is_never_made_on_the_base_branch(tmp_path: Path):
     else:
         raise AssertionError("a wip commit on the base branch must be refused")
     assert gitops.head(repo) == head0 and gitops.dirty(repo)
-    # the cycle: the role left the checkout on the base branch → nothing is committed, the run is a plain failed run
+    # the cycle: the role left the task branch → nothing is committed, the run is a plain failed run. In the task's own
+    # worktree git itself refuses `checkout main` (the clone holds that branch), so a role can only leave by detaching
+    # or by making another branch.
     (repo / "stray.txt").unlink()
 
     class Switching(FakeRunner):
         def run(self, role, prompt, schema, *, max_usd, cwd, **kw):
             res = super().run(role, prompt, schema, max_usd=max_usd, cwd=cwd, **kw)
             if role == "developer":
-                gitops.git(Path(cwd), "checkout", "-q", "main")     # against its card; the new files travel along, untracked
+                try:
+                    gitops.git(Path(cwd), "checkout", "-q", "main")
+                except gitops.GitError:
+                    pass
+                else:
+                    raise AssertionError("the base branch must not be checkable in a task's worktree")
+                gitops.git(Path(cwd), "checkout", "-q", "--detach", "main")     # against its card; the new files travel along, untracked
             return res
 
     _exec(st, p, Switching(["kill"]), "c1")

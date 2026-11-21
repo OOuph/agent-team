@@ -3,6 +3,11 @@
 Each phase is idempotent and checkpointed through the store (task states, events); a cycle that dies mid-way is
 continued by the next one. Every model run is capped (per run, per product per day) and booked; a run without a
 reported cost is booked at the reserve. A STOP file (product or root) ends the cycle before any model run.
+
+Since 21.11 the role runs of one cycle overlap (team/lanes.py holds the executor and its invariants): the reviews of
+released tasks run beside the PO's triage and beside execution, every seat of `cycle.execute_slots` is its own lane,
+and a repository role works in its own `git worktree` of the task. `cycle.parallel.enabled: false` makes the cycle
+strictly sequential again; the worktrees stay.
 """
 from __future__ import annotations
 
@@ -13,6 +18,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.request
 from datetime import datetime, timedelta, timezone
@@ -27,6 +33,17 @@ from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
 from .runner import killed_kind
+from . import lanes as lanes_mod
+from .lanes import LANE_EXECUTE, LANE_REVIEW
+
+# parallel lanes and per-task checkouts (owner 21.11, frictions F21/F29; team/lanes.py)
+EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
+WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
+WORKTREE_PARKED_STATES = ("blocked", "waiting_owner", "deferred")     # kept for `cycle.parallel.worktree_keep_h` hours, then removed (the branch stays)
+MERGE_CONFLICT = "merge_conflict"                         # task field: the last merge into the base branch conflicted (cleared by a merge that went through)
+CONFLICT_PROMPT_CHARS = 5000                              # of the conflict text kept on the task and shown to the author in the next prompt
+CONFLICT_NOTE_CHARS = 200                                 # of the file list in the transition note
+RUN_PORT_ENV = "TEAM_PORT"                                # environment of a repository role's run on a service repository: a port of its own for a server it starts
 
 # run continuation (owner 21.11, frictions F23/F30): a run stopped by the time limit is continued, not restarted
 CONTINUE_ROLES = ("developer", "designer")               # roles that work in a product repository checkout
@@ -74,15 +91,19 @@ REPO_ONLY_PROMPT = (
     "the files.\n\n## TEST RUN (by the dispatcher)\n{tests}\n")
 
 
-def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "") -> str:
+def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None) -> str:
     """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
     environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
-    `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files."""
+    `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files. `lock`: the
+    cycle's repository lock, held only while the clone is copied (another lane may be merging into it); the tests
+    themselves run outside it."""
     import shutil
+    from contextlib import nullcontext
     if dest.exists():
         shutil.rmtree(dest, ignore_errors=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    gitops.git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
+    with lock if lock is not None else nullcontext():
+        gitops.git(repo_dir, "clone", "--quiet", "--no-hardlinks", "--no-checkout", str(repo_dir), str(dest))
     gitops.git(dest, "checkout", "--quiet", "--detach", sha)
     gitops.git(dest, "remote", "remove", "origin", check=False)
     if test_cmd:
@@ -147,7 +168,27 @@ class Cycle:
         self.run_dir.mkdir(parents=True, exist_ok=True)
         self.phases_done: list[str] = []
         self.n_runs = 0
-        self.last_profile: dict[str, Any] | None = None      # run profile of the latest role_run (team/runprofile.py)
+        # parallel lanes (team/lanes.py): the executor, the repository lock, the live-host lock; what the lanes share in
+        # this object is guarded here — the budget (cap reservations, `n_runs`) and the seats of the execute phase
+        self.par = product.parallel
+        self.lanes = lanes_mod.Lanes(self.par, product.slug, on_lane_exit=self.store.close_thread)
+        self.repo_lock = self.lanes.repo_lock                 # the product's clone: fetch, worktrees, merge, push, deploy
+        self._budget_lock = threading.Lock()
+        self._reserved: dict[str, float] = {}                 # run id -> the cap reserved for a run in flight
+        self._seat_lock = threading.Lock()
+        self._seat_running: dict[str, int] = {}               # seat key -> tasks being executed right now
+        self._in_run = False                                  # True inside `run`: there the review lanes outlive their phase
+        self._failed_phases: set[str] = set()                 # phases one of whose lanes raised
+        self._tl = threading.local()                          # per thread: the run profile of its latest role_run
+
+    @property
+    def last_profile(self) -> dict[str, Any] | None:
+        """Run profile of the calling thread's latest role_run (team/runprofile.py); lanes do not see each other's."""
+        return getattr(self._tl, "profile", None)
+
+    @last_profile.setter
+    def last_profile(self, prof: dict[str, Any] | None) -> None:
+        self._tl.profile = prof
 
     # ------------------------------------------------------------ guards
 
@@ -155,11 +196,13 @@ class Cycle:
         from . import cadence
         return cadence.stop_reason(self.st, self.p)      # STOP files, `paused`, onboarding not finished — shared with `team cycle --due`
 
-    def budget_ok(self, cap_run: float) -> bool:
+    def budget_ok(self, cap_run: float, reserved: float = 0.0) -> bool:
+        """`reserved`: the caps of the runs in flight in the other lanes of this cycle — money that may still be spent."""
         spent, cap = self.store.spent_today(), self.p.daily_cap
-        if spent + cap_run > cap + 1e-9:
-            self.store.event("budget.stop", self.p.slug, "dispatcher", {"spent": round(spent, 3), "cap": cap, "run_cap": cap_run})
-            log.warning("%s: budget stop — spent $%.2f + $%.2f > cap $%.2f", self.p.slug, spent, cap_run, cap)
+        if spent + reserved + cap_run > cap + 1e-9:
+            self.store.event("budget.stop", self.p.slug, "dispatcher", {"spent": round(spent, 3), "cap": cap, "run_cap": cap_run,
+                                                                        **({"reserved": round(reserved, 3)} if reserved else {})})
+            log.warning("%s: budget stop — spent $%.2f + reserved $%.2f + $%.2f > cap $%.2f", self.p.slug, spent, reserved, cap_run, cap)
             return False
         if spent > cap * float(self.st.budget.get("warn_share", 0.8)):
             log.warning("%s: spend $%.2f above %.0f%% of cap $%.2f", self.p.slug, spent, 100 * float(self.st.budget.get("warn_share", 0.8)), cap)
@@ -179,42 +222,60 @@ class Cycle:
             self.store.event("budget.stop", self.p.slug, "dispatcher", {"reason": stop, "label": label})
             log.warning("%s: %s skipped: %s", self.p.slug, label, stop)
             return None
-        cap = float(cap or self.st.budget["max_usd_per_run"])
-        credit_left = billing.remaining_today(self.st)             # None inside the subscription
-        remaining = self.p.daily_cap - self.store.spent_today()
-        if credit_left is not None:
-            remaining = min(remaining, credit_left)
-        cap = min(cap, remaining)                                   # a run may use what is left of the day
-        if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap):
-            if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
-                self.store.event("budget.stop", self.p.slug, "dispatcher", {"remaining": round(remaining, 3), "cap": self.p.daily_cap})
-            return None
-        if self.dry_run:
-            log.info("[dry-run] would run %s (%s): prompt %d chars", role, label, len(prompt))
-            return None
-        self.n_runs += 1
         run_id = f"{self.cycle_id}-{label}"
-        rd = self.run_dir / label
-        rd.mkdir(parents=True, exist_ok=True)
-        (rd / "prompt.md").write_text(prompt, encoding="utf-8")
-        env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(role),
-               "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
-               "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
-        model = model or (self.p.raw.get("models") or {}).get(role)   # explicit override (series editing), else product.yaml per role
-        limits = self.p.run_limits(role)                              # owner 21.11: the time budget is per role and per product
-        log.info("%s: run %s time budget: timeout %ds (%s), inactivity %ds (%s)", self.p.slug, run_id, limits["timeout_s"],
-                 limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
-        rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
-                             allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
-                             timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]))
-        cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
-        self.store.book_spend(run_id, role, cost, rr.cost_usd is not None)
+        with self._budget_lock:
+            # Reserve before the run starts (team/lanes.py invariant 7): the caps of the runs in flight count as spent, so
+            # N lanes starting together cannot each see the same «remaining» and overshoot the daily cap between them.
+            reserved = sum(self._reserved.values())
+            cap = float(cap or self.st.budget["max_usd_per_run"])
+            credit_left = billing.remaining_today(self.st)             # None inside the subscription
+            remaining = self.p.daily_cap - self.store.spent_today() - reserved
+            if credit_left is not None:
+                remaining = min(remaining, credit_left - reserved)
+            cap = min(cap, remaining)                                   # a run may use what is left of the day
+            if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap, reserved):
+                if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
+                    self.store.event("budget.stop", self.p.slug, "dispatcher", {"remaining": round(remaining, 3), "cap": self.p.daily_cap,
+                                                                                **({"reserved": round(reserved, 3)} if reserved else {})})
+                return None
+            if self.dry_run:
+                log.info("[dry-run] would run %s (%s): prompt %d chars", role, label, len(prompt))
+                return None
+            self.n_runs += 1
+            self._reserved[run_id] = cap
+            if reserved:
+                log.info("%s: run %s reserves $%.2f; $%.2f more is reserved by %d run(s) in flight", self.p.slug, run_id, cap, reserved,
+                         len(self._reserved) - 1)
+        rr: RunResult | None = None
+        cost = 0.0
+        try:
+            rd = self.run_dir / label
+            rd.mkdir(parents=True, exist_ok=True)
+            (rd / "prompt.md").write_text(prompt, encoding="utf-8")
+            env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(role),
+                   "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
+                   "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
+            model = model or (self.p.raw.get("models") or {}).get(role)   # explicit override (series editing), else product.yaml per role
+            limits = self.p.run_limits(role)                              # owner 21.11: the time budget is per role and per product
+            with self.lanes.run_slot(label):                              # a lane holds its slot already; the main thread takes one here
+                log.info("%s: run %s time budget: timeout %ds (%s), inactivity %ds (%s)", self.p.slug, run_id, limits["timeout_s"],
+                         limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
+                rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
+                                     allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
+                                     timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]))
+        finally:
+            with self._budget_lock:                                       # the spend is booked and the reservation dropped in one step
+                if rr is not None:
+                    cost = rr.cost_usd if rr.cost_usd is not None else float(self.st.budget["unknown_cost_reserve_usd"])
+                    self.store.book_spend(run_id, role, cost, rr.cost_usd is not None)
+                self._reserved.pop(run_id, None)
         for kind in billing.observe(self.st, rr.limit_info, run_id, notify=billing.owner_notify(), cost=cost):
             self.store.event(f"billing.{kind}", self.p.slug, "dispatcher", {"run": run_id, "line": billing.status_line(self.st)})
         rec = {"run_id": run_id, "role": role, "ok": rr.ok, "error": rr.error, "cost_usd": cost, "cost_reported": rr.cost_usd is not None,
                "num_turns": rr.num_turns, "duration_s": round(rr.duration_s, 1), "session_id": rr.session_id,
                "denials": rr.denials, "structured": rr.structured, "finished": utcnow(),
-               "limits": limits, "killed": killed_kind(rr), "profile": self.profile_run(rr, role, run_id, limits)}
+               "limits": limits, "killed": killed_kind(rr), "profile": self.profile_run(rr, role, run_id, limits),
+               "lane": lanes_mod.current_lane() or "main"}
         (rd / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
         return rr
@@ -265,19 +326,46 @@ class Cycle:
             return {"stopped": reason}
         t0 = time.time()
         spent0 = self.store.spent_today()
-        for ph in phases or PHASES:
-            try:
-                getattr(self, f"phase_{ph}")()
-                self.phases_done.append(ph)
-            except Exception as exc:  # noqa: BLE001 — one phase failing must not kill the cycle
-                log.exception("%s: phase %s failed: %s", self.p.slug, ph, exc)
-                self.store.event("phase.error", ph, "dispatcher", str(exc)[:500])
-            if self.stopped():
-                break
+        log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
+        self._in_run = True
+        try:
+            for ph in phases or PHASES:
+                try:
+                    getattr(self, f"phase_{ph}")()
+                    self.phases_done.append(ph)
+                except Exception as exc:  # noqa: BLE001 — one phase failing must not kill the cycle
+                    log.exception("%s: phase %s failed: %s", self.p.slug, ph, exc)
+                    self.store.event("phase.error", ph, "dispatcher", str(exc)[:500])
+                if self.stopped():
+                    break
+        finally:
+            # lanes still in flight (the reviews, when the execute phase did not run or the cycle was stopped): their runs
+            # finish and their results are applied before the cycle is summed up — nothing is left half-done behind it
+            self.finish_lanes()
+            self._in_run = False
+        self.phases_done = [ph for ph in self.phases_done if ph not in self._failed_phases]      # a phase whose lane raised did not finish
         spent = self.store.spent_today() - spent0
         self.store.cycle_finish(self.cycle_id, self.phases_done, round(spent, 4))
-        log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent, time.time() - t0)
+        peak = self.lanes.gate.peak
+        log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs%s", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent,
+                 time.time() - t0, f", {self.lanes.started} lane(s), up to {peak} at once" if self.lanes.started else "")
         return {"phases": self.phases_done, "runs": self.n_runs, "spent_usd": round(spent, 4)}
+
+    def finish_lanes(self) -> list[lanes_mod.LaneError]:
+        """Wait for every lane in flight. A lane that raised is recorded like a phase that raised: `phase.error`, and
+        `run` takes its phase out of the cycle's list of finished phases — the summary line and `team status` say what
+        really happened. Returns the failures (empty in a sequential cycle: there an exception ends the phase itself).
+        A phase method called on its own, outside `run`, raises the first failure instead: it is complete, or it failed,
+        when it returns — like any other phase."""
+        errors = self.lanes.join()
+        for e in errors:
+            log.error("%s: phase %s failed in lane %s: %s", self.p.slug, e.phase, e.label, e.error,
+                      exc_info=(type(e.error), e.error, e.error.__traceback__))
+            self.store.event("phase.error", e.phase, "dispatcher", f"lane {e.label}: {e.error}"[:500])
+            self._failed_phases.add(e.phase)
+        if errors and not self._in_run:
+            raise errors[0].error
+        return errors
 
     # collect: stale claims, metrics snapshot, personas ------------------------------------------------
 
@@ -476,7 +564,15 @@ class Cycle:
             rel = parse_ts(t.get("released_at"))
             if rel and _now() - rel < after:
                 continue
-            self.review_task(t)
+            if self.lanes.busy(t["id"]):
+                # its merge or deploy is in flight in another lane of this cycle: never reviewed before that is over
+                log.info("%s: %s is not reviewed now: another lane of this cycle is still working on it", self.p.slug, t["id"])
+                continue
+            # Parallel cycle: one lane per task — the reviews overlap each other, the PO's triage and the execute phase
+            # (which joins them). Sequential cycle: the review runs here and now, one after another, as before.
+            self.lanes.submit("review", LANE_REVIEW, f"review-{t['id']}", self.review_task, t, task_id=t["id"])
+        if not self._in_run:
+            self.finish_lanes()                   # called on its own: the reviews are done when the phase returns
 
     def review_task(self, t: dict[str, Any]) -> None:
         result = (t.get("results") or [None])[-1]
@@ -486,16 +582,19 @@ class Cycle:
         sha = t.get("released_sha")
         tests_out = ""
         if not t.get("repo_only") and (only_raw_github_urls((result or {}).get("how_to_verify")) or not self.p.site_base):
-            t["repo_only"] = True                    # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
-            self.store.save_task(t)
+            with self.store.lock:                    # the PO may be changing this task beside the review: read it again, then write
+                t = self.store.task(t["id"]) or t
+                t["repo_only"] = True                # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
+                self.store.save_task(t)
         if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
             try:
                 try:
-                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd)
+                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock)
                 except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
                     tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
                 tests_out = tests
-                work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
+                with self.repo_lock:                 # the clone is copied while no lane is merging into it
+                    work = gitops.readonly_checkout(self.p.repo_dir, sha, work / "checkout")
                 tools = list(REPO_ONLY_REVIEW_TOOLS)
                 prompt += REPO_ONLY_PROMPT.format(sha=sha, tests=tests)
             except Exception as e:               # no checkout → the old URL-only review
@@ -508,13 +607,21 @@ class Cycle:
             if server is not None:
                 role, schema_name, cap, turns = "tester", "test-report", TESTER_CAP_USD, TESTER_MAX_TURNS
         try:
-            rr = self.role_run(role, prompt, schema_name, cwd=work, label=f"review-{t['id']}", cap=cap, max_turns=turns,
-                               allowed_tools=tools, env_extra=env)
+            # a play-test against the DEPLOYED host shares the host with the other play-tests and excludes a deploy of this
+            # product for the length of the tester's run (team/lanes.py invariant 6); a local server needs nothing
+            with self.lanes.host.shared(server is not None and not server.local):
+                rr = self.role_run(role, prompt, schema_name, cwd=work, label=f"review-{t['id']}", cap=cap, max_turns=turns,
+                                   allowed_tools=tools, env_extra=env)
         finally:
             if server is not None:
                 playtest.stop(server)
         if rr is None:
             return
+        with self.store.lock:                        # applied as the run finishes, in one piece (team/lanes.py invariant 4)
+            self.apply_review(self.store.task(t["id"]) or t, rr)
+
+    def apply_review(self, t: dict[str, Any], rr: RunResult) -> None:
+        """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run)."""
         if not (rr.ok and rr.structured):
             t["review_inconclusive"] = int(t.get("review_inconclusive") or 0) + 1
             self.store.save_task(t)
@@ -567,13 +674,13 @@ class Cycle:
         work = self.p.work_dir / self.cycle_id / f"playtest-{t['id']}"      # its own folder: the review checkout is read-only
         if not tests:
             try:
-                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd)
+                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock)
             except Exception as e:  # noqa: BLE001
                 tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         out_dir = self.p.dir / "reviews" / t["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
-            server = playtest.start(self.p, self.p.repo_dir, sha, work)
+            server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock)
         except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
             reason = str(exc)[:1500]
             log.warning("%s: play-test server for %s not started: %s", self.p.slug, t["id"], reason[:200])
@@ -647,8 +754,9 @@ class Cycle:
             deputy.run_for_product(self)          # owner away: answer owner questions by mandate before the PO reads them
         except Exception as exc:  # noqa: BLE001
             log.exception("%s: deputy failed: %s", self.p.slug, exc)
-        self.hand_over_readouts()
-        self.settle_replans()
+        with self.store.lock:                     # review lanes may be writing tasks beside the triage
+            self.hand_over_readouts()
+            self.settle_replans()
         stuck_md = replan.prompt_block(self.store, self.replan_cfg())
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
@@ -661,6 +769,7 @@ class Cycle:
             return
         latest = self.p.dir / "metrics" / "latest.md"
         gsc_md = self.p.dir / "metrics" / "gsc.md"               # owner 10.11: Search Console next to the log metrics
+        seen_upto = runprofile.last_event_id(self.store)         # what this prompt can include; reviews go on writing beside it
         prompt = prompts.po_prompt(self.p, self.store, cycle_id=self.cycle_id, observations=new_obs[:25], questions=qs,
                                    metrics_md=(latest.read_text(encoding="utf-8") if latest.exists() else "")
                                    + ("\n\n" + gsc_md.read_text(encoding="utf-8")[:3000] if gsc_md.exists() else ""),
@@ -671,11 +780,18 @@ class Cycle:
             self.mark_dev_idle()
         work = self.p.work_dir / self.cycle_id / "po"
         rr = self.role_run("po", prompt, "po-decision", cwd=work, label="po", cap=2.0, allowed_tools=[], max_turns=8)
+        if rr is not None:                                       # a run profile written while the PO ran is shown to it next time
+            self.store.event(runprofile.PO_SEEN_EVENT, self.cycle_id, "dispatcher", {"upto": seen_upto})
         if rr is None or not (rr.ok and rr.structured):
             return
         self.apply_po(rr.structured, new_obs)
 
     def apply_po(self, res: dict[str, Any], new_obs: list[dict[str, Any]]) -> None:
+        """The PO's decisions → the store, in one piece: reviews of this cycle may still be running in their lanes."""
+        with self.store.lock:
+            self._apply_po(res, new_obs)
+
+    def _apply_po(self, res: dict[str, Any], new_obs: list[dict[str, Any]]) -> None:
         ids = {o["id"] for o in new_obs}
         for d in res.get("decisions") or []:
             oid = str(d.get("observation_id"))
@@ -770,12 +886,13 @@ class Cycle:
         if self.p.profile != "game" or self.p.repo_url:
             return False
         repo = self.p.repo_dir
-        if (repo / ".git").exists():
-            return True
-        gitops.init_local(repo, self.p.repo_branch)
-        (repo / "README.md").write_text(f"# {self.p.raw.get('name') or self.p.slug}\n\nStarted by agent-team; no remote yet.\n", encoding="utf-8")
-        gitops.git(repo, "add", "-A")
-        gitops.git(repo, "commit", "-q", "-m", "init: local repository started by the dispatcher")
+        with self.repo_lock:                      # the developer's and the game designer's lanes may both get here first
+            if (repo / ".git").exists():
+                return True
+            gitops.init_local(repo, self.p.repo_branch)
+            (repo / "README.md").write_text(f"# {self.p.raw.get('name') or self.p.slug}\n\nStarted by agent-team; no remote yet.\n", encoding="utf-8")
+            gitops.git(repo, "add", "-A")
+            gitops.git(repo, "commit", "-q", "-m", "init: local repository started by the dispatcher")
         self.store.event("repo.local_init", self.p.slug, "dispatcher", {"path": str(repo)})
         self.store.add_observation({"title": "Repository is local only: ask the owner for a GitHub URL (repo.url) and a host",
                                     "classification": "need_hypothesis", "source": "dispatcher", "url": self.p.site_base,
@@ -814,49 +931,196 @@ class Cycle:
         return {"*": int(self.st.cycle.get("max_execute_per_cycle", 1))}
 
     def phase_execute(self) -> None:
+        """Start the tasks of this cycle — one per seat, picked exactly as before — and wait for everything in flight.
+
+        Sequential cycle (`cycle.parallel.enabled: false`): the loop below visits the candidates in order and runs each
+        task before it looks at the next one. Parallel cycle: the same candidates in the same order, split by seat —
+        every seat is a lane that works through its own tasks one after another, so the seats overlap each other and
+        the reviews started by `phase_review`; then everything is joined. A later pass starts what became startable
+        meanwhile and still has a free seat: a task the review of this cycle sent back, a task whose `depends_on` was
+        finished by another lane."""
+        try:
+            self.sweep_worktrees()
+        except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
+            log.warning("%s: worktree sweep failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
         slots = self.execute_slots()
         used: dict[str, int] = {}
-
-        def seat(role: str) -> str | None:
-            key = role if role in slots else ("*" if "*" in slots else None)
-            if key is None or used.get(key, 0) >= slots[key]:
-                return None
-            return key
-
-        # finish tasks that are in_progress (a failed review or a partial result) before starting new ones
-        for t in sorted(self.store.tasks(["in_progress", "ready"]), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", ""))):
-            if all(used.get(k, 0) >= v for k, v in slots.items()):
-                break
-            if self.pending_role(t):
-                continue        # a role the cycle cannot run yet (tester: slice 4): the task waits in ready, noted once
-            key = seat(str(t.get("role") or "developer"))
-            if key is None:
-                continue        # this role's seat for the cycle is taken
-            if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
-                continue        # a run is on it (lease alive); stale leases are handled in collect
-            if t.get("state") == "ready" and self.open_question_blocks(t):
-                continue        # T-0091: re-opened while its question is still unanswered: not leased again
-            nb = parse_ts(t.get("not_before"))
-            if nb and _now() < nb:
-                continue        # scheduled for later (daily posts): the PO set not_before
-            if t.get("state") == "ready" and unmet_dependencies(self.store, t):
-                continue        # `depends_on`: a dependency is not done yet or its result is a stub
-            if t.get("state") == "ready" and hypothesis.applies(t):
-                problems = self.hypothesis_problems(t)
-                if problems:    # owner 07.11: a feature without real evidence does not start; the PO promotes it with one
-                    self.store.transition(t["id"], "proposed", "dispatcher", f"hypothesis rule: {'; '.join(problems)}"[:500], force=True)
+        if not self.lanes.parallel:
+            for t in self.execute_candidates():
+                if all(used.get(k, 0) >= v for k, v in slots.items()):
+                    break
+                if self.pending_role(t):
+                    continue        # a role the cycle cannot run yet (tester: slice 4): the task waits in ready, noted once
+                key = self.seat_key(str(t.get("role") or "developer"), slots)
+                if key is None or used.get(key, 0) >= slots[key]:
+                    continue        # this role's seat for the cycle is taken
+                if not self.startable(t):
                     continue
-            if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
-                self.store.add_observation({
-                    "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
-                    "classification": "need_hypothesis", "source": "dispatcher", "task": t["id"],
-                    "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
-                    "detail": "PO: set not_before on this task (or fix the title)."})
+                if self.execute_task(t):
+                    used[key] = used.get(key, 0) + 1
+            return
+        seen: set[str] = set()                    # tasks a lane of this cycle has dealt with: not offered again in a later pass
+        for wave in range(1, EXECUTE_WAVES_MAX + 1):
+            groups: dict[str, list[dict[str, Any]]] = {}
+            for t in self.execute_candidates():
+                key = self.seat_key(str(t.get("role") or "developer"), slots)
+                if key is None or t["id"] in seen or self.lanes.busy(t["id"]) or used.get(key, 0) >= slots[key]:
+                    continue
+                groups.setdefault(key, []).append(t)
+            started = 0
+            for key, tasks in groups.items():
+                # one lane per seat: the tasks of a role run one after another; only a role named in
+                # `cycle.parallel.overlap_roles` gets a lane per place of its seat
+                n = min(slots[key], len(tasks)) if key in self.par.overlap_roles else 1
+                feed = _Feed(tasks)
+                for i in range(n):
+                    self.lanes.submit("execute", LANE_EXECUTE, f"exec-{key}" + (f"-{i + 1}" if n > 1 else ""), self.seat_lane, key, feed, slots, used, seen)
+                started += n
+            in_flight = self.lanes.pending()      # the new seat lanes and whatever `phase_review` started
+            log.log(logging.INFO if in_flight else logging.DEBUG, "%s: execute pass %d: %d seat lane(s) (%s), %d lane(s) in flight with the reviews",
+                    self.p.slug, wave, started, ", ".join(f"{k}: {len(v)} task(s)" for k, v in groups.items()) or "nothing to start", in_flight)
+            self.finish_lanes()
+            if not in_flight:
+                break               # nothing ran in this pass, so nothing can have become startable
+
+    def execute_candidates(self) -> list[dict[str, Any]]:
+        """Tasks the execute phase looks at, in its order: in_progress (a failed review or a partial result) before
+        new ones, then by priority, then by age."""
+        return sorted(self.store.tasks(["in_progress", "ready"]), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", "")))
+
+    @staticmethod
+    def seat_key(role: str, slots: dict[str, int]) -> str | None:
+        """The seat a role's task takes: its own entry of `execute_slots`, else the shared `*`, else none."""
+        return role if role in slots else ("*" if "*" in slots else None)
+
+    def startable(self, t: dict[str, Any]) -> bool | None:
+        """May the execute phase start this task now? False = no (some of the checks record why: a transition, an
+        observation, a question); None = not yet — a dependency is not finished, which another lane of this cycle may
+        still change."""
+        if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
+            return False        # a run is on it (lease alive); stale leases are handled in collect
+        if t.get("state") == "ready" and self.open_question_blocks(t):
+            return False        # T-0091: re-opened while its question is still unanswered: not leased again
+        nb = parse_ts(t.get("not_before"))
+        if nb and _now() < nb:
+            return False        # scheduled for later (daily posts): the PO set not_before
+        if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+            return None         # `depends_on`: a dependency is not done yet or its result is a stub
+        if t.get("state") == "ready" and hypothesis.applies(t):
+            problems = self.hypothesis_problems(t)
+            if problems:        # owner 07.11: a feature without real evidence does not start; the PO promotes it with one
+                self.store.transition(t["id"], "proposed", "dispatcher", f"hypothesis rule: {'; '.join(problems)}"[:500], force=True)
+                return False
+        if t.get("state") == "ready" and not t.get("not_before") and future_dated_title(str(t.get("title", "")), _now()):
+            self.store.add_observation({
+                "title": f"Task {t['id']} names a future date in its title but has no not_before; not started: {t.get('title', '')}"[:140],
+                "classification": "need_hypothesis", "source": "dispatcher", "task": t["id"],
+                "fingerprint": f"future-dated-{t['id']}", "run_id": f"{self.cycle_id}-execute",
+                "detail": "PO: set not_before on this task (or fix the title)."})
+            return False
+        if self.guard_replan(t) or self.guard_no_commit_loop(t):
+            return False
+        return True
+
+    def seat_lane(self, key: str, feed: "_Feed", slots: dict[str, int], used: dict[str, int], seen: set[str]) -> None:
+        """One execute lane: the tasks of seat `key`, in order, one after another, until the seat's places for this cycle
+        are used — the body of the sequential loop for one seat. Several lanes of one seat (`overlap_roles`) share the
+        feed and the count; a task being executed holds a place, so the seat is never over-filled."""
+        while True:
+            with self._seat_lock:
+                if used.get(key, 0) + self._seat_running.get(key, 0) >= slots[key]:
+                    return
+                t = feed.next()
+                if t is None:
+                    return
+                self._seat_running[key] = self._seat_running.get(key, 0) + 1
+            ok, verdict = False, False            # an exception below counts as «dealt with»: the task is not offered again this cycle
+            try:
+                if not self.pending_role(t):
+                    verdict = self.startable(t)
+                    if verdict:
+                        with self.lanes.working(t["id"]):
+                            ok = bool(self.execute_task(t))
+            finally:
+                with self._seat_lock:
+                    self._seat_running[key] -= 1
+                    if ok:
+                        used[key] = used.get(key, 0) + 1
+                    if verdict is not None:      # None = waits for a dependency: a later pass of this cycle may start it
+                        seen.add(t["id"])
+
+    # the checkouts of the repository roles: one worktree per task (owner 21.11) ---------------------------------------
+
+    def sweep_worktrees(self) -> list[str]:
+        """Remove the checkouts nobody will work in again: the task is finished, closed or gone (a merged task loses its
+        checkout at the merge already), or it has been blocked / deferred / waiting for the owner for longer than
+        `cycle.parallel.worktree_keep_h`. Only the directory goes — `task/<id>` and its commits stay in the clone, and
+        a task that comes back gets a new checkout of that branch. Returns the ids whose checkout was removed."""
+        root = self.p.worktrees_dir
+        if self.dry_run or not root.is_dir() or not (self.p.repo_dir / ".git").exists():
+            return []
+        removed: list[str] = []
+        for d in sorted(x for x in root.iterdir() if x.is_dir()):
+            t = self.store.task(d.name)
+            state = str((t or {}).get("state") or "gone")
+            if state in WORKTREE_LIVE_STATES or self.lanes.busy(d.name):
                 continue
-            if self.guard_replan(t) or self.guard_no_commit_loop(t):
-                continue
-            if self.execute_task(t):
-                used[key] = used.get(key, 0) + 1
+            if state in WORKTREE_PARKED_STATES:
+                upd = parse_ts((t or {}).get("updated"))
+                age_h = (_now() - upd).total_seconds() / 3600 if upd else None
+                if age_h is None or age_h < self.par.worktree_keep_h:
+                    continue
+            with self.repo_lock:
+                gitops.remove_task_worktree(self.p.repo_dir, d)
+            log.info("%s: checkout of %s removed (task is %s); branch task/%s stays", self.p.slug, d.name, state, d.name)
+            self.store.event("worktree.removed", d.name, "dispatcher", {"state": state, "path": str(d)})
+            removed.append(d.name)
+        return removed
+
+    def task_checkout(self, t: dict[str, Any], start_point: str | None = None) -> tuple[Path, str]:
+        """The task's own checkout and its branch (created, reused, or taken over from the layout before 21.11, where
+        `task/<id>` was checked out in the clone itself). Under the repository lock: it fetches and may move the clone."""
+        wt = self.p.worktree_dir(t["id"])
+        with self.repo_lock:
+            fresh = not wt.exists()
+            branch = gitops.start_task_worktree(self.p.repo_dir, wt, t["id"], self.p.repo_branch, start_point=start_point)
+        if fresh:
+            self.store.event("worktree.created", t["id"], "dispatcher", {"path": str(wt), "branch": branch,
+                                                                         "ahead": gitops.commits_ahead(wt, self.p.repo_branch)})
+        return wt, branch
+
+    def merge_conflict_back(self, t: dict[str, Any], exc: gitops.MergeConflict, role: str, run_id: str, *, rerun: bool = False) -> None:
+        """The task's branch does not merge into the base branch: another lane merged a change of the same lines first.
+        Nothing was merged and the cycle goes on. The task returns to its author with the conflict text — `in_progress`
+        (the next run starts with the base merged into its branch and a MERGE CONFLICT block in the prompt), or `ready`
+        with `rerun` (a role that returns whole files simply writes them again on the new base) — and one observation
+        is recorded. After `cycle.parallel.max_merge_conflicts` conflicts in a row the task is blocked for the PO."""
+        prev = t.get(MERGE_CONFLICT) if isinstance(t.get(MERGE_CONFLICT), dict) else {}
+        n = int((prev or {}).get("count") or 0) + 1
+        files = exc.files[:gitops.CONFLICT_FILES_MAX]
+        rec = {"at": utcnow(), "base": self.p.repo_branch, "files": files, "text": exc.text[:CONFLICT_PROMPT_CHARS], "count": n, "run": run_id}
+        note = f"merge conflict with {self.p.repo_branch} in {_short_text(', '.join(files), CONFLICT_NOTE_CHARS)} (nothing merged)"
+        log.warning("%s: %s (%s) %s — conflict %d of %d", self.p.slug, t["id"], role, note, n, self.par.max_merge_conflicts)
+        self.store.event("merge.conflict", t["id"], "dispatcher", {"role": role, "files": files, "count": n, "base": self.p.repo_branch})
+        self.store.add_observation({"title": f"Merge conflict: {t['id']} ({role}) and {self.p.repo_branch} changed the same lines in {', '.join(files)}"[:140],
+                                    "classification": "environment_error", "source": "dispatcher", "task": t["id"], "url": self.p.site_base,
+                                    "actual": exc.text[:400], "expected": "tasks that run in the same cycle touch different files, or one depends_on the other",
+                                    "fingerprint": f"merge-conflict-{t['id']}", "run_id": run_id})
+        if n >= self.par.max_merge_conflicts:
+            # the question first: it moves the task to `blocked` and sets `blocked_by`; then the note that says why
+            self.store.ask(from_="dispatcher", to="po", question=f"Task {t['id']} ({_short_text(t.get('title'), 80)}) conflicted with "
+                           f"{self.p.repo_branch} {n} times in a row in {_short_text(', '.join(files), 200)}: another task keeps changing the same "
+                           f"lines. Its work is on the local branch task/{t['id']}. Order the two tasks with `depends_on`, narrow one of them, or close it.",
+                           task_id=t["id"], blocks=[t["id"]])
+            self.store.transition(t["id"], "blocked", "dispatcher", f"{note}; {n} conflict(s) in a row: the PO decides", force=True,
+                                  assignee_run=None, **{MERGE_CONFLICT: rec})
+            return
+        if rerun:
+            self.store.transition(t["id"], "ready", "dispatcher", f"{note}: runs again on the new {self.p.repo_branch}", force=True,
+                                  assignee_run=None, **{MERGE_CONFLICT: rec})
+        else:
+            self.store.transition(t["id"], "in_progress", "dispatcher", f"{note}: back to the {role} to reconcile", force=True,
+                                  assignee_run=None, last_review=None, **{MERGE_CONFLICT: rec})
 
     # stuck goals: replan with 3 alternatives, probe them, then the owner (owner 11.11, team/replan.py) ----------------
 
@@ -1028,19 +1292,29 @@ class Cycle:
             self.store.release(t["id"])
 
     def exec_developer(self, t: dict[str, Any], run_id: str, role: str = "developer") -> bool:
-        repo = self.p.repo_dir
-        if self.p.repo_url:
-            gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
-        elif not (repo / ".git").exists():
-            if not self.ensure_local_repo():
-                self.store.transition(t["id"], "blocked", "dispatcher", "no repository configured", force=True)
-                return True
-        branch = gitops.start_task_branch(repo, t["id"], self.p.repo_branch)
+        clone = self.p.repo_dir
+        with self.repo_lock:
+            if self.p.repo_url:
+                gitops.ensure_clone(clone, self.p.repo_url, self.p.repo_branch)
+            elif not (clone / ".git").exists():
+                if not self.ensure_local_repo():
+                    self.store.transition(t["id"], "blocked", "dispatcher", "no repository configured", force=True)
+                    return True
+            # the task's own checkout (owner 21.11): the developer and the designer of one product work at the same time,
+            # each in a worktree of its task; the clone itself stays on the base branch for the merges
+            repo, branch = self.task_checkout(t)
+        conflict = t.get(MERGE_CONFLICT) if isinstance(t.get(MERGE_CONFLICT), dict) else None
+        # a service repository: two roles may each start the server in their own checkout at the same moment — each run is
+        # told a port of its own (TEAM_PORT; not PORT itself, which would silently move a server the repository's own
+        # test configuration expects elsewhere)
+        port = playtest.free_port() if (self.p.repo_kind == "service" or self.p.profile == "game") else None
         prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
-                                          budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo))
+                                          budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo),
+                                          conflict=conflict, base=self.p.repo_branch, port=port)
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
-                           allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"])
+                           allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
+                           env_extra={RUN_PORT_ENV: str(port)} if port else None)
         if rr is None:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False
@@ -1112,21 +1386,30 @@ class Cycle:
             return True
         if self.p.repo_mode == "pr":
             return self.release_as_pull_request(t, repo, res)
-        try:
-            sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch)
-        except gitops.GitError as exc:
-            self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
-            return True
-        self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
-        self.deploy_after_merge(t, sha)
+        # merge → push → deploy is ONE critical section of the product (team/lanes.py invariant 5): two lanes that finish
+        # together merge one after the other, and the host always ends on the last merged commit
+        with self.repo_lock:
+            try:
+                sha = gitops.merge_and_push(clone, t["id"], self.p.repo_branch, worktree=repo)
+            except gitops.MergeConflict as exc:
+                self.merge_conflict_back(t, exc, role, run_id)
+                return True
+            except gitops.GitError as exc:
+                self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
+                return True
+            self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha,
+                                  last_review=None, **({MERGE_CONFLICT: None} if t.get(MERGE_CONFLICT) else {}))
+            self.store.event("worktree.removed", t["id"], "dispatcher", {"state": "released", "path": str(repo)})
+            self.deploy_after_merge(t, sha)
         return True
 
     # run continuation: a run stopped by the time limit is continued, not restarted (owner 21.11, frictions F23/F30) ------
 
     def save_wip(self, t: dict[str, Any], repo: Path, reason: str, run_id: str) -> dict[str, Any] | None:
-        """Commit whatever the run left in the working tree to `task/<id>` as a service commit and record `run.wip_saved`.
-        Returns `{commit, files, stat}`; None when the tree was clean. The commit stays on the task branch of the local
-        checkout: it is not pushed and nothing is merged or deployed here — only a later normal run releases the task.
+        """Commit whatever the run left in the working tree of the task's checkout `repo` to `task/<id>` as a service
+        commit and record `run.wip_saved`. Returns `{commit, files, stat}`; None when the tree was clean. The commit
+        stays on the task branch, and the checkout (the task's worktree) is kept as it is — the next run continues in it:
+        nothing is pushed, merged or deployed here — only a later normal run releases the task.
         Raises gitops.GitError when the work could not be saved (wrong branch, git failure)."""
         wip = gitops.save_wip(repo, t["id"], WIP_WHY.get(reason, f"{reason}, continues next cycle"))
         if wip:
@@ -1209,7 +1492,8 @@ class Cycle:
         held = bool(sha) and gitops.is_ancestor(repo, sha)
         if sha and not held:
             log.warning("%s: %s wip commit %s is not on the task branch any more", self.p.slug, t["id"], sha[:10])
-        return {"reason": str(last.get("killed") or last.get("status") or ""), "duration_s": last.get("duration_s"), "limit_s": last.get("limit_s"),
+        return {"checkout": str(repo),
+                "reason": str(last.get("killed") or last.get("status") or ""), "duration_s": last.get("duration_s"), "limit_s": last.get("limit_s"),
                 "wip_commit": sha if held else "", "wip_lost": bool(sha) and not held, "wip_files": last.get("wip_files"),
                 "stat": gitops.commit_stat(repo, sha) if held else "", "profile_md": str(last.get("profile_md") or ""),
                 "used": int(t.get("continuations") or 0), "max": self.p.max_continuations,
@@ -1221,19 +1505,23 @@ class Cycle:
         and returns a `test-report`. pass → `accepted` (the numbers are in the result); fail → `done` with the first missed
         threshold and the tester's observations for the PO; inconclusive or no server → `blocked` with a PO question."""
         repo = self.p.repo_dir
-        if self.p.repo_url:
-            gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
-        if not (repo / ".git").exists():
+        with self.repo_lock:
+            if self.p.repo_url:
+                gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
+            has_repo = (repo / ".git").exists()
+            if has_repo:
+                gitops.park_on_base(repo, self.p.repo_branch)      # the base branch is what is load-tested, never a task branch
+                sha = gitops.head(repo)
+        if not has_repo:
             self.store.transition(t["id"], "blocked", "dispatcher", "no repository to load-test", force=True)
             self.store.ask(from_="tester", to="po", question=f"Task {t['id']}: there is no repository yet, nothing to load-test. Defer it until the server exists.",
                            task_id=t["id"], blocks=[t["id"]])
             return True
-        sha = gitops.head(repo)
         work = self.p.work_dir / self.cycle_id / f"load-{t['id']}"
         out_dir = self.p.dir / "reviews" / t["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
-            server = playtest.start(self.p, repo, sha, work)
+            server = playtest.start(self.p, repo, sha, work, lock=self.repo_lock)
         except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
             reason = str(exc)[:1200]
             self.store.event("playtest.failed", t["id"], "dispatcher", {"reason": reason[:400], "load": True})
@@ -1252,8 +1540,9 @@ class Cycle:
         self.store.event("playtest.started", t["id"], "dispatcher", {"base_url": server.base_url, "local": server.local, "load": True})
         cap = float(t.get("budget_usd") or TESTER_CAP_USD)
         try:
-            rr = self.role_run("tester", prompt, "test-report", cwd=work, label=f"load-{t['id']}", cap=cap, max_turns=TESTER_MAX_TURNS,
-                               allowed_tools=list(TESTER_TOOLS), env_extra=env)
+            with self.lanes.host.shared(not server.local):      # no deploy switches the live host under the load test
+                rr = self.role_run("tester", prompt, "test-report", cwd=work, label=f"load-{t['id']}", cap=cap, max_turns=TESTER_MAX_TURNS,
+                                   allowed_tools=list(TESTER_TOOLS), env_extra=env)
         finally:
             playtest.stop(server)
         if rr is None:
@@ -1298,7 +1587,8 @@ class Cycle:
         if self.dry_run or not servicedeploy.enabled(self.p):
             return False
         log_path = self.p.work_dir / self.cycle_id / f"deploy-{t['id']}.log"
-        res = servicedeploy.run(self.p, sha=sha, log_path=log_path)
+        with self.lanes.host.exclusive():         # waits for the play-tests on the live host; none starts while it switches
+            res = servicedeploy.run(self.p, sha=sha, log_path=log_path)
         if res.ok or res.skipped:
             self.store.event("deploy.ok", t["id"], "dispatcher", {"sha": sha[:12], "url": res.url, "port": res.port, "colour": res.colour,
                                                                   "skipped": res.skipped, "duration_s": round(res.duration_s, 1)})
@@ -1321,11 +1611,16 @@ class Cycle:
         reads the checkout), or into the product folder when there is no repository yet (accepted). Proposed tasks become
         observations for the PO; questions outside VISION go to the owner."""
         repo = self.p.repo_dir
-        if self.p.repo_url:
-            gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
-        has_repo = (repo / ".git").exists() or self.ensure_local_repo()
-        gdd_dir = repo if has_repo else self.p.dir
-        prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store)
+        with self.repo_lock:                         # the documents are read while no other lane is merging into the clone
+            if self.p.repo_url:
+                gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
+            has_repo = (repo / ".git").exists() or self.ensure_local_repo()
+            if has_repo:
+                gitops.park_on_base(repo, self.p.repo_branch)
+            gdd_dir = repo if has_repo else self.p.dir
+            read_sha = gitops.head(repo) if has_repo else None     # the base commit whose documents the role is shown
+            prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store)
+            partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         work = self.p.work_dir / self.cycle_id / f"gd-{t['id']}"
         rr = self.role_run("game-designer", prompt, "design-spec", cwd=work, label=f"gd-{t['id']}", cap=cap, allowed_tools=[], max_turns=8)
@@ -1340,7 +1635,6 @@ class Cycle:
             return True
         res = rr.structured
         files = [f for f in (res.get("files") or []) if isinstance(f, dict) and f.get("path") and prompts.safe_rel_path(str(f["path"]))]
-        partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         refused = [str(f["path"]) for f in files if str(f["path"]) in partial]
         if refused:
             files = [f for f in files if str(f["path"]) not in partial]
@@ -1362,24 +1656,33 @@ class Cycle:
                            task_id=t["id"], blocks=[t["id"]])
             return True
         if has_repo:
-            branch = gitops.start_task_branch(repo, t["id"], self.p.repo_branch)
-            for f in files:
-                p = repo / f["path"]
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(str(f.get("content") or ""), encoding="utf-8")
-            gitops.git(repo, "add", "-A")
-            gitops.git(repo, "commit", "-q", "-m", f"{t['id']}: game design — {', '.join(f['path'] for f in files)[:120]}")
-            result["branch"], result["commit"] = branch, gitops.head(repo)
-            self.store.add_result(t["id"], result)
-            try:
-                sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch)
-            except gitops.GitError as exc:
-                self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
-                return True
-            t = self.store.task(t["id"]) or t
-            t["repo_only"] = True                    # the deliverable is a document in the repository: the reviewer reads the checkout
-            self.store.save_task(t)
-            self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
+            # The files are whole documents written from the base the role READ (`read_sha`): they are committed on a branch
+            # that starts there and merged like any task, so a change another lane merged meanwhile is merged with them —
+            # or conflicts and the task runs again on the new documents — instead of being silently overwritten.
+            with self.repo_lock:
+                wt, branch = self.task_checkout(t, start_point=read_sha)
+                for f in files:
+                    p = wt / f["path"]
+                    p.parent.mkdir(parents=True, exist_ok=True)
+                    p.write_text(str(f.get("content") or ""), encoding="utf-8")
+                gitops.git(wt, "add", "-A")
+                gitops.git(wt, "commit", "-q", "-m", f"{t['id']}: game design — {', '.join(f['path'] for f in files)[:120]}")
+                result["branch"], result["commit"] = branch, gitops.head(wt)
+                self.store.add_result(t["id"], result)
+                try:
+                    sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch, worktree=wt)
+                except gitops.MergeConflict as exc:
+                    gitops.remove_task_worktree(repo, wt, t["id"], delete_branch=True)     # the files are written again on the new base
+                    self.merge_conflict_back(t, exc, "game-designer", run_id, rerun=True)
+                    return True
+                except gitops.GitError as exc:
+                    self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
+                    return True
+                t = self.store.task(t["id"]) or t
+                t["repo_only"] = True                    # the deliverable is a document in the repository: the reviewer reads the checkout
+                t.pop(MERGE_CONFLICT, None)
+                self.store.save_task(t)
+                self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha, last_review=None)
             return True
         for f in files:                              # no repository yet: the documents live in the product folder until one exists
             p = self.p.dir / f["path"]
@@ -1415,7 +1718,8 @@ class Cycle:
         protected = [f for f in touched if any(f == pp or f.startswith(pp.rstrip("/") + "/") for pp in fw.get("protected_paths") or [])]
         tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
-            gitops.push_branch(repo, t["id"])
+            with self.repo_lock:                    # the push writes refs of the clone the other lanes fetch into
+                gitops.push_branch(repo, t["id"])
             # the diff is the truth (T-0132): if `changes` names a file absent from it, the recorded list is the diff; a log note only
             new_changes, absent = prfacts.changes_from_diff(res.get("changes"), touched)
             if absent:
@@ -1983,6 +2287,17 @@ def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
     f_new = sorted(str(f.get("what") or f)[:120] for f in (res.get("friction") or []))
     same_friction = bool(f_old) and f_old == f_new
     return same_summary or same_friction
+
+
+class _Feed:
+    """The tasks of one seat, handed out one at a time to the lane(s) of that seat."""
+
+    def __init__(self, tasks: list[dict[str, Any]]):
+        self._tasks, self._lock = list(tasks), threading.Lock()
+
+    def next(self) -> dict[str, Any] | None:
+        with self._lock:
+            return self._tasks.pop(0) if self._tasks else None
 
 
 OPEN_TASK_STATES = ("ready", "claimed", "in_progress", "review", "released", "blocked", "waiting_owner")

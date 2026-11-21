@@ -226,7 +226,9 @@ def test_execute_slots_per_role(tmp_path: Path, monkeypatch):
     started = []
     monkeypatch.setattr(cy, "execute_task", lambda t: started.append(t["id"]) or True)
     cy.phase_execute()
-    assert started == [d1["id"], m["id"]]          # one developer seat (P1 first), one marketer seat; dev P2 waits
+    # one developer seat (P1 first), one marketer seat; dev P2 waits. The two seats are parallel lanes (owner 21.11), so
+    # which of them starts first is not defined; the order of a sequential cycle is checked in test_parallel_lanes.py
+    assert sorted(started) == sorted([d1["id"], m["id"]])
     s.close()
 
 

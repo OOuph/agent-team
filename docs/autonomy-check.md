@@ -36,7 +36,7 @@ WARN and FAIL line otherwise. The full table is kept in `data/autonomy/<stamp>.m
 | C12 | Owner questions answered | open questions `to: owner` | none older than 2 h (WARN) | the deputy answers every cycle; if it does not, read its last run |
 | C13 | External critic in and out | critic `reports/`, `context/agent-team-responses.json` | report ≤ 3 h, responses ≤ 2 h (WARN otherwise) | the critic is a separate system; its silence does not stop the team |
 | C14 | Claude plan and credits | `data/billing.json` (written by every run) | limit info ≤ 2 h old and credits allowed, or plan < 90 % | FAIL = plan and credits exhausted or the $100/day credit cap reached: runs resume by themselves at the window reset or 00:00 UTC; to resume sooner add credits |
-| C15 | Disk | `statvfs` | > 10 GB free (WARN > 3) | clear `data/work/` and old `data/runs/` |
+| C15 | Disk | `statvfs` | > 10 GB free (WARN > 3) | clear `data/work/` and old `data/runs/` (not while a cycle runs: `data/work/<slug>/wt/` holds the task checkouts of the repository roles — their commits stay on `task/<id>` in the clone and a checkout is created again, but its installed dependencies are gone) |
 | C16 | Required secrets | names in `.env` (values never printed) | Claude token, GitHub token, Telegram bot and ops chat present | only the owner can add a secret |
 | C17 | Daily budget per product | product stores | below 90 % of the product cap (WARN otherwise) | the product stops for the rest of the UTC day by design |
 

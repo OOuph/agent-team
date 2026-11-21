@@ -30,13 +30,19 @@ from pathlib import Path
 import yaml
 
 from . import config as C
+from . import lanes
 from .cycle import PHASES, Cycle, daily_digest
 from .runner import Runner, load_roles
 from .store import TASK_STATES, Store, summary
 
 log = logging.getLogger("team")
 ROLES_DIR = Path(__file__).parent / "roles"
-LOG_FORMAT = "%(asctime)s %(levelname)s [%(process)d] %(name)s: %(message)s"    # watchdog.sh reads the first 19 characters (the time)
+# watchdog.sh reads the first 19 characters (the time). `%(lane)s` (team/lanes.py `install_log_lane`) is empty on the cycle's
+# main thread and " <lane label>" inside a parallel lane: `INFO [12345 review-T-0042] team.cycle: …` — the pid tells the
+# processes apart in data/cron.log, the lane label the interleaved lines of one cycle's parallel runs.
+LOG_FORMAT = "%(asctime)s %(levelname)s [%(process)d%(lane)s] %(name)s: %(message)s"
+CYCLE_LOG_FORMAT = "%(asctime)s %(levelname)s%(lane_tag)s %(name)s: %(message)s"   # data/runs/<slug>/<cycle>/cycle.log: `INFO [review-T-0042] team.cycle: …`
+lanes.install_log_lane()                   # the formats above need `lane` / `lane_tag` on every record, whoever configures logging
 
 
 def _products(st: C.Settings, which: str | None) -> list[C.Product]:
@@ -171,7 +177,7 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
                 continue
             (p.runs_dir / cycle_id).mkdir(parents=True, exist_ok=True)
             fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
-            fh.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s: %(message)s"))
+            fh.setFormatter(logging.Formatter(CYCLE_LOG_FORMAT))
             logging.getLogger().addHandler(fh)
             try:
                 res = Cycle(st, p, runner, cycle_id, dry_run=a.dry_run).run(phases)
@@ -222,6 +228,7 @@ def cmd_status(st: C.Settings, a: argparse.Namespace) -> int:
         sm = summary(s)
         print(f"== {p.slug} ({p.site_base}) stop={'yes' if p.stop_file.exists() else 'no'}")
         print(f"   cadence: {_cadence_line(st, p)}")
+        print(f"   lanes: {p.parallel.describe()}")      # owner 21.11: what may run at once inside this product's cycle
         from . import standing
         for ln in standing.status_lines(p, s):        # owner 21.11: one line per standing direction — cadence, next due or the open task
             print(f"   {ln}")

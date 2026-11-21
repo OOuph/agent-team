@@ -262,6 +262,9 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
                "partial": "returned a partial result"}.get(str(c.get("reason")), "did not finish")
         after = f" after {c['duration_s']} s" if c.get("duration_s") and c.get("reason") != "partial" else ""
         out += f"\n\n# CONTINUATION — DO NOT START OVER\nThe previous run of this task {why}{after}."
+        if c.get("checkout"):
+            out += (" You are in the same checkout it worked in (the task's own git worktree): what it installed or built there "
+                    "and git ignores (node_modules, build output) is still in place unless the checkout was created anew.")
         if c.get("wip_commit"):
             out += (f" The dispatcher saved its uncommitted work on this branch as the service commit `{str(c['wip_commit'])[:10]}` "
                     f"(«wip: …», {c.get('wip_files') or '?'} file(s)):\n```\n{c.get('stat') or '(no stat)'}\n```\n"
@@ -287,9 +290,38 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
     return out
 
 
+CONFLICT_BLOCK_CHARS = 5000                # of the conflict text (git's CONFLICT lines and the other side's diff) in the prompt
+
+
+def conflict_block(conflict: dict[str, Any] | None, base: str = "main") -> str:
+    """Owner 21.11 (parallel lanes): the previous run's branch did not merge into the base branch — another task, working
+    at the same time in its own checkout, changed the same lines and was merged first. `conflict` is the task's
+    `merge_conflict` record (`Cycle.merge_conflict_back`): files, git's text, how many times in a row."""
+    c = conflict
+    if not c:
+        return ""
+    base = str(c.get("base") or base)
+    files = ", ".join(f"`{f}`" for f in (c.get("files") or [])) or "(see below)"
+    text = str(c.get("text") or "")
+    if len(text) > CONFLICT_BLOCK_CHARS:
+        text = text[:CONFLICT_BLOCK_CHARS] + "\n… [cut]"
+    return ("\n\n# MERGE CONFLICT — RECONCILE FIRST, DO NOT REDO THE TASK\n"
+            f"Your previous run finished, but its branch did not merge into `{base}`: another task of this product was working at the "
+            f"same time in its own checkout, changed the same lines and was merged first. Nothing of your branch was merged. "
+            f"Conflicting files: {files}.\n"
+            f"Before this run started the dispatcher merged `{base}` into your branch (`git log --oneline -5` shows it); where the two "
+            "sides conflicted it kept YOUR side, so the other task's change to those lines is missing in this checkout. What the "
+            f"other side did:\n```\n{text or '(no text recorded)'}\n```\n"
+            f"Do this first: read each conflicting file, bring back what the other change needs so that BOTH changes work "
+            f"(`git diff {base}...HEAD -- <file>` shows your side), run the tests, commit. Then report `done` as usual — the rest of "
+            "your task is already on this branch."
+            + (f" This is conflict {c.get('count')} in a row on this task." if int(c.get("count") or 1) > 1 else ""))
+
+
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
                      review: dict[str, Any] | None, role: str = "developer", *, budget_s: int | None = None,
-                     continuation: dict[str, Any] | None = None) -> str:
+                     continuation: dict[str, Any] | None = None, conflict: dict[str, Any] | None = None, base: str = "main",
+                     port: int | None = None) -> str:
     previous = [{k: v for k, v in r.items() if k != "profile_md"} for r in previous]     # the profile is shown once, in the continuation block
     readme = ""
     seen: set[Path] = set()
@@ -309,8 +341,18 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
              "approach gives what the goal needs, `met: false` with the output that rules it out. A clear «does not work» is a "
              "good result.\n\n") if task.get("probe_of") else ""
     return (probe + f"# TASK {task['id']} — product `{product.slug}` ({product.site_base or 'no live site yet'})\n\n"
-            f"You are the `{role}` role in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n\n" + tests +
+            f"You are the `{role}` role in the repository checkout `{repo_dir}` on branch `{branch}`. Commit there; do not push.\n"
+            "This checkout is the task's own git worktree: other roles may be working on other tasks of this repository at the same "
+            f"time, each in its own checkout. Stay on `{branch}` in this directory — do not switch branches, do not touch other "
+            f"worktrees or `{base}`, do not use `git stash` (it is shared between the checkouts); the dispatcher merges your branch "
+            f"into `{base}` when you report done. Files git ignores are not shared between checkouts: if dependencies are missing "
+            "here (no `node_modules`, no virtualenv), install them first.\n"
+            + (f"If you start the server or browser tests in this run, use port `{port}` (it is in the environment as `TEAM_PORT`): "
+               f"`PORT={port}` for the server and `BASE_URL=http://127.0.0.1:{port}` for the tests. Another role's run may be using the "
+               "repository's default port at this very moment. Stop what you started before you report.\n" if port else "")
+            + "\n" + tests +
             "# TASK\n" + _y(_task_brief(task)) + prev + rev
+            + conflict_block(conflict, base)
             + budget_block(budget_s, continuation)
             + "\n\n# VISION\n" + product.vision()
             + service_block(product, repo_dir, role)

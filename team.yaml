@@ -67,6 +67,17 @@ cycle:
   max_continuations: 3            # owner 21.11: a developer/designer run stopped by the time limit is continued next cycle from a `wip:` commit on
                                   # task/<id>; after this many continuations the task is blocked and the PO is asked to split it
                                   # (product.yaml `cycle: {max_continuations: N}` overrides; 0 = never continue)
+  parallel:                       # owner 21.11 (frictions F21, F29): role runs of one product's cycle overlap — team/lanes.py, SCHEME §3
+    enabled: true                 # the reviews run beside triage and execution, every seat below is its own lane, a repository role
+                                  # works in its own git worktree of the task (data/work/<slug>/wt/<task id>).
+                                  # false = the strictly sequential cycle of before 21.11 (the worktrees stay)
+    max_runs: 3                   # lanes at once inside ONE product's cycle, the PO's own run included (1..8). The subscription's rate
+                                  # limits and the host's CPU are shared with the cycles of the other products
+    review_max_runs: 2            # of them reviews / play-tests at most (default max_runs - 1, at least 1): a slot always stays for execution
+    overlap_roles: []             # roles whose several seats (execute_slots.<role> > 1) work at once; [] = tasks of one role one after another
+    max_merge_conflicts: 2        # merge conflicts in a row on one task (two tasks keep changing the same lines) → blocked, question to the PO
+    worktree_keep_h: 72           # a blocked / deferred / waiting_owner task keeps its checkout this long; its branch stays for ever
+                                  # (product.yaml `cycle: {parallel: {max_runs: 2}}` overrides key by key; `parallel: false` switches it off)
   execute_slots:                  # seats per role per cycle (overrides max_execute_per_cycle when present; product.yaml may override)
     developer: 1                  # 03.11: a single seat starved the daily post behind P1/P2 developer tasks
     marketer: 1

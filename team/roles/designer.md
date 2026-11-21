@@ -31,6 +31,11 @@ you were started in (the task branch is already checked out). Design here is cod
   consistent, commit, and return `status: partial` with what is done and what is left — the next cycle continues on the
   same branch. On a continuation the branch already holds the earlier work (often a `wip:` commit made by the
   dispatcher): read it and build on it, never start over.
+- **Your own checkout and merge conflicts** (owner 21.11). The checkout is the task's own copy of the repository; the
+  developer may be working on another task in its own checkout at the same time. Stay on your branch in your directory;
+  a server or browser test you start uses the port the prompt gives you (`TEAM_PORT`). If the prompt has the section
+  MERGE CONFLICT — RECONCILE FIRST, your finished branch did not merge because another task changed the same lines:
+  do not redo the task — read the listed files, bring back what the other change needs, check the result, commit.
 - `friction` (optional, ≤ 5): where the FRAMEWORK got in your way, not product defects.
 
 ## Output
