@@ -23,6 +23,7 @@ the PR, a human merges.
 
 ## 2026-11-19
 
+- T-0191: PR facts block always has an `Out of declared scope` line: the out-of-scope files, `none`, or `no declared scope` when the task scope names no path; advisory only, blocks nothing. `team/prfacts.py`, `tests/test_out_of_scope.py`, SCHEME.md (voice:2026-11-18:P5).
 - T-0186: a `[retro]` (framework-fix) task stuck again after a replan, including one re-created under a new id with the same title, goes straight to one owner question that names the file to hand-apply; no second replan (F-0237, F-0238, F-0240). `team/replan.py`, `team/cycle.py`, `tests/test_replan.py`, SCHEME.md.
 - T-0185: retro `## Owner digest` capped at 5 lines: merged, waiting for a human, rolled back, spend, and at most one `owner_question` (new optional field of `retro-report`); rule stated in `team/roles/framework-retro.md` (voice:2026-11-18:P3). `team/retro.py`, schema, SCHEME.md, test.
 - T-0181: reviewer.md and editor.md say plain `team-fetch <url>` shows the page head, `--tail`/`--head` count characters (N about 500 or more for a footer), `--offset K` reads the middle, 375 px is `not observable`; reviewer.md merges four `--grep` denied-character bullets into one (F-0232, F-0233, F-0234, F-0235, F-0237, F-0238). `team/roles/reviewer.md`, `team/roles/editor.md`. No change to `team/fetch.py`, so SCHEME.md is unchanged.
