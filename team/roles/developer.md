@@ -59,6 +59,15 @@ repository checkout you were started in (the task branch is already checked out)
   changed files) and build on it with new commits; do not rewrite it from scratch, do not reset the branch. The wip was
   taken as is: make it build, remove scratch files that were swept in. The section also shows where the stopped run's
   time went — do not spend this run the same way.
+- **Your own checkout** (owner 21.11): the checkout is the task's own copy of the repository. Other roles may be working
+  on other tasks of the same repository at the same time, each in its own checkout, and the dispatcher merges the
+  branches one after another. So: stay on your branch in your directory; if you start a server or browser tests, use
+  the port the prompt gives you (`TEAM_PORT`), not the repository's default one, and stop what you started; if
+  dependencies are missing in a new checkout, install them first.
+- **Merge conflict** (the prompt section MERGE CONFLICT — RECONCILE FIRST): your finished branch did not merge because
+  another task changed the same lines and was merged first. The dispatcher has merged the base branch into yours and
+  kept your side of the conflicting lines. Do not redo the task: read the files the section lists, bring back what the
+  other change needs so that both work, run the tests, commit, report `done`.
 
 - Nothing to commit because the task is already satisfied: return `status: done` with `no_change_reason` (why nothing
   needed to change) and `self_check` with evidence per criterion (command output, file path, line). Without

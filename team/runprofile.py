@@ -89,6 +89,7 @@ NORMALISE_CHARS = 200
 # on top of the repository's own redaction (friction.redact, gitops.redact): NAME=value for names that look secret
 ENV_SECRET_RE = re.compile(r"\b([A-Z0-9_]*(?:TOKEN|SECRET|PASSWORD|PASSWD|API_?KEY|ACCESS_KEY)[A-Z0-9_]*=)(\"[^\"]*\"|'[^']*'|\S+)")
 RUN_EVENT = "run.profile"
+PO_SEEN_EVENT = "run.profile_seen"         # written after a PO run: `upto` = the last event id its prompt could include (see `po_lines`)
 
 
 def settings(team_raw: dict[str, Any] | None = None, product_raw: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -369,11 +370,29 @@ def event_detail(prof: dict[str, Any], *, role: str, run_id: str) -> dict[str, A
             "flags": [f["kind"] for f in prof.get("flags") or []], "line": line(prof, role=role, task=task, run_id=run_id)}
 
 
+def last_event_id(store: Any) -> int:
+    """The id of the newest event (0 when there is none): taken before the PO's prompt is built, see `po_lines`."""
+    row = store.db.execute("SELECT COALESCE(MAX(id), 0) FROM events").fetchone()
+    return int(row[0] or 0)
+
+
 def po_lines(store: Any, cfg: dict[str, Any]) -> list[str]:
-    """Lines of the `run.profile` events written after the PO's last run (what it has not seen yet), oldest first."""
+    """Lines of the `run.profile` events the PO has not seen yet, oldest first.
+
+    «Seen» ends where the PO's last prompt was built, not where its run ended: since 21.11 reviews run beside the
+    triage (team/lanes.py), and a profile written while the PO was thinking was not in its prompt. The cycle records
+    that point as `PO_SEEN_EVENT {upto}` after the PO's run; a store without such an event (before 21.11) falls back
+    to the id of the PO's last `run` event."""
     row = store.db.execute("SELECT id FROM events WHERE kind='run' AND actor='po' ORDER BY id DESC LIMIT 1").fetchone()
     after = int(row[0]) if row else 0
-    rows = store.db.execute("SELECT detail FROM events WHERE kind=? AND id > ? ORDER BY id DESC LIMIT ?",
+    seen = store.db.execute("SELECT detail FROM events WHERE kind=? ORDER BY id DESC LIMIT 1", (PO_SEEN_EVENT,)).fetchone()
+    if seen:
+        try:
+            after = int((json.loads(seen[0]) or {}).get("upto"))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            log.warning("unreadable %s event: %r — the PO's last run is used instead", PO_SEEN_EVENT, seen[0])
+    # the PO's own run was never among them (its profile is written before its `run` event): kept that way
+    rows = store.db.execute("SELECT detail FROM events WHERE kind=? AND id > ? AND actor != 'po' ORDER BY id DESC LIMIT ?",
                             (RUN_EVENT, after, int(cfg.get("po_max_lines", 8)))).fetchall()
     out = []
     for (detail,) in reversed(rows):

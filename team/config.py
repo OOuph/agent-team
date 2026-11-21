@@ -12,6 +12,8 @@ from typing import Any
 
 import yaml
 
+from .lanes import DEFAULTS as PARALLEL_DEFAULTS, Config as ParallelConfig, settings as parallel_settings
+
 log = logging.getLogger("team.config")
 
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
@@ -31,7 +33,10 @@ DEFAULTS: dict[str, Any] = {
     "cycle": {"review_after_min": 6, "measure_after_h": 24, "max_review_fails": 2, "persona_every_n_cycles": 6,
               "digest_hour_utc": 7, "digest_hours_utc": [7, 19], "measure_every_h": 6, "seo_every_h": 12, "geo_every_h": 168, "voice_every_h": 84, "dev_idle_po_every_h": 12,
               "max_ready": 3, "max_execute_per_cycle": 1,
-              "max_continuations": 3},      # runs stopped by the time limit that may be continued per task before the PO splits it
+              "max_continuations": 3,       # runs stopped by the time limit that may be continued per task before the PO splits it
+              # parallel lanes inside one product's cycle (owner 21.11, team/lanes.py): reviews beside execution, one
+              # execute lane per seat, one git worktree per task; product.yaml `cycle: {parallel: {...}}` overrides
+              "parallel": dict(PARALLEL_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -139,6 +144,8 @@ def parse_cycle_every_min(raw: dict[str, Any], where: str = "product.yaml") -> i
         raise ValueError(f"{where}: cycle.every_min must be a whole number of minutes {lo}..{hi}, got {v!r}")
     return v
 
+
+WORKTREES_DIRNAME = "wt"                   # data/work/<slug>/wt/<task id>: the checkout of one task (git worktree of data/repos/<slug>)
 
 RUN_TIMEOUT_CEILING_S = 3600               # hard ceiling of one role run, whatever team.yaml / product.yaml say (owner 21.11)
 RUN_LIMIT_KEYS = ("timeout_s", "inactivity_s")
@@ -312,6 +319,21 @@ class Product:
     @property
     def work_dir(self) -> Path:
         return self.st.data_dir / "work" / self.slug
+
+    # --- parallel lanes and per-task checkouts (owner 21.11, team/lanes.py) -------------------------------------------
+
+    @property
+    def worktrees_dir(self) -> Path:
+        """Where the task checkouts of the repository roles live: one `git worktree` of `repo_dir` per task."""
+        return self.work_dir / WORKTREES_DIRNAME
+
+    def worktree_dir(self, task_id: str) -> Path:
+        return self.worktrees_dir / str(task_id)
+
+    @property
+    def parallel(self) -> ParallelConfig:
+        """`cycle.parallel` of team.yaml with this product's `cycle: {parallel: {...}}` on top (validated)."""
+        return parallel_settings(self.st.cycle, self.raw, self.slug)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 

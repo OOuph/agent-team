@@ -13,10 +13,12 @@ import logging
 import os
 import re
 import sqlite3
+import threading
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterable
+from functools import wraps
+from typing import Any, Callable, Iterable
 
 import yaml
 
@@ -70,6 +72,18 @@ def _dump(obj: dict[str, Any]) -> str:
     return yaml.safe_dump(obj, sort_keys=False, allow_unicode=True, width=110)
 
 
+SQLITE_TIMEOUT_S = 30          # a writer of another process (CLI, another connection) is waited for this long
+
+
+def _locked(fn: Callable[..., Any]) -> Callable[..., Any]:
+    """The method runs under `Store.lock`: one writer at a time inside the process (parallel lanes, team/lanes.py)."""
+    @wraps(fn)
+    def inner(self: "Store", *args: Any, **kwargs: Any) -> Any:
+        with self.lock:
+            return fn(self, *args, **kwargs)
+    return inner
+
+
 def _write(p: Path, obj: dict[str, Any]) -> None:
     p.parent.mkdir(parents=True, exist_ok=True)
     tmp = p.with_suffix(p.suffix + ".tmp")
@@ -85,7 +99,15 @@ class Store:
         for sub in ("backlog", "questions", "observations", "reviews", "digests", "metrics"):
             (self.dir / sub).mkdir(parents=True, exist_ok=True)
         self.db_path = db_path or (self.dir / "team.db")
-        self.db = sqlite3.connect(str(self.db_path), timeout=30)
+        # Thread safety (parallel lanes of one cycle, team/lanes.py invariant 4): every writing method holds `lock`
+        # (re-entrant: ask → transition → event), so taking an id and writing its file is one step and two lanes never
+        # interleave inside a method; every thread has its own SQLite connection (`db`), so a lane may also read with
+        # `store.db.execute(...)` directly. Code that reads a task, changes it and saves it while another thread may
+        # touch the same task wraps the three steps in `with store.lock:`.
+        self.lock = threading.RLock()
+        self._local = threading.local()
+        self._conns: list[sqlite3.Connection] = []
+        self._conn_lock = threading.Lock()
         self.db.execute("PRAGMA journal_mode=WAL")
         self.db.executescript("""
             CREATE TABLE IF NOT EXISTS claims(task_id TEXT PRIMARY KEY, role TEXT, run_id TEXT, lease_until REAL, claimed_at REAL);
@@ -99,6 +121,19 @@ class Store:
         if "text" not in cols:          # 03.11: the marketer's memory ("published in the last 7 days") needs the text that went out
             self.db.execute("ALTER TABLE posts ADD COLUMN text TEXT")
         self.db.commit()
+
+    @property
+    def db(self) -> sqlite3.Connection:
+        """The calling thread's own connection to team.db (opened on first use, closed by `close` / `close_thread`)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            # check_same_thread=False only so that `close()` may close it from the main thread; it is never shared
+            conn = sqlite3.connect(str(self.db_path), timeout=SQLITE_TIMEOUT_S, check_same_thread=False)
+            with self._conn_lock:
+                self._conns.append(conn)
+            self._local.conn = conn
+            log.debug("store %s: SQLite connection #%d for thread %s", self.dir.name, len(self._conns), threading.current_thread().name)
+        return conn
 
     # ------------------------------------------------------------ ids and files
 
@@ -127,6 +162,7 @@ class Store:
 
     # ------------------------------------------------------------ events
 
+    @_locked
     def event(self, kind: str, subject: str, actor: str, detail: dict[str, Any] | str | None = None) -> None:
         self.db.execute("INSERT INTO events(ts, kind, subject, actor, detail) VALUES(?,?,?,?,?)",
                         (utcnow(), kind, subject, actor, json.dumps(detail, ensure_ascii=False, default=str) if detail is not None else None))
@@ -140,6 +176,7 @@ class Store:
 
     # ------------------------------------------------------------ spend
 
+    @_locked
     def book_spend(self, run_id: str, role: str, usd: float, reported: bool) -> None:
         self.db.execute("INSERT INTO spend(day, run_id, role, usd, reported, ts) VALUES(?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).strftime("%Y-%m-%d"), run_id, role, float(usd), int(reported), utcnow()))
@@ -166,12 +203,14 @@ class Store:
         p = self._path("T", task_id)
         return (yaml.safe_load(p.read_text(encoding="utf-8")) or None) if p.exists() else None
 
+    @_locked
     def save_task(self, t: dict[str, Any]) -> Path:
         t["updated"] = utcnow()
         p = self._path("T", t["id"])
         _write(p, t)
         return p
 
+    @_locked
     def create_task(self, *, title: str, type_: str, problem: str, scope: str, acceptance: list[str], goal: str,
                     created_by: str, priority: str = "P2", size: str = "S", negative_cases: list[str] | None = None,
                     observations: list[str] | None = None, role: str = "developer", state: str = "proposed",
@@ -190,6 +229,7 @@ class Store:
         self.event("task.create", tid, created_by, {"title": t["title"], "state": state, "priority": t["priority"]})
         return t
 
+    @_locked
     def transition(self, task_id: str, to: str, actor: str, note: str = "", force: bool = False, **fields: Any) -> dict[str, Any]:
         t = self.task(task_id)
         if t is None:
@@ -207,6 +247,7 @@ class Store:
             self.release(task_id)
         return t
 
+    @_locked
     def add_result(self, task_id: str, result: dict[str, Any]) -> None:
         t = self.task(task_id)
         if t is None:
@@ -216,6 +257,7 @@ class Store:
 
     # ------------------------------------------------------------ claims (leases)
 
+    @_locked
     def claim(self, task_id: str, role: str, run_id: str, lease_s: int = 7200) -> bool:
         """Atomic: only one live lease per task. Returns False when another run holds it (never retry the same cycle)."""
         now = time.time()
@@ -227,10 +269,12 @@ class Store:
         self.db.commit()
         return True
 
+    @_locked
     def heartbeat(self, task_id: str, run_id: str, lease_s: int = 7200) -> None:
         self.db.execute("UPDATE claims SET lease_until=? WHERE task_id=? AND run_id=?", (time.time() + lease_s, task_id, run_id))
         self.db.commit()
 
+    @_locked
     def release(self, task_id: str) -> None:
         self.db.execute("DELETE FROM claims WHERE task_id=?", (task_id,))
         self.db.commit()
@@ -249,6 +293,7 @@ class Store:
             qs = [q for q in qs if q.get("state") in s]
         return qs
 
+    @_locked
     def ask(self, *, from_: str, to: str, question: str, task_id: str | None = None, options: list[str] | None = None,
             blocks: list[str] | None = None) -> dict[str, Any]:
         norm = " ".join(question.lower().split())[:300]
@@ -285,6 +330,7 @@ class Store:
                 pass
         return q
 
+    @_locked
     def answer(self, qid: str, answer: str, by: str, not_before: str | None = None) -> dict[str, Any]:
         """Answer a question; blocked tasks return to ready. `not_before` (ISO UTC) keeps them from restarting before
         that moment — the fix for 'dated post → blocked → answered → restarted an hour later → blocked again'."""
@@ -315,6 +361,7 @@ class Store:
         obs = self._load_all("observations")
         return [o for o in obs if o.get("status") == status] if status else obs
 
+    @_locked
     def add_observation(self, card: dict[str, Any]) -> dict[str, Any]:
         """Dedup by fingerprint: a repeat of a live card is appended to it, not duplicated."""
         fp = card.get("fingerprint")
@@ -333,6 +380,7 @@ class Store:
                                                                           "classification": card.get("classification")})
         return card
 
+    @_locked
     def update_observation(self, oid: str, **fields: Any) -> None:
         p = self._path("OBS", oid)
         if not p.exists():
@@ -341,6 +389,7 @@ class Store:
         o.update(fields)
         _write(p, o)
 
+    @_locked
     def add_review(self, task_id: str, verdict: dict[str, Any], run_id: str) -> dict[str, Any]:
         rid = self._next_id("R", "reviews")
         r = {"id": rid, "task": task_id, "run_id": run_id, "created": utcnow(), **verdict}
@@ -359,6 +408,7 @@ class Store:
         since = (datetime.now(timezone.utc) - timedelta(days=days - 1)).strftime("%Y-%m-%d")
         return int(self.db.execute("SELECT COUNT(*) FROM posts WHERE day>=? AND channel=?", (since, channel)).fetchone()[0])
 
+    @_locked
     def record_post(self, channel: str, post_id: str, url: str, task_id: str | None, text: str | None = None) -> None:
         self.db.execute("INSERT INTO posts(day, channel, post_id, url, task_id, ts, text) VALUES(?,?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).strftime("%Y-%m-%d"), channel, post_id, url, task_id, utcnow(), (text or "")[:4000]))
@@ -379,10 +429,12 @@ class Store:
 
     # ------------------------------------------------------------ cycles
 
+    @_locked
     def cycle_start(self, cycle_id: str) -> None:
         self.db.execute("INSERT OR IGNORE INTO cycles(cycle_id, started, phases, spent_usd) VALUES(?,?,?,0)", (cycle_id, utcnow(), "[]"))
         self.db.commit()
 
+    @_locked
     def cycle_finish(self, cycle_id: str, phases: list[str], spent: float) -> None:
         self.db.execute("UPDATE cycles SET finished=?, phases=?, spent_usd=? WHERE cycle_id=?",
                         (utcnow(), json.dumps(phases), spent, cycle_id))
@@ -392,8 +444,24 @@ class Store:
         return [{"cycle_id": r[0], "started": r[1], "finished": r[2], "phases": json.loads(r[3] or "[]"), "spent_usd": r[4]}
                 for r in self.db.execute("SELECT cycle_id, started, finished, phases, spent_usd FROM cycles ORDER BY started DESC LIMIT ?", (limit,))]
 
+    def close_thread(self) -> None:
+        """Close the calling thread's connection (a lane's thread ends; the store itself stays open)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        self._local.conn = None
+        with self._conn_lock:
+            if conn in self._conns:
+                self._conns.remove(conn)
+        conn.close()
+
     def close(self) -> None:
-        self.db.close()
+        """Close the connections of every thread."""
+        with self._conn_lock:
+            conns, self._conns = self._conns, []
+        for conn in conns:
+            conn.close()
+        self._local = threading.local()
 
 
 def summary(store: Store) -> dict[str, Any]:

@@ -63,6 +63,16 @@ the task branch and the next cycle continues it, up to `cycle.max_continuations`
 product.yaml), then the PO is asked to split the task. `run_profile` (team.yaml) sets how the time of a run is broken
 down; `team task <slug> show --id T` prints where each run of a task spent its time.
 
+Parallel work inside a cycle (SCHEME.md §3 «Параллельные дорожки»): the reviews of released tasks run beside the PO's
+triage and beside execution, every seat of `cycle.execute_slots` is its own lane, and a developer or designer works in
+its own checkout of the task (`git worktree` under `data/work/<slug>/wt/<task id>`; the clone `data/repos/<slug>` stays
+on the base branch for the merges). Merge, push and the deploy after it are one critical section per product; a merge
+conflict sends the task back to its author with the conflict text. Keys, `cycle.parallel` in team.yaml, overridable per
+key in product.yaml (`cycle: {parallel: {...}}`): `enabled` (default `true`; `false` = the strictly sequential cycle),
+`max_runs` (3: lanes at once in one product's cycle), `review_max_runs` (`max_runs - 1`: reviews among them),
+`overlap_roles` (`[]`: roles whose several seats may work at once), `max_merge_conflicts` (2), `worktree_keep_h` (72).
+`team status` prints the values in use on the `lanes:` line.
+
 Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`; a game server (long-running
 process, blue/green releases, health check, rollback, `team deploy`) in `deploy/service/`. Tests: `pytest -q`.
 

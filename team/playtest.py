@@ -17,8 +17,10 @@ import os
 import shutil
 import socket
 import subprocess
+import threading
 import time
 import urllib.request
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,8 @@ STOP_GRACE_S = 5
 LOG_TAIL_CHARS = 2500
 HOST = "127.0.0.1"
 DEFAULT_HEALTH_PATH = "/"
+PORT_HOLD_S = 180               # a port handed to one play-test is not handed to another of this process for this long
+PORT_TRIES = 50                 # asks to the OS for a free port before giving up on finding one that is not held
 AUTO_INSTALL = {"package-lock.json": "npm ci --no-audit --no-fund", "package.json": "npm install --no-audit --no-fund"}
 
 
@@ -68,10 +72,29 @@ def clean_env() -> dict[str, str]:
     return env
 
 
+_port_lock = threading.Lock()
+_ports_held: dict[int, float] = {}          # port -> monotonic time it was handed out (this process)
+
+
 def free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind((HOST, 0))
-        return int(s.getsockname()[1])
+    """A free local port. The OS only says that the port is free NOW: between this call and the server's own bind another
+    play-test of the same cycle (parallel lanes, team/lanes.py) could be given the same number. So the choice is made
+    under a lock and a port handed out in the last PORT_HOLD_S seconds is not handed out again by this process."""
+    with _port_lock:
+        now = time.monotonic()
+        for port, t in list(_ports_held.items()):
+            if now - t > PORT_HOLD_S:
+                del _ports_held[port]
+        port = 0
+        for _ in range(PORT_TRIES):
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.bind((HOST, 0))
+                port = int(s.getsockname()[1])
+            if port not in _ports_held:
+                break
+            log.debug("port %d was handed to another play-test %.0fs ago — asking for another", port, now - _ports_held[port])
+        _ports_held[port] = now
+        return port
 
 
 def prepare_copy(repo_dir: Path, sha: str, dest: Path) -> Path:
@@ -118,12 +141,16 @@ def live_base_url(product: Product) -> str | None:
     return None
 
 
-def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd: str = "", start_timeout_s: int = START_TIMEOUT_S) -> Server:
-    """Copy `sha`, install, build, run, wait for health. Raises PlaytestError with the log tail when the server does not come up."""
+def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd: str = "", start_timeout_s: int = START_TIMEOUT_S,
+          lock: Any = None) -> Server:
+    """Copy `sha`, install, build, run, wait for health. Raises PlaytestError with the log tail when the server does not come up.
+    `lock`: the cycle's repository lock (team/lanes.py), held only while the clone is copied — another lane may be merging
+    into it; install, build and the server run outside it."""
     live = live_base_url(product)
     if not live and not product.run_cmd:
         raise PlaytestError("repo.run_cmd is not set in product.yaml: the dispatcher cannot start the server")
-    dest = prepare_copy(repo_dir, sha, work / "checkout")       # the tester's Playwright runs from here even against a deployed host
+    with lock if lock is not None else nullcontext():
+        dest = prepare_copy(repo_dir, sha, work / "checkout")   # the tester's Playwright runs from here even against a deployed host
     log_path = work / "server.log"
     log_fh = log_path.open("w", encoding="utf-8")
     try:
