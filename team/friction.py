@@ -39,6 +39,23 @@ def redact(s: str) -> str:
     return _SECRET.sub(r"\1***", str(s))
 
 
+
+def entry(f: Any) -> dict[str, Any]:
+    """One friction item of a role's result or review as {kind, what}: a role sometimes returns a bare string
+    (or another scalar) instead of the {kind, what} object the contract asks for — ai-battles 21.11, the whole
+    friction/retro pass died on `'str' object has no attribute 'get'` for seven hours. Never raises."""
+    if isinstance(f, dict):
+        return {"kind": str(f.get("kind") or "unspecified"), "what": str(f.get("what") or "")}
+    return {"kind": "unspecified", "what": str(f if f is not None else "")}
+
+
+def _as_list(v: Any) -> list[Any]:
+    """The `friction` field as a list: a role may return one string or one object instead of a list."""
+    if v is None or v == "":
+        return []
+    return list(v) if isinstance(v, (list, tuple)) else [v]
+
+
 def _rec(product: str, kind: str, summary: str, *, role: str = "dispatcher", ts: str | None = None, task: str | None = None,
          run_id: str | None = None, fp: str) -> dict[str, Any]:
     return {"ts": ts or datetime.now(timezone.utc).isoformat(timespec="seconds"), "product": product, "role": role, "kind": kind,
@@ -98,7 +115,7 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
             elif "committed nothing" in note:
                 out.append(_rec(slug, "no_commit", f"{t['id']}: {note}", role="developer", ts=ts, task=t["id"], fp=f"{t['id']}:{ts}"))
         for res in t.get("results") or []:
-            for f in res.get("friction") or []:
+            for f in map(entry, _as_list(res.get("friction"))):
                 out.append(_rec(slug, "reported", f"{res.get('role') or t.get('role')}: [{f.get('kind')}] {f.get('what')}",
                                 role=str(res.get("role") or t.get("role")), ts=res.get("finished") or t.get("updated"), task=t["id"],
                                 run_id=res.get("run_id"), fp=f"{res.get('run_id')}:{f.get('what', '')[:60]}"))
@@ -107,7 +124,7 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
         if v in ("fail", "inconclusive"):
             out.append(_rec(slug, f"review_{v}", f"{r.get('task')}: {r.get('summary', '')}", role="reviewer", ts=r.get("created"),
                             task=r.get("task"), run_id=r.get("run_id"), fp=str(r.get("id"))))
-        for f in r.get("friction") or []:
+        for f in map(entry, _as_list(r.get("friction"))):
             out.append(_rec(slug, "reported", f"reviewer: [{f.get('kind')}] {f.get('what')}", role="reviewer", ts=r.get("created"),
                             task=r.get("task"), run_id=r.get("run_id"), fp=f"{r.get('id')}:{f.get('what', '')[:60]}"))
     now = datetime.now(timezone.utc)

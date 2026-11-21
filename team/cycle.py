@@ -2234,6 +2234,18 @@ STUB_MARKERS = ("дубликат вызова", "duplicate call", "см. пре
 MIN_RESULT_CHARS = 120
 
 
+def _friction_items(v: Any) -> list[Any]:
+    """A result's `friction` as a list: a role may return one string or one object instead of the list the contract asks for."""
+    if v is None or v == "":
+        return []
+    return list(v) if isinstance(v, (list, tuple)) else [v]
+
+
+def _friction_text(f: Any) -> str:
+    """Comparable text of one friction item, whatever its shape ({kind, what} or a bare string — ai-battles 21.11)."""
+    return str((f.get("what") if isinstance(f, dict) else None) or f)[:120]
+
+
 def _short_text(s: Any, n: int) -> str:
     s = " ".join(str(s or "").split())
     return s if len(s) <= n else s[: n - 1] + "…"
@@ -2283,8 +2295,8 @@ def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
     if o & n:
         return True
     same_summary = _short_text(last.get("summary"), 200) == _short_text(res.get("summary"), 200)
-    f_old = sorted(str(f.get("what") or f)[:120] for f in (last.get("friction") or []))
-    f_new = sorted(str(f.get("what") or f)[:120] for f in (res.get("friction") or []))
+    f_old = sorted(_friction_text(f) for f in _friction_items(last.get("friction")))
+    f_new = sorted(_friction_text(f) for f in _friction_items(res.get("friction")))
     same_friction = bool(f_old) and f_old == f_new
     return same_summary or same_friction
 
