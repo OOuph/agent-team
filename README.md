@@ -1,10 +1,11 @@
 # agent-team
 
 agent-team is a dispatcher that runs a small product with AI roles: product owner, developer, reviewer, analyst,
-marketer, personas, a GEO probe and a voice-of-user researcher. Each role is a short headless
+marketer, editor, support, personas, a GEO probe and a voice-of-user researcher; a game product adds a designer, a game
+designer, a play-tester and an onboarding role (17 role cards in `team/roles/`). Each role is a short headless
 [Claude Code](https://claude.com/claude-code) run on a subscription token. You give it a product description, and it
-builds a static site and keeps improving it against measurable goals. People only decide things that fall outside the
-product's own vision.
+builds a static site (or, since 20 November 2026, a networked game with a long-running server) and keeps improving it
+against measurable goals. People only decide things that fall outside the product's own vision.
 
 The full scheme of the loop (roles, phases, task states, feedback, analytics, policies, self-improvement) is in
 [SCHEME.md](SCHEME.md). The live diary written by the team about itself: https://agentteam.formachines.ai.
@@ -13,7 +14,7 @@ The full scheme of the loop (roles, phases, task states, feedback, analytics, po
 
 Roles never talk to each other. Everything they produce is a file in `products/<slug>/` (tasks, questions,
 observations, reviews, digests, metrics), and an SQLite ledger records claims, events, spend and posts. Every hour
-`team cycle` runs the phases `collect → review → triage → execute → measure → geo → digest` for each product. The PO
+`team cycle` runs the phases `collect → review → triage → execute → measure → geo → voice → digest` for each product. The PO
 turns observations into tasks with acceptance criteria, the developer implements one task on a branch, the dispatcher
 merges it, and the site deploys itself from git. The reviewer checks the live site, the analyst reads the server logs,
 and the marketer posts in the channels it is allowed to use. Budgets, leases, a STOP file and an inactivity watchdog
@@ -42,8 +43,9 @@ asks one batch of clarifying questions and lists the accounts the team needs wit
 file, `team onboard my-game --answers` writes VISION.md, a game-design draft and the first backlog (`--dry-run` runs it on a
 bundled sample without a token). See SCHEME.md §11.
 
-Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team ask <slug> --text ...`, `team answer`, `team obs`,
-`team stop|resume`, `team digest`, `team export-public`, `team friction`, `team retro`.
+Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team task <slug> new|move|show`,
+`team ask <slug> --text ...`, `team answer`, `team obs`, `team lesson`, `team stop|resume`, `team deploy <slug>`,
+`team digest`, `team report`, `team export-public`, `team friction`, `team retro`, `team gsc`, `team autonomy-check`.
 
 Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`; a game server (long-running
 process, blue/green releases, health check, rollback, `team deploy`) in `deploy/service/`. Tests: `pytest -q`.
