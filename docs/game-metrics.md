@@ -33,7 +33,19 @@ block of its prompt.
       "reconnects": 5,
       "errors": 1,
       "first_mover_wins": 5,
-      "by_result": {"win": 9, "draw": 0, "timeout": 3, "resign": 2}
+      "by_result": {"win": 9, "draw": 0, "timeout": 3, "resign": 2},
+      "balance": {
+        "version": "v7",
+        "groups": {
+          "weapons": {
+            "railgun": {"picks": 120, "wins": 76, "kills": 310, "deaths": 190, "damage_dealt": 81200, "damage_taken": 60100},
+            "shotgun": {"picks": 100, "wins": 48, "kills": 240, "deaths": 251, "damage_dealt": 70400, "damage_taken": 72900}
+          }
+        },
+        "humans_only": {
+          "weapons": {"railgun": {"picks": 40, "wins": 27, "kills": 98, "deaths": 60, "damage_dealt": 26100, "damage_taken": 19800}}
+        }
+      }
     }
   }
 }
@@ -54,13 +66,58 @@ Rules:
 - Missing fields are fine (the renderer prints `—`); extra fields are kept in the day file and ignored by the tables.
 - No personal data: no names, IPs or user agents here (the file is public).
 
+## The `balance` block (optional; owner 21.11)
+
+Automatic balancing needs numbers per option, not per round. A game whose players pick something — a unit, a weapon, a
+class, a level — may add a `balance` object to every day:
+
+| Field | Meaning |
+|---|---|
+| `"version"` | the version of the balance tables (`design/balance/*.json`) that produced the day's matches. It changes with every balance patch; the dispatcher never mixes numbers of two versions |
+| `"groups"` | `{"<group name>": {"<option key>": {...}}}` — a group is one choice a player makes (weapons, chassis, levels); an option is one thing that can be picked |
+| `"picks"` | how many times the option was picked in a finished match (integer) |
+| `"wins"` | of those, how many times the picker won (integer) |
+| `"kills"`, `"deaths"` | totals for the pickers of the option (integers; print 0 or leave out when the game has no such notion) |
+| `"damage_dealt"`, `"damage_taken"` | totals for the pickers of the option (numbers) |
+| `"humans_only"` | optional, the same shape as `groups`: the same counts over matches of human players only. Bots can hide or fake an imbalance, so both are shown |
+
+Rules of the block:
+
+- Per day, like every other count; a day without matches may leave the block out. A server that sends no `balance`
+  block at all changes nothing: no table, no observation (every product before 21.11).
+- The dispatcher (`team/balance.py`) sums the block over the last `window_days` days (default 7) **that carry the newest
+  `version`**, and renders one table per group: option, picks, win rate (`wins / picks`), deviation (win rate − the
+  centre of the band), K/D, damage dealt/taken, verdict. It closes `metrics/latest.md` (PO, game designer) and the
+  analyst's digest.
+- Thresholds live in the product's `product.yaml`, defaults in code:
+
+  ```yaml
+  balance:
+    win_rate_band: [0.45, 0.55]   # an option is balanced while its win rate stays inside (default)
+    min_picks: 30                 # fewer picks = «few picks», shown but never raised (default)
+    window_days: 7                # days summed (default)
+    reraise_h: 24                 # the same finding is raised again after this many hours (default)
+    sim_report: design/reports/simulation.md   # the repository's simulation report shown to the game designer (default)
+  ```
+
+  The default band fits a duel (expected win rate 0.5). A free-for-all of N players has an expected win rate of 1/N:
+  set the band around it.
+- In every measure phase the dispatcher raises **one observation per option** whose win rate is outside the band with
+  at least `min_picks` picks — class `balance`, source `dispatcher`, title `Balance: <group>/<key> win rate 0.63 over
+  120 picks (band 0.45–0.55)` (`…, humans only` when only the human numbers are out). The same option of the same
+  tables version is not raised again for `reraise_h` hours; a new `version` (a patch went live) or the passed interval
+  raises it again. At most 6 new cards per check, the strongest deviations first. The PO turns each into a
+  game-designer task at once (`standing: balance`, `team/standing.py`); the cure is a data patch of one lever.
+- The same numbers from the product's own simulation are a file in the repository (`balance.sim_report`), written by
+  the developer's simulation tool; the game designer reads both and says where they disagree.
+
 ## How the team uses it
 
 | Reader | Where | What for |
 |---|---|---|
-| PO | `# LATEST METRICS` in the triage prompt (`metrics/latest.md`) | stage exit criteria (M1: ≥ N finished rounds/day, M2: returning players), what to fix first |
-| analyst | `metrics_digest` (newest day first) | task effects, goal status, `insufficient_data` honestly |
-| game-designer | `# GAME METRICS` in its prompt | balance: abandoned share, round length, first-mover share, rejected moves |
+| PO | `# LATEST METRICS` in the triage prompt (`metrics/latest.md`) | stage exit criteria (M1: ≥ N finished rounds/day, M2: returning players), what to fix first; the Balance table and `balance` observations |
+| analyst | `metrics_digest` (newest day first) | task effects, goal status, `insufficient_data` honestly; the effect of a balance patch across tables versions |
+| game-designer | `# GAME METRICS` in its prompt | balance: abandoned share, round length, first-mover share, rejected moves; the Balance table per option for the standing `balance` task |
 | tester | `team-fetch <base>/_team/metrics.json` during a play-test or a load task | before/after a load run: errors, latency, online |
 
 ## Load tasks (type `load`, role `tester`)

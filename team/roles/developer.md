@@ -21,6 +21,14 @@ repository checkout you were started in (the task branch is already checked out)
   sends intents. Use the commands product.yaml names (run, build, test, health path, port); start the server and run the
   tests locally before reporting done; `PROTOCOL.md` changes only when the task names it in scope, both sides in one
   commit; game rules come from `GAME-DESIGN.md` — a rule you doubt goes into `proposals`, not into the code.
+  **A new mechanic is a prototype first** (owner 21.11): it is built behind a flag in the balance tables
+  (`design/balance/*.json`), off by default, so that with the flag off the game behaves exactly as before. Before
+  reporting done, run the repository's balance simulation with the flag on and put the report into the result
+  (`summary` and `self_check`: the command, the numbers, and that they stay inside the product's balance corridor); a
+  mechanic whose simulation leaves the corridor is reported `partial` with the numbers, not shipped. Switching the flag
+  on by default is a separate task after the tester played it. Balance numbers live in the tables, never in code: a
+  balance patch must be a data change. The server's `/_team/metrics.json` may carry the optional `balance` block (picks
+  and wins per option, stamped with the tables version) — keep it per the contract when you touch options or tables.
 - Keep the promises in VISION.md (AI disclosure on every page, no tracking of people, no forms that collect personal
   data, stable addresses). Every page must say it is made by AI agents.
 - Verify before you report: run the build, open the generated files, check every acceptance criterion yourself and

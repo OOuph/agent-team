@@ -21,7 +21,7 @@ from typing import Any
 
 import yaml
 
-from . import geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, servicedeploy, voice
+from . import balance, geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, servicedeploy, standing, voice
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
@@ -372,7 +372,7 @@ class Cycle:
         if not out.exists() or out.read_text(encoding="utf-8") != txt:
             out.write_text(txt, encoding="utf-8")
             md = self.p.dir / "metrics" / "latest.md"
-            md.write_text(metrics_md(data), encoding="utf-8")
+            md.write_text(metrics_md(data, balance.settings(self.p.raw)), encoding="utf-8")
         return out
 
     def run_personas(self) -> None:
@@ -581,8 +581,30 @@ class Cycle:
         (self.p.dir / self.DEV_IDLE_FILE).write_text((now or datetime.now(timezone.utc)).isoformat(timespec="seconds"), encoding="utf-8")
         log.info("%s: developer idle, PO woken for defect/quality work", self.p.slug)
 
+    def create_standing_tasks(self) -> list[str]:
+        """Standing directions (owner 21.11, team/standing.py): the dispatcher itself creates the next task of every
+        direction that is due — none of its tasks open and `every_h` passed since the last one was created. No PO run is
+        needed; the PO finds the task in its backlog in the same phase. Nothing is created in a dry run or while the
+        product is stopped (STOP file, `paused`, onboarding not finished); a direction gated to a later stage waits."""
+        stop = self.stopped()
+        if stop:
+            log.info("%s: standing directions skipped: stopped (%s)", self.p.slug, stop)
+            return []
+        created: list[str] = []
+        for d in standing.due(self.p, self.store, _now()):
+            if self.dry_run:
+                log.info("[dry-run] %s: would create the standing task `%s` (%s, role %s)", self.p.slug, d.id, d.cadence, d.role)
+                continue
+            created.append(standing.create_task(self.p, self.store, d, cycle_id=self.cycle_id)["id"])
+        return created
+
     def phase_triage(self) -> None:
         from . import deputy
+        try:
+            self.create_standing_tasks()          # before the PO reads the backlog: it sees the new tasks, not a gap to fill
+        except Exception as exc:  # noqa: BLE001 — a bad `standing:` entry must not cost the product its triage
+            log.exception("%s: standing directions failed: %s", self.p.slug, exc)
+            self.store.event("standing.error", self.p.slug, "dispatcher", str(exc)[:300])
         try:
             deputy.run_for_product(self)          # owner away: answer owner questions by mandate before the PO reads them
         except Exception as exc:  # noqa: BLE001
@@ -652,6 +674,13 @@ class Cycle:
                 self.store.transition(t["id"], "ready", "po", "hypothesis rule met", force=True)
         for rt in res.get("ready_tasks") or []:
             dup = duplicate_task(self.store.tasks(OPEN_TASK_STATES), rt)
+            sid = str(rt.get("standing") or "")
+            if sid and not standing.known_id(self.p, sid):
+                log.warning("%s: PO task %r names an unknown standing direction %r — field dropped", self.p.slug, rt["title"][:60], sid)
+                sid = ""
+            if sid and not dup:
+                # one open task per standing direction (owner 21.11): the PO's task for a direction that has one open IS that task
+                dup = next((t for t in standing.tasks_of(self.store.tasks(), sid) if standing.is_open(t)), None)
             if dup:
                 # the PO re-proposed a task that is already open (same title, or the same role and start moment): one slot, one task
                 self.store.event("task.duplicate_skipped", dup["id"], "po", {"title": rt["title"][:140], "not_before": rt.get("not_before")})
@@ -667,6 +696,12 @@ class Cycle:
                 self.store.save_task(new)
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
+                self.store.save_task(new)
+            if sid:                                   # owner 21.11: counted as the direction's task — no second one, the cadence restarts
+                new[standing.TASK_FIELD] = sid
+                docs = next((list(d.docs) for d in standing.directions(self.p) if d.id == sid and d.docs), None)
+                if docs:
+                    new["docs"] = docs
                 self.store.save_task(new)
             if rt.get("hypothesis") or hypothesis.applies(new):
                 new["hypothesis"] = rt.get("hypothesis")
@@ -1162,7 +1197,7 @@ class Cycle:
             return True
         res = rr.structured
         files = [f for f in (res.get("files") or []) if isinstance(f, dict) and f.get("path") and prompts.safe_rel_path(str(f["path"]))]
-        partial = prompts.truncated_design_docs(self.p, gdd_dir)        # F18: never overwrite a document the role saw only in part
+        partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         refused = [str(f["path"]) for f in files if str(f["path"]) in partial]
         if refused:
             files = [f for f in files if str(f["path"]) not in partial]
@@ -1602,7 +1637,30 @@ class Cycle:
 
     # measure: daily analyst ---------------------------------------------------------------------------
 
+    def balance_check(self) -> list[str]:
+        """Automatic balance reading (owner 21.11, team/balance.py): every option of the metrics' optional `balance` block
+        whose win rate left the product's band with enough picks becomes ONE observation of class `balance` for the PO. The
+        same option of the same tables version is not raised again for `balance.reraise_h` hours. No block → nothing."""
+        data = prompts.latest_metrics(self.p)
+        days = (data or {}).get("days") or {}
+        if not balance.has_block(days):
+            log.debug("%s: balance check skipped: the metrics carry no balance block", self.p.slug)
+            return []
+        cfg = balance.settings(self.p.raw)
+        found = balance.findings(days, cfg)
+        cards = balance.observation_cards(found, self.store.observations(), cfg, now=_now(), url=self.p.site_base,
+                                          run_id=f"{self.cycle_id}-balance")
+        log.info("%s: balance check: band %s, min picks %d — %d option(s) out of band, %d new observation(s)%s", self.p.slug, cfg.band,
+                 cfg.min_picks, len(found), len(cards), " [dry-run: not written]" if self.dry_run and cards else "")
+        if self.dry_run:
+            return []
+        return [self.store.add_observation(c)["id"] for c in cards]
+
     def phase_measure(self) -> None:
+        try:
+            self.balance_check()                  # every cycle, no model run: an overpowered option does not wait for the analyst's slot
+        except Exception as exc:  # noqa: BLE001 — a malformed balance block must not cost the product its measure phase
+            log.exception("%s: balance check failed: %s", self.p.slug, exc)
         day = _now().strftime("%Y-%m-%d")
         every = int(self.st.cycle.get("measure_every_h", 24))
         slot = _now().hour // max(1, every)
@@ -1691,7 +1749,7 @@ class Cycle:
 
     def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]
-        metrics = [("digest", prompts.metrics_digest(files))]     # ops 04.11: compact per-day view, not cut raw files
+        metrics = [("digest", prompts.metrics_digest(files, balance_cfg=balance.settings(self.p.raw)))]     # ops 04.11: compact per-day view, not cut raw files
         gsc_md = self.p.dir / "metrics" / "gsc.md"
         if gsc_md.exists():
             metrics.append(("Google Search Console (team gsc, daily)", gsc_md.read_text(encoding="utf-8")))
@@ -1863,8 +1921,9 @@ def fingerprint(scope: str, cls: str, url: str, title: str) -> str:
     return hashlib.sha1(f"{scope}|{cls}|{path}|{t}".encode()).hexdigest()[:12]
 
 
-def game_metrics_md(data: dict[str, Any]) -> str:
-    """metrics/latest.md for a game product (docs/game-metrics.md): one row per day, newest last, plus the live counters."""
+def game_metrics_md(data: dict[str, Any], balance_cfg: balance.Config | None = None) -> str:
+    """metrics/latest.md for a game product (docs/game-metrics.md): one row per day, newest last, plus the live counters,
+    and the balance table when the server sends the optional `balance` block (owner 21.11, team/balance.py)."""
     days = data.get("days") or {}
     now = data.get("now") or {}
 
@@ -1884,12 +1943,13 @@ def game_metrics_md(data: dict[str, Any]) -> str:
                      f"{g(d, 'returning_players')} | {g(d, 'online_peak')} | {g(d, 'round_length_s', 'median')} | "
                      f"{g(d, 'move_latency_ms', 'p50')}/{g(d, 'move_latency_ms', 'p95')} | {g(d, 'rejected_moves')} | {g(d, 'disconnects')} | "
                      f"{g(d, 'errors')} | {g(d, 'first_mover_wins')} |")
-    return "\n".join(lines) + "\n"
+    bal = balance.render_md(days, balance_cfg)
+    return "\n".join(lines) + "\n" + (("\n" + bal) if bal else "")
 
 
-def metrics_md(data: dict[str, Any]) -> str:
+def metrics_md(data: dict[str, Any], balance_cfg: balance.Config | None = None) -> str:
     if prompts.is_game_metrics(data):
-        return game_metrics_md(data)
+        return game_metrics_md(data, balance_cfg)
     days = data.get("days") or {}
     lines = [f"# metrics {data.get('host', '')} — generated {data.get('generated', '')}", "",
              "| day | humans | engaged | returns | agents | crawlers | targets |", "|---|---|---|---|---|---|---|"]

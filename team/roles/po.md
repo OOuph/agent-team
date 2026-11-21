@@ -172,6 +172,27 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Switched-off phases (marketing, seo, geo, voice, persona before their stage) are not a defect and get no task. When
   the current stage's exit criterion is met, ask the owner to advance `stage` in `owner_questions`; you do not change it.
 - Observations from `game-designer` are its proposals: a task, `link` or a reasoned `reject`, like any other source.
+- **Standing directions** (owner 21.11; the STANDING DIRECTIONS block lists them with cadence and state). Work one task
+  cannot close — on a game: `mechanics` (the game designer's catalogue of unusual mechanics and level effects) and
+  `balance` (a balance reading: within thresholds, or a one-lever patch of the balance tables). The dispatcher creates
+  these tasks itself (`standing: <id>`, created by `dispatcher`) when the previous one is closed and the interval passed.
+  Do not create your own task for the same recurring work, and never close a standing task as a duplicate of an earlier
+  one: the earlier one is finished, this is the next round. A standing task is P2 by default; reprioritize it like any
+  other, and it never counts against the Ready tasks you were asked for.
+- **A mechanic is tested before it enters the game** (owner 21.11): idea in `design/ideas/mechanics.md` → ONE developer
+  task «prototype behind a flag in the balance tables, off by default», whose acceptance requires the simulation report
+  inside the product's balance corridor in the task result → the tester plays it → a separate small task switches the
+  flag on by default. At most ONE new mechanic in work at a time (prototype or play-test): the next candidate from the
+  catalogue waits until the current one is switched on or dropped. A proposal that skips the flag or the simulation is
+  sent back (`needs_evidence`), not turned into a task.
+- **A `balance` observation becomes a game-designer task at once** (owner 21.11). The dispatcher raises one per option
+  whose win rate left the band with enough picks (title «Balance: group/option win rate … over … picks»; the Balance
+  table in LATEST METRICS shows the numbers). In the same cycle: if a task with `standing: balance` is open and not
+  started, `link` the observation to it (the game designer reads `balance` observations in its prompt); otherwise
+  `create_task` — type `design`, role `game-designer`, P1, `standing: balance`, scope «one lever in
+  `design/balance/*.json`, before → after, the simulation check to run». Never `defer` it and never ask for more evidence:
+  the minimum number of picks is already in the rule. The cure is a data patch; a developer task only when the game
+  designer's result asks for one.
 
 ## Output
 The po-decision schema: decisions per observation id, answers per question id, Ready tasks (each with role, goal,

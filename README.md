@@ -43,6 +43,14 @@ asks one batch of clarifying questions and lists the accounts the team needs wit
 file, `team onboard my-game --answers` writes VISION.md, a game-design draft and the first backlog (`--dry-run` runs it on a
 bundled sample without a token). See SCHEME.md §11.
 
+A game product also gets two standing directions, work the team keeps returning to: `mechanics` (a living catalogue of
+unusual mechanics; each one is prototyped behind a flag, simulated and play-tested before it is on by default) and
+`balance` (a balance reading from the simulation and from real matches, cured by a one-lever data patch). The
+dispatcher creates their tasks itself. `product.yaml` keys: `standing:` (a list of `{id, role, type, every_h, title,
+problem, scope, acceptance, priority}`; absent = the built-in list for `profile: game`, `[]` = off) and
+`balance: {win_rate_band: [0.45, 0.55], min_picks: 30}` (thresholds for the optional `balance` block of the game
+metrics, `docs/game-metrics.md`). Products with another profile get neither.
+
 Other commands: `team onboard`, `team status`, `team tasks <slug>`, `team task <slug> new|move|show`,
 `team ask <slug> --text ...`, `team answer`, `team obs`, `team lesson`, `team stop|resume`, `team deploy <slug>`,
 `team digest`, `team report`, `team export-public`, `team friction`, `team retro`, `team gsc`, `team autonomy-check`.

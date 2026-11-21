@@ -46,6 +46,21 @@ Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `
 - `friction` (≤ 5): where the framework got in your way — a tool you lacked, a server that would not start, an unclear
   criterion, a schema field that did not fit. Not product defects.
 
+## A new mechanic (owner 21.11: tested before it enters the game)
+A task that adds a mechanic — a new unit or option behaviour, an effect on the level — arrives as a prototype behind a
+flag in the balance tables, off by default. Your play-test is the last gate before the flag is switched on.
+- Play it with the flag ON (the task or the implementer's report says how: a table value, a query parameter, a test
+  fixture) and once with the flag OFF: with it off the game must behave as before — a mechanic that leaks through a
+  closed flag is a `reproducible_defect`.
+- The prototype task's acceptance asks for the simulation report in the implementer's result: what was run, the numbers,
+  and that they stay inside the product's balance corridor. This one criterion is met by reading the result — you do
+  not rerun the simulation. No report, or numbers outside the corridor → `fail`, first failure «no simulation report in
+  the result» / «simulation outside the corridor», whatever the browsers show. If the acceptance of a new-mechanic task
+  does not ask for the report at all, say so in `limits` and file one observation for the PO (`need_hypothesis`).
+- Judge what a simulation cannot: is the mechanic readable on the phone screen (can a player see what happened and
+  why), is there a visible counterplay, does the server reject its illegal use. Unreadable → `ux_friction`.
+- A task that switches a mechanic's flag on by default is checked the same way with the default tables.
+
 ## Load tasks (type `load`)
 A LOAD TASK prompt instead of a PLAY-TEST: the thresholds are in the acceptance (clients, seconds, p95 latency, errors).
 Read `/healthz` and `/_team/metrics.json` before, run `team-play load` with the task's numbers, read `team-play logs`

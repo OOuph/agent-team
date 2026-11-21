@@ -48,6 +48,7 @@ GAME_TEMPLATE = TEMPLATES / "VISION.game.template.md"
 SAMPLE_FIXTURE = TEMPLATES / "onboarding.sample.yaml"
 SAMPLE_BRIEF = TEMPLATES / "onboarding.sample-brief.md"
 DEFAULT_PROFILE = "game"
+VISION_STANDING_HEADING = "Постоянные направления"   # the VISION section a game product must have (team/standing.py, owner 21.11)
 
 
 class OnboardingError(RuntimeError):
@@ -105,12 +106,25 @@ def questions_prompt(slug: str, brief: str, raw: dict[str, Any]) -> str:
             "\n## VISION TEMPLATE (what step 2 will have to fill — ask what it needs)\n" + GAME_TEMPLATE.read_text(encoding="utf-8"))
 
 
+def standing_note() -> str:
+    """Owner 21.11: what the dispatcher will create by itself on a game product (team/standing.py), so that the VISION
+    names the standing directions and the first backlog does not duplicate them."""
+    from . import standing
+    return ("## STANDING DIRECTIONS (the dispatcher creates these tasks itself — keep them OUT of the backlog)\n"
+            f"A game product gets recurring tasks without the PO: the list below, each from stage {standing.GAME_FROM_STAGE}. Fill the "
+            f"VISION section «{VISION_STANDING_HEADING}» with both directions and their cadences (adapt the wording to this game: what "
+            "its units, options and levels are; the balance corridor that fits its number of players per round). The first backlog "
+            "must contain NO task that does the same work (no «invent mechanics», no «check the balance», no recurring task).\n"
+            + standing.vision_section() + "\n\n")
+
+
 def plan_prompt(slug: str, brief: str, qa: dict[str, Any], raw: dict[str, Any]) -> str:
     return (f"# ONBOARDING — step 2: PLAN — product `{slug}`\n\n"
             "Read the brief and the owner's answers (empty answer = the default you proposed; say so in `decisions`) and return "
             "the onboarding-plan schema: the full VISION.md by the template, GAME-DESIGN.md v1 or a first game-designer task, "
             "product fields, the first backlog (M0 only; a task that needs an account the owner declined or postponed is "
             "`deferred` with `return_condition`), decisions and a Russian summary for the owner.\n\n"
+            + standing_note() +
             "## BRIEF\n" + brief.strip() +
             "\n\n## QUESTIONS AND ANSWERS\n" + yaml.safe_dump(qa, sort_keys=False, allow_unicode=True, width=110) +
             "\n## PRODUCT (product.yaml as it is now)\n" + yaml.safe_dump({k: raw.get(k) for k in ("slug", "name", "host", "repo", "budget_usd_per_day")},
@@ -293,7 +307,14 @@ def apply_answers(st: C.Settings, slug: str, answers_path: Path | None = None, *
 
 def apply_plan(d: Path, raw: dict[str, Any], plan: dict[str, Any], qa: dict[str, Any]) -> dict[str, Any]:
     """Write the plan into the product folder. Pure file/store work, no model: tested directly."""
-    (d / "VISION.md").write_text(str(plan.get("vision_md") or ""), encoding="utf-8")
+    vision = str(plan.get("vision_md") or "")
+    profile = str((plan.get("product") or {}).get("profile") or DEFAULT_PROFILE)
+    if profile == "game" and VISION_STANDING_HEADING.lower() not in vision.lower():
+        # owner 21.11: every game VISION names the standing directions; a plan that left the section out gets the default one
+        from . import standing
+        vision = vision.rstrip("\n") + f"\n\n## {VISION_STANDING_HEADING}\n{standing.vision_section()}\n"
+        log.warning("%s: the onboarding plan's VISION had no «%s» section — the default one was appended", d.name, VISION_STANDING_HEADING)
+    (d / "VISION.md").write_text(vision, encoding="utf-8")
     gdd = str(plan.get("game_design_md") or "").strip()
     if gdd:
         (d / GAME_DESIGN_FILE).write_text(gdd + "\n", encoding="utf-8")

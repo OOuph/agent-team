@@ -222,6 +222,9 @@ def cmd_status(st: C.Settings, a: argparse.Namespace) -> int:
         sm = summary(s)
         print(f"== {p.slug} ({p.site_base}) stop={'yes' if p.stop_file.exists() else 'no'}")
         print(f"   cadence: {_cadence_line(st, p)}")
+        from . import standing
+        for ln in standing.status_lines(p, s):        # owner 21.11: one line per standing direction — cadence, next due or the open task
+            print(f"   {ln}")
         print(f"   tasks {sm['tasks']}: " + ", ".join(f"{k} {v}" for k, v in sorted(sm['by_state'].items())))
         print(f"   open questions {sm['open_questions']} · new observations {sm['new_observations']} · spent today ${sm['spent_today']:.2f} / cap ${p.daily_cap:.0f}")
         for c in s.cycles(5):
