@@ -123,6 +123,8 @@ def cmd_test(a: argparse.Namespace) -> int:
         argv.append(a.spec)
     env = dict(os.environ)
     env.update({"BASE_URL": base, "PLAYWRIGHT_BASE_URL": base, "PW_TEST_HTML_REPORT_OPEN": "never", "CI": "1"})
+    if a.project and a.project.lower().startswith("mobile"):
+        env["E2E_MOBILE"] = "1"  # the repository's playwright.config enables its mobile projects on this
     t0 = time.time()
     try:
         cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=TEST_TIMEOUT_S, env=env)
@@ -138,7 +140,12 @@ def cmd_test(a: argparse.Namespace) -> int:
         report = json.loads(cp.stdout[start:])
         raw_path.write_text(cp.stdout[start:], encoding="utf-8")
     except (ValueError, json.JSONDecodeError):
-        print(f"team-play: no JSON report (exit {cp.returncode}); output tail:\n{(cp.stdout + cp.stderr)[-2000:]}")
+        tail = cp.stdout + cp.stderr
+        print(f"team-play: no JSON report (exit {cp.returncode}); output tail:\n{tail[-2000:]}")
+        if a.project and re.search(r"project.*not found", tail, re.I):
+            m = re.search(r"Available projects?:[^\n]*", tail, re.I)
+            print("team-play: unknown --project " + repr(a.project) + ". " + (m.group(0) if m else
+                  "List the names with `npx playwright test --list` (project names are in its output) or read playwright.config.ts; projects starting with 'mobile' get E2E_MOBILE=1."))
         return 2
     lines, totals = summarize(report)
     copied = copy_artifacts(cwd() / RESULTS_DIR, out)

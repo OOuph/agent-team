@@ -164,6 +164,32 @@ def test_team_play_test_runs_fake_playwright_and_copies_artifacts(tmp_path: Path
         play.main(["test", "--spec", "../x.spec.ts"])
 
 
+def test_team_play_test_sets_e2e_mobile_only_for_mobile_projects(tmp_path: Path, monkeypatch, capsys):
+    co = tmp_path / "checkout"; co.mkdir()
+    npx = _fake_npx(tmp_path, f"""
+        a = sys.argv[1:]
+        proj = a[a.index("--project") + 1] if "--project" in a else ""
+        if proj == "nope":
+            print('Error: Project(s) "nope" not found. Available projects: "phone", "mobile-360"')
+            sys.exit(1)
+        print("E2E_MOBILE=" + os.environ.get("E2E_MOBILE", "unset") + " project=" + proj)
+        print(json.dumps({json.dumps(SAMPLE_REPORT)}))
+        """)
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:4321")
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(tmp_path / "out")); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
+    monkeypatch.delenv("E2E_MOBILE", raising=False)
+    seen = []
+    real = play.subprocess.run
+    def spy(argv, **kw):
+        seen.append(kw["env"].get("E2E_MOBILE")); return real(argv, **kw)
+    monkeypatch.setattr(play.subprocess, "run", spy)
+    play.main(["test", "--project", "mobile-360"]); play.main(["test", "--project", "phone"]); play.main(["test"])
+    assert seen == ["1", None, None]
+    capsys.readouterr()
+    assert play.main(["test", "--project", "nope"]) == 2
+    assert 'Available projects: "phone", "mobile-360"' in capsys.readouterr().out
+
+
 def test_team_play_screenshot_validates_and_writes(tmp_path: Path, monkeypatch, capsys):
     co = tmp_path / "checkout"; co.mkdir()
     out = tmp_path / "out"
