@@ -192,3 +192,30 @@ def test_retro_duplicate_of_done_task() -> None:
     assert retro.duplicate_of(same_title, [{**done, "state": "rejected"}]) is None
     waiting = {**done, "id": "T-0101", "state": "waiting_owner", "title": "something else", "problem": "F-0001"}
     assert retro.duplicate_of(differs | {"files": ["team/roles/reviewer.md", "team/cycle.py"]}, [waiting]) == "T-0101"
+
+
+def test_friction_tolerates_string_and_scalar_entries(tmp_path: Path) -> None:
+    """ai-battles 21.11: a role returned friction items as bare strings; collect_product raised
+    `'str' object has no attribute 'get'` and the whole friction/retro pass of every product died for seven hours."""
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    s.add_result(t["id"], {"run_id": "r1", "status": "partial", "friction": ["e2e takes 92% of the run", {"kind": "missing_tool", "what": "no curl"}, None, 7]})
+    s.add_result(t["id"], {"run_id": "r2", "status": "partial", "friction": "one string instead of a list"})
+    s.add_review(t["id"], {"verdict": "inconclusive", "summary": "x", "friction": ["page cut"]}, "r3")
+    recs = [r for r in friction.collect_product(p, s) if r["kind"] == "reported"]
+    text = " | ".join(r["summary"] for r in recs)
+    assert len(recs) == 6
+    assert "[unspecified] e2e takes 92% of the run" in text and "[missing_tool] no curl" in text
+    assert "[unspecified] one string instead of a list" in text and "reviewer: [unspecified] page cut" in text
+    assert friction.entry({"what": "w"}) == {"kind": "unspecified", "what": "w"} and friction.entry(None) == {"kind": "unspecified", "what": ""}
+    s.close()
+
+
+def test_stuck_check_tolerates_string_friction() -> None:
+    """The continuation check compares friction of two attempts; a bare string item must not raise."""
+    from team import cycle
+    assert cycle._friction_items("x") == ["x"] and cycle._friction_items(None) == [] and cycle._friction_items([1, "a"]) == [1, "a"]
+    assert cycle._friction_text("slow e2e") == "slow e2e" and cycle._friction_text({"kind": "k", "what": "w"}) == "w"
+    assert cycle._friction_text({"kind": "k"}).startswith("{")
