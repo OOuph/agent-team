@@ -15,6 +15,11 @@ the TEST RUN the dispatcher already made (unit tests: command, exit code, output
   screenshots, traces) are copied into the review folder and listed.
 - `team-play screenshot <url> --out <name>.png [--width 360 --height 740] [--full-page]` — a picture of a page on the
   phone viewport (default) or another size; the URL must be on the server's host.
+- `team-play shots [--weapon KEY] [--ability KEY] [--prefix <task id>]` — frames of a real battle at 1280×720 (owner
+  22.11): the repository's script `tests/tools/battle-shots.mjs` plays one battle against bots in one browser and writes
+  PNG frames into the review folder — the garage, the start, your own shot, your own ability, driving — and prints for
+  each frame what the page itself reports (cars on the arena, stray objects, ability mark, reload state). Open every
+  frame with Read. Without the script the command says so: put that into `limits`.
 - `team-play logs [--tail N]` — the server log (errors, rejected moves, crashes).
 - `team-play load --clients N --seconds S [--rate R] [--moves]` — the repository's load script (`tests/load/clients.ts`)
   opens N WebSocket clients against the server and prints one summary line (connected, messages, p50/p95 ms, errors,
@@ -38,6 +43,16 @@ Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `
 - You could not check a criterion → say exactly why in `first_failure` and `limits` (the command and its output, e.g.
   «No tests found», a missing module, a page that needs a battle). `inconclusive` is never an acceptance: after three
   of them the task of a game product is blocked and the PO decides, so an honest reason is what moves it.
+- Look at the battle (owner 22.11: seven of eight bugs the owner found by playing in one day were visible only on a
+  frame of a battle, and no check had looked at one). When the task changes anything the player sees in a battle —
+  `src/client`, a weapon, an ability, the HUD, a section of DESIGN.md — run `team-play shots` with the weapon and the
+  ability the task is about, open every frame and compare it with DESIGN.md and with common sense: is what must be
+  there visible and in the right place (the shot leaves the barrel forward, the ability mark is on for the whole
+  action, the indicator is where the design puts it); is there anything that must not be there (a beam behind the car,
+  a car that is not in the score table, a line that looks like a second barrel, two weapons that look the same when the
+  design says they differ). A frame that contradicts the design is a `fail` with the frame name as evidence, even when
+  every scenario passed; what you could not see on five frames goes into `limits`. Passing scenarios are not a
+  substitute for the frames, and the frames are not a substitute for the scenarios.
 - Watch the server: `team-play logs` after the scenarios; a stack trace or an unhandled rejection is a defect even when
   the tests pass. Console errors from the browser (reported by the tests) go into `console_errors`.
 - Latency when the task promises one (e.g. «a move appears within 1 s»): the test asserts it; quote the number.
