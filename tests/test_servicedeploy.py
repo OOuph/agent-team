@@ -188,6 +188,51 @@ def test_second_deploy_goes_blue_green_and_the_same_sha_is_skipped(host: Host):
     assert "stop agent-team-svc@fleets-a" in (host.systemd / "calls.log").read_text()
 
 
+def _busy(host: Host, colour_release: Path, n: int) -> None:
+    """The fake game is a python http.server over the release directory: the busy document is a file in it."""
+    d = colour_release / "_team"; d.mkdir(exist_ok=True)
+    (d / "metrics.json").write_text(json.dumps({"now": {"rooms_playing": n, "online": n}}))
+
+
+def test_deploy_waits_for_the_old_colour_to_finish_its_matches(host: Host):
+    """ai-battles 22.11 (F42): a deploy stopped the old colour 5 s after the switch and froze the running battles. The old
+    colour now stays until it reports no running match; the cap bounds the wait."""
+    import threading
+    assert host.deploy().returncode == 0
+    old_release = Path(host.state_json()["release"]); old_port = host.state_json()["port"]
+    _busy(host, old_release, 1)                                   # a match is running on the live colour
+    host.commit("two")
+    threading.Timer(2.0, _busy, args=(host, old_release, 0)).start()   # ... and ends two seconds into the drain
+    env = {**host.env(), "DRAIN_POLL_SEC": "0.5", "DRAIN_MAX_SEC": "30"}
+    t0 = time.time()
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=120)
+    took = time.time() - t0
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert "still serves 1 match(es): waiting up to 30s" in cp.stdout and "finished its matches after" in cp.stdout
+    assert 1.5 < took < 25                                        # it waited for the match, far short of the cap
+    assert host.upstream_port() != old_port and "action=drained" in host.log.read_text()
+    assert not _port_open(old_port)                              # only then was the old colour stopped
+
+
+def test_deploy_drain_is_capped_and_a_colour_without_a_busy_document_is_not_waited_for(host: Host):
+    assert host.deploy().returncode == 0
+    old_release = Path(host.state_json()["release"]); old_port = host.state_json()["port"]
+    _busy(host, old_release, 2)                                   # the matches never end
+    host.commit("two")
+    env = {**host.env(), "DRAIN_POLL_SEC": "0.5", "DRAIN_MAX_SEC": "2"}
+    t0 = time.time()
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=120)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert 1.5 < time.time() - t0 < 20 and "stopping it anyway" in cp.stderr and "action=drain_cap" in host.log.read_text()
+    assert not _port_open(old_port)
+    # the new live colour has no busy document at all (a service that does not report matches): the third deploy does not wait
+    host.commit("three")
+    t0 = time.time()
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True,
+                        env={**host.env(), "DRAIN_MAX_SEC": "60"}, timeout=120)
+    assert cp.returncode == 0 and "does not report running matches" in cp.stdout and time.time() - t0 < 20
+
+
 def test_rollback_returns_to_the_previous_release(host: Host):
     assert host.deploy().returncode == 0
     sha1 = host.state_json()["sha"]
