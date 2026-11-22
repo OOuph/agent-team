@@ -1,5 +1,18 @@
 # /etc/sudoers.d/agent-team-deploy — installed by deploy/service/install.sh (mode 0440).
 # The dispatcher (user __USER__) may deploy and roll back registered services without a password; nothing else.
-# deploy-service.sh validates its arguments (slug [a-z0-9-], --sha hex) and reads the service definition from
-# /etc/agent-team/services/<slug>.conf, which only root writes (add-service.sh), so no command text comes from the caller.
+#
+# What runs as root: deploy-service.sh itself — the check of its arguments (slug [a-z0-9-], --sha hex), the lock, the
+# ownership of the service's directories, the instance env file, systemctl start / stop of agent-team-svc@<slug>-<colour>,
+# the nginx upstream file with nginx -t and reload, the state file and the deploy journal. Its settings come from
+# /etc/agent-team/services/<slug>.conf, which only root writes (add-service.sh), and sudo's env_reset keeps the
+# caller's environment out, so the caller chooses nothing but the slug, the commit and --rollback / --force.
+#
+# What does not run as root: everything that reads or executes the product repository — git clone / fetch / checkout,
+# the copy into the release, INSTALL_CMD (npm ci) and BUILD_CMD (npm run build). The command text of those two steps
+# does come from outside root's files: the `scripts` of package.json (postinstall, build) are written in the product
+# repository, and the developer role merges into it without a human. deploy-service.sh therefore runs these steps as
+# the service user through `runuser` with a clean environment, and stops before any of them when it cannot drop root.
+# The server process is that same user (agent-team-svc@.service).
+#
+# Still true: any process of __USER__ can start a deploy, a rollback or --force of any registered service.
 __USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh

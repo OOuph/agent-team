@@ -10,3 +10,8 @@ INSTALL_CMD=""               # empty = npm ci when package-lock.json exists, els
 HEALTH_PATH=/healthz
 PORT_A=8101                  # colour a
 PORT_B=8102                  # colour b — the deploy alternates between the two; nginx proxies to the live one
+# Optional, normally absent. git, install and build of a deploy run as the service user (ubuntu), never as root.
+# A private repository: REPO=git@github.com:org/game.git with a deploy key in ~ubuntu/.ssh, or an https REPO read with
+# the token of the dispatcher through /opt/agent-team/bin/git-credential-dispatcher (the default for https; README).
+#GIT_CREDENTIAL_HELPER=""                                  # no helper: public repository, or the git config of the service user
+#DISPATCHER_ENV_FILE=/home/ubuntu/agent-team/dispatcher/.env   # where the helper reads GITHUB_TOKEN (this is its default)
