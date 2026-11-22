@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-22
+
+- A service deploy no longer cuts running matches (ai-battles 22.11, friction F42: `deploy-service.sh` stopped the old colour `DRAIN_SEC` = 5 s after the nginx switch; every deploy froze the battle of whoever was playing — five deploys in one hour on 21.11, the owner's battle among them). After the switch the script now asks the old colour whether it still serves matches (`DRAIN_BUSY_PATH`, default `/_team/metrics.json`; `DRAIN_BUSY_FIELD`, default `now.rooms_playing`) every `DRAIN_POLL_SEC` and stops it only when the number is 0 or after `DRAIN_MAX_SEC` (240 s); a service that publishes no such document is drained as before. New connections go to the new colour at once, so the old one empties within one match. Cost: a deploy may take up to `DRAIN_MAX_SEC` longer while a match is running. Existing hosts get the script with `deploy/service/install.sh` (root).
+
 ## 2026-11-21
 
 - A merge conflict between a continuing task branch and the base is never resolved automatically (ai-battles 21.11, friction F39). `gitops._checkout_task_branch` used to fall back to `git merge -X ours` (then `-s ours`): the base's side of every conflicting hunk was dropped without a trace, the branch then merged cleanly into main, and main lost other tasks' released work — task T-0038 erased 45 lines of CSS, 99 lines of tests and a client change released hours earlier by T-0068, T-0071 and a hotfix; the live game ran without them for 50 minutes. Now the branch stays as the earlier attempt left it, without the base; the merge into the base raises MergeConflict (nothing is merged), and the role gets the MERGE CONFLICT block and merges the base itself, keeping both sides. `prompts.conflict_block` and the developer card say so. Cost: a conflicting task spends one more run on the reconcile.

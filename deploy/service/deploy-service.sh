@@ -13,8 +13,9 @@
 #
 # Steps: lock → fetch → stage releases/<sha12> (rsync, no .git) → install (npm ci / npm install when package.json is
 # there) → build (BUILD_CMD) → write the instance env for the idle colour → systemctl start agent-team-svc@<slug>-<colour>
-# → poll http://127.0.0.1:<port><HEALTH_PATH> until 200 → write the nginx upstream → nginx -t → reload → stop the old
-# colour after DRAIN_SEC → prune releases (KEEP_RELEASES, never the live or the previous one) → state + journal.
+# → poll http://127.0.0.1:<port><HEALTH_PATH> until 200 → write the nginx upstream → nginx -t → reload → wait while the
+# old colour still serves matches (DRAIN_BUSY_PATH / DRAIN_BUSY_FIELD, at most DRAIN_MAX_SEC), stop it after DRAIN_SEC
+# → prune releases (KEEP_RELEASES, never the live or the previous one) → state + journal.
 # A failed health check stops the new instance and leaves the live one untouched (exit 20). A failed nginx -t restores
 # the previous upstream file (exit 21). The last stdout line on success: `== deployed slug=… sha=… colour=… port=… url=…`.
 # Exit codes: 0 deployed · 10 nothing to do (same commit live) · 20 health failed · 21 nginx failed · 64 usage · 1 other.
@@ -44,6 +45,14 @@ HEALTH_POLL_SEC="${HEALTH_POLL_SEC:-1}"
 HEALTH_TIMEOUT_SEC="${HEALTH_TIMEOUT_SEC:-5}"
 HEALTH_HOST="${HEALTH_HOST:-127.0.0.1}"
 DRAIN_SEC="${DRAIN_SEC:-5}"                                     # old colour keeps running this long after the switch (clients reconnect)
+# ai-battles 22.11 (F42): the old colour used to be stopped DRAIN_SEC after the switch, with its matches still running — a
+# deploy froze the battle of everyone playing (five deploys in one hour on 21.11). Existing connections stay on the old
+# colour after the nginx reload, new ones go to the new colour, so the old colour only has to be left alone until its
+# matches end. It reports them itself: a JSON document with a number that is > 0 while a match is running.
+DRAIN_BUSY_PATH="${DRAIN_BUSY_PATH-/_team/metrics.json}"        # path on the old colour; empty = no busy check (plain DRAIN_SEC)
+DRAIN_BUSY_FIELD="${DRAIN_BUSY_FIELD:-now.rooms_playing}"       # dotted path to the number of running matches in that JSON
+DRAIN_MAX_SEC="${DRAIN_MAX_SEC:-240}"                           # cap on the wait (a match is 180 s); then the old colour is stopped anyway
+DRAIN_POLL_SEC="${DRAIN_POLL_SEC:-5}"                           # how often the old colour is asked
 KEEP_RELEASES="${KEEP_RELEASES:-3}"
 INSTALL_TIMEOUT_SEC="${INSTALL_TIMEOUT_SEC:-600}"
 BUILD_TIMEOUT_SEC="${BUILD_TIMEOUT_SEC:-600}"
@@ -132,6 +141,22 @@ health() {
   code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time "$HEALTH_TIMEOUT_SEC" "http://$HEALTH_HOST:$1$HEALTH_PATH" 2>/dev/null || true)"
   [ -n "$code" ] || code="000"
   echo "$code"
+}
+
+# busy_of <port> → the number of matches the instance on that port still serves ("" when it does not say: no such path,
+# not JSON, no such field — the caller then falls back to the plain DRAIN_SEC)
+busy_of() {
+  [ -n "$DRAIN_BUSY_PATH" ] || { echo ""; return 0; }
+  curl -sS --max-time "$HEALTH_TIMEOUT_SEC" "http://$HEALTH_HOST:$1$DRAIN_BUSY_PATH" 2>/dev/null | python3 -c '
+import json, sys
+try:
+    v = json.load(sys.stdin)
+    for k in sys.argv[1].split("."):
+        v = v[k]
+    print(max(0, int(v)))
+except Exception:
+    print("")
+' "$DRAIN_BUSY_FIELD" 2>/dev/null || echo ""
 }
 
 unit_of() { echo "$UNIT_PREFIX$SLUG-$1"; }
@@ -304,7 +329,28 @@ fi
 
 # --- 7. retire the old colour, prune, state ----------------------------------------------------------------------------
 if [ -n "$cur_colour" ] && [ "$cur_colour" != "$colour" ]; then
-  echo "[$SLUG] draining $(unit_of "$cur_colour") for ${DRAIN_SEC}s, then stopping"
+  old_unit="$(unit_of "$cur_colour")"
+  busy="$(busy_of "${cur_port:-0}")"; drained=0
+  if [ -n "$busy" ] && [ "$busy" -gt 0 ]; then
+    echo "[$SLUG] $old_unit still serves $busy match(es): waiting up to ${DRAIN_MAX_SEC}s before stopping it (new players already go to :$port)"
+    drain_t0=$SECONDS
+    while [ $((SECONDS - drain_t0)) -lt "$DRAIN_MAX_SEC" ]; do
+      sleep "$DRAIN_POLL_SEC"
+      busy="$(busy_of "${cur_port:-0}")"
+      if [ -z "$busy" ] || [ "$busy" -eq 0 ]; then break; fi
+    done
+    drained=$((SECONDS - drain_t0))
+    if [ -n "$busy" ] && [ "$busy" -gt 0 ]; then
+      echo "[$SLUG] WARNING: $old_unit still serves $busy match(es) after ${drained}s (cap DRAIN_MAX_SEC=${DRAIN_MAX_SEC}); stopping it anyway" >&2
+      log "sha=${sha:0:12} action=drain_cap colour=$cur_colour busy=$busy waited=${drained}s"
+    else
+      echo "[$SLUG] $old_unit finished its matches after ${drained}s"
+      log "sha=${sha:0:12} action=drained colour=$cur_colour waited=${drained}s"
+    fi
+  elif [ -z "$busy" ] && [ -n "$DRAIN_BUSY_PATH" ]; then
+    echo "[$SLUG] $old_unit does not report running matches ($DRAIN_BUSY_PATH: $DRAIN_BUSY_FIELD): plain drain"
+  fi
+  echo "[$SLUG] draining $old_unit for ${DRAIN_SEC}s, then stopping"
   sleep "$DRAIN_SEC"
   stop_instance "$cur_colour"
 fi
