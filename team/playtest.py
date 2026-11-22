@@ -160,6 +160,14 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
             if rc != 0:
                 raise PlaytestError(f"install failed (exit {rc}): {inst}\n" + _tail(log_path))
         if live:
+            # ai-battles 22.11: generated sources (src/engine/balance.data.ts after T-0133) are not in git, so on the
+            # un-built checkout every spec failed at import («No tests found») and the reviews were inconclusive from
+            # 19:24 UTC on. The tester's Playwright runs from this checkout, so it is built here as well; a failed build
+            # is reported like a failed install.
+            if product.build_cmd:
+                rc = _run(product.build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
+                if rc != 0:
+                    raise PlaytestError(f"build failed (exit {rc}): {product.build_cmd}\n" + _tail(log_path))
             log_fh.write(f"\ndeployed host {live} in use; no local server\n")
             log_fh.close()
             return Server(base_url=live, port=None, dest=dest, log_path=log_path, proc=None, local=False, notes=[f"deployed host {live} used; no local server"])

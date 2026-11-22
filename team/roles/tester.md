@@ -30,8 +30,14 @@ Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `
 - Multiplayer is the point: the scenario that matters has two browser contexts — player A acts, player B's page changes
   without a reload. Check the negative side too: an illegal move is rejected by the server and nothing changes on either
   board; a third player gets a clear refusal. A test with one context cannot prove synchronisation; say so.
-- Phone first: at least one screenshot at 360×740 of the main screen of the change, with no horizontal scroll and
+- The product's first screen comes first (owner 22.11): read VISION. When it says the product is desktop-only for now
+  (or the task names the desktop), the required screenshot is 1280×720 of the main screen of the change
+  (`team-play screenshot <url> --out <name>.png --width 1280 --height 720`) and `--project desktop` for the scenarios;
+  the phone is then optional. Otherwise phone first: at least one screenshot at 360×740, with no horizontal scroll and
   readable state. Note anything a player could not tap or read.
+- You could not check a criterion → say exactly why in `first_failure` and `limits` (the command and its output, e.g.
+  «No tests found», a missing module, a page that needs a battle). `inconclusive` is never an acceptance: after three
+  of them the task of a game product is blocked and the PO decides, so an honest reason is what moves it.
 - Watch the server: `team-play logs` after the scenarios; a stack trace or an unhandled rejection is a defect even when
   the tests pass. Console errors from the browser (reported by the tests) go into `console_errors`.
 - Latency when the task promises one (e.g. «a move appears within 1 s»): the test asserts it; quote the number.
@@ -57,7 +63,7 @@ flag in the balance tables, off by default. Your play-test is the last gate befo
   not rerun the simulation. No report, or numbers outside the corridor → `fail`, first failure «no simulation report in
   the result» / «simulation outside the corridor», whatever the browsers show. If the acceptance of a new-mechanic task
   does not ask for the report at all, say so in `limits` and file one observation for the PO (`need_hypothesis`).
-- Judge what a simulation cannot: is the mechanic readable on the phone screen (can a player see what happened and
+- Judge what a simulation cannot: is the mechanic readable on the product's first screen (can a player see what happened and
   why), is there a visible counterplay, does the server reject its illegal use. Unreadable → `ux_friction`.
 - A task that switches a mechanic's flag on by default is checked the same way with the default tables.
 
