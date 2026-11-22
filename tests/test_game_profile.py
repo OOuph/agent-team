@@ -403,3 +403,80 @@ def test_truncated_design_document_is_marked_and_never_overwritten(tmp_path: Pat
         store.close()
     assert "TRUNCATED: only the last 500" in prompt and "TAIL-MARKER" in prompt and "HEAD-MARKER" not in prompt
     assert prompts.truncated_design_docs(p, repo) == {prompts.GDD_FILE}
+
+
+# ------------------------------------------------------------------ owner 22.11 (ai-battles day review): data changes are tested before the merge
+
+def _gd_task(p: C.Product) -> str:
+    s = Store(p.dir)
+    t = s.create_task(title="balance pass", type_="design", problem="x", scope="GAME-DESIGN.md, design/balance/ships.json",
+                      acceptance=["a"], goal="M0", created_by="po", role="game-designer", state="ready")
+    s.close()
+    return t["id"]
+
+
+def _with_test_cmd(st: C.Settings, p: C.Product, cmd: str) -> C.Product:
+    import yaml
+    f = p.dir / "product.yaml"
+    raw = yaml.safe_load(f.read_text(encoding="utf-8"))
+    raw["repo"]["test_cmd"] = cmd
+    f.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    return C.load_product(st, p.dir)
+
+
+def test_game_designer_data_change_that_breaks_the_tests_is_not_merged(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _with_test_cmd(st, _game(st), "test ! -f design/balance/ships.json")       # red as soon as the table is in the tree
+    tid = _gd_task(p)
+    cyc = Cycle(st, p, FakeRunner(), "c1")
+    cyc.run(["execute"])
+    cyc.store.close()
+    assert not (p.repo_dir / "design" / "balance" / "ships.json").exists() and not (p.repo_dir / "GAME-DESIGN.md").exists()
+    assert "task/" + tid not in gitops.git(p.repo_dir, "branch", "--list")
+    s = Store(p.dir)
+    t = s.task(tid)
+    assert t["state"] == "blocked" and t["results"][-1]["status"] == "blocked" and "NOT merged" in t["results"][-1]["summary"]
+    qs = [q for q in s.questions(["open"]) if q["to"] == "po" and tid in (q.get("blocks") or [])]
+    assert len(qs) == 1 and "breaks the repository tests" in qs[0]["question"] and "design/balance/ships.json" in qs[0]["question"]
+    assert "exit code: 1" in qs[0]["question"]
+    assert "design.tests_failed" in [e["kind"] for e in s.events()]
+    s.close()
+
+
+def test_game_designer_data_change_with_green_tests_is_merged(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _with_test_cmd(st, _game(st), "test -f design/balance/ships.json")          # the tests see the new table and pass
+    tid = _gd_task(p)
+    cyc = Cycle(st, p, FakeRunner(), "c1")
+    cyc.run(["execute"])
+    cyc.store.close()
+    assert (p.repo_dir / "design" / "balance" / "ships.json").exists()
+    s = Store(p.dir)
+    assert s.task(tid)["state"] == "released" and "design.tests_failed" not in [e["kind"] for e in s.events()]
+    s.close()
+
+
+def test_game_designer_documents_alone_are_merged_without_running_the_tests(tmp_path: Path):
+    class DocsOnly(FakeRunner):
+        def run(self, role, prompt, schema, **kw):
+            rr = super().run(role, prompt, schema, **kw)
+            if role == "game-designer":
+                rr.structured["files"] = [f for f in rr.structured["files"] if f["path"].endswith(".md")]
+            return rr
+    st = _settings(tmp_path)
+    p = _with_test_cmd(st, _game(st), "exit 1")                                     # would fail if it ran
+    tid = _gd_task(p)
+    cyc = Cycle(st, p, DocsOnly(), "c1")
+    cyc.run(["execute"])
+    cyc.store.close()
+    s = Store(p.dir)
+    assert s.task(tid)["state"] == "released" and (p.repo_dir / "GAME-DESIGN.md").exists()
+    s.close()
+
+
+def test_tests_passed_reads_every_exit_code():
+    from team.cycle import tests_passed
+    assert tests_passed("$ npm test\nexit code: 0\nok")
+    assert not tests_passed("$ a\nexit code: 0\nok\n\n$ b\nexit code: 1\nboom")
+    assert not tests_passed("$ a\nexit code: timeout\ntimed out after 900 s")
+    assert tests_passed("(no tests found in the repository: no test_*.py files and no repo.test_cmd)")

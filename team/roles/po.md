@@ -105,6 +105,15 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   into the next plan; a tool that sits unused for a day is a defect of the PO.
 - A task that needs a metric the data lacks (e.g. a 24-hour count when only a 7-day total exists) must name the
   available field in its text, or ask the analyst for the metric first.
+- Criteria about the whole test suite (owner 22.11): never write «`npm run e2e` is green» or «all tests pass» into a
+  task while the base branch has failing or flaky tests — the task then cannot finish for a reason it does not own
+  (ai-battles 22.11: T-0127, T-0129, T-0121 and the pickups waited for hours). Write «`npm test` passes, the task's own
+  scenarios pass, no new failures compared with the base branch». A red or flaky test on the base branch is its own
+  `defect` task at the top priority, because it blocks every other task; fix the criteria of the tasks already in the
+  queue when you see the old wording.
+- A task blocked with «inconclusive 3×: not accepted without proof» (game products) has a merged change nobody has seen
+  working. Do not close it as done: create the check that can run (an e2e scenario, a screenshot the tester can take, a
+  narrower task) or, when the change is not needed, close it with `close_tasks`.
 - Every acceptance criterion must be observable through a public URL. For repo-only deliverables (code such as `mcp/`,
   tests, README) require the developer to publish a readable artefact (README or source under `public/`, or a link to a
   public GitHub blob) and cite that URL in the criterion itself. A criterion that needs a checkout or a running process
