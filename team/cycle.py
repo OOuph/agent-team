@@ -55,6 +55,11 @@ QUESTION_PROFILES_MAX = 4                                 # stopped runs listed 
 QUESTION_PROFILE_CHARS = 230                              # characters per run in that question, at most
 QUESTION_MAX_CHARS = 1480                                 # the store keeps 1500 characters of a question: the profile lines are cut to fit
 
+INCONCLUSIVE_LIMIT = 3                 # `inconclusive` verdicts of one released task before the rule below applies
+INCONCLUSIVE_ACCEPT, INCONCLUSIVE_ASK = "accept", "ask"   # product.yaml review.inconclusive; default by profile (Cycle.inconclusive_policy)
+DESIGN_TEST_SUFFIXES = (".json", ".yaml", ".yml", ".csv")   # game-designer files the code reads: the repository tests run before their merge
+DESIGN_TESTS_EVENT = "design.tests_failed"
+DESIGN_TESTS_TAIL_CHARS = 900          # how much of the failing test output goes into the result and the PO question
 GAME_ROLE_SLOTS = {"designer": 1, "game-designer": 1, "tester": 1}   # owner 20.11: seats the game profile adds to cycle.execute_slots
 PENDING_ROLES: tuple[str, ...] = ()                      # roles without an execute path (none since slice 6: a tester task = load test)
 LOAD_TASK_TYPES = ("load",)                               # tester tasks: N clients against a threshold (slice 6, docs/game-metrics.md)
@@ -127,6 +132,13 @@ def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "
             text = "… [head cut]\n" + text[-REVIEW_TEST_OUTPUT_CHARS:]
         out.append(f"$ {c}\nexit code: {code}\n{text}")
     return "\n\n".join(out)
+
+
+def tests_passed(report: str) -> bool:
+    """`run_tests_for_review` output → did every command exit with 0? No command at all (no tests in the repository) counts
+    as passed: there is nothing the change could break."""
+    codes = re.findall(r"^exit code: (\S+)$", report or "", re.M)
+    return all(c == "0" for c in codes)
 
 
 def schema(name: str) -> dict[str, Any]:
@@ -698,8 +710,28 @@ class Cycle:
         else:
             t["review_inconclusive"] = int(t.get("review_inconclusive") or 0) + 1
             self.store.save_task(t)
-            if t["review_inconclusive"] >= 3:
-                self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+            if t["review_inconclusive"] >= INCONCLUSIVE_LIMIT:
+                if self.inconclusive_policy() == INCONCLUSIVE_ASK:
+                    # owner 22.11 (ai-battles day review): on 22.11 ten tasks were accepted by this rule with nobody having
+                    # seen the result, the description field among them. No proof → no acceptance: the PO decides.
+                    why = _short_text(v.get("first_failure") or v.get("limits") or v.get("summary"), 300)
+                    self.store.transition(t["id"], "blocked", "reviewer", f"inconclusive {INCONCLUSIVE_LIMIT}×: not accepted without proof: {why}"[:400],
+                                          force=True, blocked_by="review")
+                    self.store.ask(from_="reviewer", to="po", task_id=None,
+                                   question=f"Task {t['id']} ({str(t.get('title') or '')[:80]}) could not be checked {INCONCLUSIVE_LIMIT} times: {why}. "
+                                            "Nobody has seen its result. Create a check that can run (a scenario, a screenshot, a narrower task) "
+                                            "or close the task with close_tasks; do not treat it as accepted.")
+                else:
+                    self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    def inconclusive_policy(self) -> str:
+        """What the third `inconclusive` verdict of a released task does. product.yaml `review: {inconclusive: accept | ask}`;
+        without the key: `ask` for the game profile (blocked + a PO question, owner 22.11), `accept` for every other
+        profile (the pilot's rule: a site task the reviewer cannot observe is accepted without external proof)."""
+        v = str(((self.p.raw.get("review") or {}) if isinstance(self.p.raw.get("review"), dict) else {}).get("inconclusive") or "").strip().lower()
+        if v in (INCONCLUSIVE_ACCEPT, INCONCLUSIVE_ASK):
+            return v
+        return INCONCLUSIVE_ASK if self.p.profile == "game" else INCONCLUSIVE_ACCEPT
 
     def playtest_due(self, t: dict[str, Any]) -> bool:
         """Game profile (owner 20.11, slice 4): a developer's or designer's change is accepted by the tester playing it; a
@@ -1710,6 +1742,27 @@ class Cycle:
                 gitops.git(wt, "commit", "-q", "-m", f"{t['id']}: game design — {', '.join(f['path'] for f in files)[:120]}")
                 result["branch"], result["commit"] = branch, gitops.head(wt)
                 self.store.add_result(t["id"], result)
+            # Owner 22.11 (ai-battles day review): the role writes balance tables without running anything and the dispatcher
+            # merged them at once — three windows of a red base branch in one day (2 h 20 min), T-0119 turned rockets into
+            # bullets. A change of a data file is tested before the merge, outside the repository lock (the tests take
+            # minutes); documents (.md) are merged as before.
+            data = [str(f["path"]) for f in files if str(f["path"]).lower().endswith(DESIGN_TEST_SUFFIXES)]
+            if data and self.p.test_cmd and not self.dry_run:
+                report = run_tests_for_review(repo, result["commit"], work / "tests-pre-merge", self.p.test_cmd, lock=self.repo_lock)
+                if not tests_passed(report):
+                    tail = _short_text(report[-DESIGN_TESTS_TAIL_CHARS:], DESIGN_TESTS_TAIL_CHARS)
+                    log.warning("%s: %s: tests fail with the game designer's data change %s: not merged", self.p.slug, t["id"], data)
+                    with self.repo_lock:
+                        gitops.remove_task_worktree(repo, wt, t["id"], delete_branch=True)     # the files are written again after the fix
+                    self.store.event(DESIGN_TESTS_EVENT, t["id"], "dispatcher", {"paths": data, "tail": tail[-400:]})
+                    self.store.add_result(t["id"], {"run_id": run_id, "status": "blocked", "changes": [],
+                                                    "summary": f"NOT merged: the repository tests fail with this data change ({', '.join(data)[:200]}). {tail}"[:1200]})
+                    self.store.ask(from_="dispatcher", to="po", task_id=t["id"], blocks=[t["id"]],
+                                   question=f"Task {t['id']}: the game designer's data change ({', '.join(data)[:200]}) breaks the repository tests, so it "
+                                            f"was NOT merged. Test output: {tail[-600:]} Create the developer task that makes the code or the tests ready "
+                                            "for this data (it lands first), then answer this question to run the designer's task again; or re-state the task.")
+                    return True
+            with self.repo_lock:
                 try:
                     sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch, worktree=wt)
                 except gitops.MergeConflict as exc:

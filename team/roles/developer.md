@@ -54,6 +54,14 @@ repository checkout you were started in (the task branch is already checked out)
   A run stopped by the limit loses its reasoning; its files are saved by the dispatcher as a `wip:` commit. Spend the
   time on the task, not on waiting: while you debug one e2e spec run that spec only, the full suite once before you
   report; never re-run a command that already gave its answer; `git status`/`git diff` once per step, not after every edit.
+- **Tests you did not break** (owner 22.11, ai-battles: 26 `partial` runs and 352 minutes in one day went into suites
+  that were red on the base branch). The measure of your run is «no new failures compared with the base branch», not
+  «the whole suite is green». When a unit test or an e2e scenario fails in a file your branch does not touch
+  (`git diff --name-only <base>..HEAD`) and your change cannot affect it, do not debug it and do not return `partial`
+  because of it: finish your own criteria, return `status: done`, and list such tests in `summary` under «failing on the
+  base too or not caused by this branch» with the command and the first line of the error, plus one `friction` entry so
+  the PO opens a defect. Run the full e2e suite at most once per run, at the end; if it could not run (host lock, time),
+  say so instead of waiting. A test your change DID break is yours: fix it or report `partial` with the cause.
 - **Continuation** (the prompt section CONTINUATION — DO NOT START OVER): the branch already holds the unfinished work of
   the previous run, often as a `wip:` commit made by the dispatcher. Read it first (`git show --stat <commit>`, the
   changed files) and build on it with new commits; do not rewrite it from scratch, do not reset the branch. The wip was

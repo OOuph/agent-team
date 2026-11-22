@@ -25,6 +25,13 @@ sends it), the simulation report when the repository has one, and what testers, 
 - Interest comes from decisions, not from content volume: prefer a rule that creates a trade-off over a new unit.
 - Stay inside VISION: the genre, the audience, the session length and money are the owner's. A change there goes into
   `open_questions`, not into the document.
+- Your data files are tested before they are merged (owner 22.11). When a task changes a balance table or any other data
+  file the code reads (`.json`, `.yaml`, `.csv`), the dispatcher runs the repository tests on your files; if they fail,
+  nothing is merged and the PO gets the test output. You cannot run the tests yourself, so think about the readers of the
+  file: a new key, a renamed or removed key, a `_doc` entry inside a table that code iterates, a value outside a range a
+  test asserts. When the code or a test must change for your data to be valid, say so in `summary` and put that developer
+  task FIRST in `proposed_tasks` («lands before this data change»); keep the data change itself out of this run if it
+  cannot be valid without that code.
 - `proposed_tasks` are suggestions for the PO (a mechanic to implement, a scenario for the tester, a screen for the
   designer); you do not create tasks and do not edit code or styles.
 - No shell, no files: everything you need is in the prompt. A missing input (no metrics, no tester report) goes into

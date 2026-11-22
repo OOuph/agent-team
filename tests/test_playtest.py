@@ -98,6 +98,19 @@ def test_live_host_is_used_without_a_local_server(tmp_path: Path):
     assert playtest.live_base_url(p) is None
 
 
+def test_live_host_checkout_is_built_for_the_tester(tmp_path: Path):
+    """ai-battles 22.11: generated sources are not in git; the tester's Playwright runs from the checkout even against the deployed host."""
+    st = _settings(tmp_path)
+    p = _game(st, deploy="service", site_base="https://fleets.example.test")
+    p.raw["repo"]["build_cmd"] = "echo generated > built.txt"
+    srv = playtest.start(p, p.repo_dir, gitops.head(p.repo_dir), tmp_path / "work")
+    assert not srv.local and (srv.dest / "built.txt").read_text().strip() == "generated"
+    playtest.stop(srv)
+    p.raw["repo"]["build_cmd"] = "exit 3"
+    with pytest.raises(playtest.PlaytestError, match="build failed"):
+        playtest.start(p, p.repo_dir, gitops.head(p.repo_dir), tmp_path / "work2")
+
+
 def test_install_cmd_detection(tmp_path: Path):
     assert playtest.install_cmd_for(tmp_path) == ""
     (tmp_path / "package.json").write_text("{}")
@@ -312,3 +325,71 @@ def test_tester_card_and_schema():
     with pytest.raises(jsonschema.ValidationError):
         jsonschema.validate({"verdict": "pass", "steps": [], "criteria": [], "summary": "s"}, schema("test-report"))
     assert C.DEFAULTS["claude"]["models"]["tester"] == "sonnet"
+
+
+# ------------------------------------------------------------------ owner 22.11 (ai-battles day review): no proof → no acceptance
+
+class InconclusiveRunner(FakeRunner):
+    """Every review comes back `inconclusive` (the tester could not run a single scenario)."""
+    def run(self, role, prompt, schema, **kw):
+        self.calls.append(role)
+        out = {"verdict": "inconclusive", "steps": [], "criteria": [{"criterion": "two tabs", "met": False, "evidence": "No tests found"}],
+               "scenarios": [], "screenshots": [], "summary": "could not run", "first_failure": "Cannot find module balance.data.js; No tests found"}
+        return RunResult(True, out, {"total_cost_usd": 0.1}, 0.1, 2, None, session_id="s", duration_s=1.0)
+
+
+def _three_reviews(st: C.Settings, p: C.Product, tid: str) -> Store:
+    for i in range(3):
+        cyc = Cycle(st, p, InconclusiveRunner(), f"c{i}")
+        cyc.run(["review"])
+        cyc.store.close()
+    return Store(p.dir)
+
+
+def test_game_task_is_not_accepted_after_three_inconclusive_reviews(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _game(st)
+    tid = _released(p)
+    s = _three_reviews(st, p, tid)
+    t = s.task(tid)
+    assert t["state"] == "blocked" and t["blocked_by"] == "review" and t["review_inconclusive"] == 3
+    assert "not accepted without proof" in t["history"][-1]["note"] and "balance.data.js" in t["history"][-1]["note"]
+    qs = [q for q in s.questions(["open"]) if q["to"] == "po" and tid in q["question"]]
+    assert len(qs) == 1 and "could not be checked 3 times" in qs[0]["question"] and "do not treat it as accepted" in qs[0]["question"]
+    s.close()
+
+
+def test_two_inconclusive_reviews_leave_the_task_released(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _game(st)
+    tid = _released(p)
+    for i in range(2):
+        cyc = Cycle(st, p, InconclusiveRunner(), f"c{i}")
+        cyc.run(["review"])
+        cyc.store.close()
+    s = Store(p.dir)
+    assert s.task(tid)["state"] == "released" and s.task(tid)["review_inconclusive"] == 2 and not s.questions(["open"])
+    s.close()
+
+
+def test_inconclusive_rule_follows_the_product_setting_and_the_profile(tmp_path: Path):
+    import yaml
+    st = _settings(tmp_path)
+    p = _game(st)
+    f = p.dir / "product.yaml"
+    raw = yaml.safe_load(f.read_text(encoding="utf-8"))
+    raw["review"] = {"inconclusive": "accept"}                      # a game product may ask for the pilot's rule back
+    f.write_text(yaml.safe_dump(raw, sort_keys=False), encoding="utf-8")
+    p = C.load_product(st, p.dir)
+    tid = _released(p)
+    s = _three_reviews(st, p, tid)
+    assert s.task(tid)["state"] == "accepted" and "accepted without external proof" in s.task(tid)["history"][-1]["note"]
+    s.close()
+    cyc = Cycle(st, p, InconclusiveRunner(), "cx")
+    assert cyc.inconclusive_policy() == "accept"
+    cyc.p.raw["review"] = {"inconclusive": "nonsense"}             # an unknown value falls back to the profile default
+    assert cyc.inconclusive_policy() == "ask"
+    cyc.p.raw.pop("review")
+    cyc.p.raw["profile"] = "site"
+    assert cyc.inconclusive_policy() == "accept"
+    cyc.store.close()
