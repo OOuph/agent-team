@@ -132,6 +132,7 @@ GD_OBS_CLASSES = ("defect", "ux_friction", "value_gap", "feedback", "balance")  
 TRUNCATED_NOTE = ("(TRUNCATED: only the last {shown} of {total} characters are shown. Do NOT return this file in `files` — a rewrite "
                   "from a truncated copy deletes content. Put the change into a new file and ask the PO to split the document.)\n")
 SERVICE_TEMPLATES = Path(__file__).parent / "templates" / "service-repo"   # starter playwright.config.ts, tests/e2e, tests/load, PROTOCOL.md
+SHOTS_SCRIPT_REL = "tests/tools/battle-shots.mjs"   # the repository's battle-frames script (`team-play shots`, owner 22.11)
 LOAD_SCRIPT_REL = "tests/load/clients.ts"   # the repository's load script (`team-play load`, slice 6)
 GAME_METRICS_DOC = Path(__file__).parent.parent / "docs" / "game-metrics.md"   # the /_team/metrics.json contract a game server serves
 
@@ -380,7 +381,11 @@ def tester_prompt(product: Product, task: dict[str, Any], result: dict[str, Any]
                + "\n" + ("\n".join(f"- {n}" for n in (server_notes or [])))
                + f"\nCheckout to read (Read/Glob/Grep): `{checkout}`. Review folder for screenshots and artifacts: `{out_dir}`.\n"
                + "`team-play test` runs the Playwright scenarios of the checkout against the base URL; `team-play screenshot <url> --out name.png` "
-               "takes a phone-viewport picture; `team-play logs` shows the server log.\n"
+               "takes a picture of a page; `team-play logs` shows the server log.\n"
+               + (f"Battle frames: `{SHOTS_SCRIPT_REL}` is present — `team-play shots --weapon KEY --ability KEY --prefix {task['id']}` plays one battle "
+                  "and writes frames (start, own shot, own ability, driving) into the review folder; Read them and compare with the design.\n"
+                  if (checkout / SHOTS_SCRIPT_REL).exists() else
+                  f"No `{SHOTS_SCRIPT_REL}` in the checkout: nobody can look at a battle; if the task changes what the player sees in a battle, say so in `limits`.\n")
                + ("E2E specs present: " + ", ".join(specs) if specs else "No tests/e2e specs in the checkout: judge from screenshots, /healthz and the server log, and say in `limits` which spec file is missing."))
             + "\n\n# TEST RUN (unit tests, by the dispatcher)\n" + (tests or "(none)")
             + "\n\nPlay every acceptance criterion and negative case in the browsers; quote test lines and screenshot names as evidence.\n")

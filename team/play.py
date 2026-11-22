@@ -3,6 +3,7 @@ one allow-listed binary that runs Playwright in a fixed checkout against a fixed
 
   team-play test [--grep TEXT] [--spec PATH] [--project NAME]    run the repository's Playwright tests (tests/e2e) against BASE_URL
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
+  team-play shots [--weapon KEY] [--ability KEY] [--prefix NAME]  frames of a battle (the repository's tests/tools/battle-shots.mjs) into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
   team-play load --clients N --seconds S [--rate R] [--script tests/load/clients.ts] [--moves]   N WebSocket clients against BASE_URL
 
@@ -37,6 +38,11 @@ LOAD_RUNNER = ["tsx"]                   # `npx tsx <script>`; TEAM_PLAY_LOAD_RUN
 MAX_LOAD_CLIENTS = 200
 MAX_LOAD_SECONDS = 300
 LOAD_EXTRA_TIMEOUT_S = 120
+SHOTS_SCRIPT = "tests/tools/battle-shots.mjs"   # the repository's battle-frames script (owner 22.11, ai-battles day review: «глаза в бою»)
+SHOTS_TIMEOUT_S = 180
+SHOTS_VIEWPORT = (1280, 720)           # the desktop first for the frames of a battle
+SHOTS_KEY_RE = re.compile(r"^[a-z_]{2,24}$")   # --weapon / --ability: a catalogue key of the game, nothing else reaches the script
+SHOTS_FACTS_CHARS = 260                # how much of a frame's facts line is printed
 LOAD_KEYS = ("clients", "connected", "seconds", "messages", "samples", "p50_ms", "p95_ms", "max_ms", "errors", "disconnects", "rejected")
 
 
@@ -226,6 +232,59 @@ def load_summary(d: dict, base: str, seconds: float) -> str:
     return f"load against {base}: " + ", ".join(parts) + f" · {seconds:.0f}s"
 
 
+def cmd_shots(a: argparse.Namespace) -> int:
+    """`team-play shots`: run the repository's battle-frames script against BASE_URL. The script plays one battle in one
+    browser and writes PNG frames into the review folder; its last stdout line is a JSON summary {frames: [{file, what, facts}]}.
+    The tester then reads the frames (Read) and compares them with the design. What a battle is and what is worth a
+    frame is the game's knowledge, so it lives in the repository, like the load script."""
+    script = Path(a.script or SHOTS_SCRIPT)
+    if ".." in script.parts or script.is_absolute():
+        sys.exit("team-play: --script is a path inside the checkout")
+    base = _env("TEAM_PLAY_BASE_URL")
+    if not base:
+        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to play on")
+    if not (cwd() / script).exists():
+        sys.exit(f"team-play: {script} not found in the checkout — the repository needs a battle-frames script (see the tester card); "
+                 "say so in `limits` and file one observation for the PO")
+    prefix = a.prefix or "battle"
+    if not NAME_RE.match(prefix):
+        sys.exit("team-play: --prefix is a plain name (letters, digits, - _ .), e.g. T-0173")
+    extra: list[str] = []
+    for flag, v in (("--weapon", a.weapon), ("--ability", a.ability)):
+        if v:
+            if not SHOTS_KEY_RE.match(v):
+                sys.exit(f"team-play: {flag} is a catalogue key in lower case (letters and _), e.g. railgun")
+            extra += [flag, v]
+    w, h = int(a.width or SHOTS_VIEWPORT[0]), int(a.height or SHOTS_VIEWPORT[1])
+    if not (100 <= w <= MAX_VIEWPORT and 100 <= h <= MAX_VIEWPORT):
+        sys.exit("team-play: viewport is 100..4000 px")
+    out = out_dir()
+    argv = [_env("TEAM_PLAY_NODE", "node"), str(script), *extra]
+    env = dict(os.environ)
+    env.update({"BASE_URL": base, "CI": "1", "SHOTS_OUT": str(out), "SHOTS_PREFIX": prefix, "SHOTS_WIDTH": str(w), "SHOTS_HEIGHT": str(h)})
+    try:
+        cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=SHOTS_TIMEOUT_S, env=env)
+    except FileNotFoundError:
+        sys.exit(f"team-play: {argv[0]} not found — Node is not installed on this machine (friction for the retro)")
+    except subprocess.TimeoutExpired:
+        sys.exit(f"team-play: the battle-frames script did not finish within {SHOTS_TIMEOUT_S}s")
+    d = parse_load_output(cp.stdout)            # the same contract as the load script: the last JSON object of stdout
+    frames = [f for f in (d or {}).get("frames") or [] if isinstance(f, dict) and NAME_RE.match(str(f.get("file") or ""))]
+    present = [f for f in frames if (out / str(f["file"])).exists()]
+    if d is None or not present:
+        print(f"team-play: no battle frames (exit {cp.returncode}). {str((d or {}).get('error') or '')[:MAX_ERROR_CHARS]}\noutput tail:\n{(cp.stdout + cp.stderr)[-1500:]}")
+        return 2
+    print(f"battle frames {w}x{h} against {base}: {len(present)} of {len(frames)} written, car {json.dumps(d.get('car') or {})}, exit {cp.returncode}")
+    for f in present:
+        facts = json.dumps(f.get("facts") or {}, ensure_ascii=False)[:SHOTS_FACTS_CHARS]
+        print(f"- {out / str(f['file'])} · {f.get('what', '')} · {facts}")
+    errs = [str(e)[:160] for e in (d.get("page_errors") or [])][:5]
+    if errs:
+        print("page errors: " + " | ".join(errs))
+    print("Read every frame before you judge: the facts line is what the page reports, the picture is what the player sees.")
+    return 0 if cp.returncode == 0 else 1
+
+
 def cmd_load(a: argparse.Namespace) -> int:
     """`team-play load`: run the repository's load script (slice 6) with bounded clients/seconds, print its JSON summary."""
     if not (1 <= a.clients <= MAX_LOAD_CLIENTS) or not (1 <= a.seconds <= MAX_LOAD_SECONDS):
@@ -275,6 +334,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("screenshot"); s.add_argument("url"); s.add_argument("--out", required=True); s.add_argument("--width", type=int)
     s.add_argument("--height", type=int); s.add_argument("--full-page", action="store_true"); s.add_argument("--wait-ms", type=int, default=800)
     s.set_defaults(fn=cmd_screenshot)
+    s = sub.add_parser("shots"); s.add_argument("--weapon"); s.add_argument("--ability"); s.add_argument("--prefix"); s.add_argument("--script")
+    s.add_argument("--width", type=int); s.add_argument("--height", type=int); s.set_defaults(fn=cmd_shots)
     s = sub.add_parser("logs"); s.add_argument("--tail", type=int, default=3000); s.set_defaults(fn=cmd_logs)
     s = sub.add_parser("load"); s.add_argument("--clients", type=int, required=True); s.add_argument("--seconds", type=int, required=True)
     s.add_argument("--rate", type=float, default=2.0); s.add_argument("--script"); s.add_argument("--moves", action="store_true"); s.set_defaults(fn=cmd_load)

@@ -250,3 +250,80 @@ def test_schema_types_templates_and_docs():
     assert "type: load" in (ROOT / "team" / "roles" / "po.md").read_text()
     from team.cycle import GAME_ROLE_SLOTS, PENDING_ROLES
     assert GAME_ROLE_SLOTS["tester"] == 1 and "tester" not in PENDING_ROLES
+
+
+# ------------------------------------------------------------------ owner 22.11 (ai-battles day review): `team-play shots`, frames of a battle
+
+def _fake_node(tmp_path: Path, body: str) -> Path:
+    b = tmp_path / "bin"; b.mkdir(exist_ok=True)
+    f = b / "node"
+    f.write_text("#!/usr/bin/env python3\nimport sys, json, os, pathlib\n" + textwrap.dedent(body))
+    f.chmod(f.stat().st_mode | stat.S_IXUSR)
+    return f
+
+
+def _shots_checkout(tmp_path: Path) -> Path:
+    co = tmp_path / "checkout"; (co / "tests" / "tools").mkdir(parents=True)
+    (co / "tests" / "tools" / "battle-shots.mjs").write_text("// frames\n")
+    return co
+
+
+def test_team_play_shots_runs_the_script_and_lists_the_frames(tmp_path: Path, monkeypatch, capsys):
+    co, out = _shots_checkout(tmp_path), tmp_path / "out"
+    node = _fake_node(tmp_path, '''
+        args = sys.argv[1:]
+        assert args == ["tests/tools/battle-shots.mjs", "--weapon", "railgun", "--ability", "shield"], args
+        e = os.environ
+        assert e["BASE_URL"] == "http://127.0.0.1:9" and e["SHOTS_PREFIX"] == "T-0173" and (e["SHOTS_WIDTH"], e["SHOTS_HEIGHT"]) == ("1280", "720")
+        d = pathlib.Path(e["SHOTS_OUT"])
+        for n in ("T-0173-1-start.png", "T-0173-2-fire.png"):
+            (d / n).write_bytes(b"png")
+        print("warming up")
+        print(json.dumps({"car": {"weapon": "railgun", "ability": "shield"}, "page_errors": ["TypeError: x is undefined"],
+                          "frames": [{"file": "T-0173-1-start.png", "what": "start", "facts": {"cars": 4, "strays": 0}},
+                                     {"file": "T-0173-2-fire.png", "what": "fire", "facts": {"shots": 1}},
+                                     {"file": "T-0173-3-missing.png", "what": "ability", "facts": {}},
+                                     {"file": "../evil.png", "what": "x", "facts": {}}]}))
+        ''')
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(out)); monkeypatch.setenv("TEAM_PLAY_NODE", str(node))
+    assert play.main(["shots", "--weapon", "railgun", "--ability", "shield", "--prefix", "T-0173"]) == 0
+    text = capsys.readouterr().out
+    assert "battle frames 1280x720 against http://127.0.0.1:9: 2 of 3 written" in text            # the unsafe name is dropped, the missing file is not listed
+    assert f"- {out / 'T-0173-1-start.png'} · start · " in text and '"strays": 0' in text and "T-0173-3-missing.png" not in text and "evil" not in text
+    assert "page errors: TypeError: x is undefined" in text and "Read every frame" in text
+
+
+def test_team_play_shots_refuses_bad_arguments_and_reports_no_frames(tmp_path: Path, monkeypatch, capsys):
+    co, out = _shots_checkout(tmp_path), tmp_path / "out"
+    node = _fake_node(tmp_path, '''
+        print(json.dumps({"error": "the garage did not load", "frames": []}))
+        sys.exit(2)
+        ''')
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(out)); monkeypatch.setenv("TEAM_PLAY_NODE", str(node))
+    assert play.main(["shots"]) == 2
+    assert "no battle frames (exit 2). the garage did not load" in capsys.readouterr().out
+    for bad in (["shots", "--weapon", "rail gun"], ["shots", "--ability", "$(id)"], ["shots", "--weapon", "Railgun"]):
+        with pytest.raises(SystemExit, match="catalogue key"):
+            play.main(bad)
+    with pytest.raises(SystemExit, match="--prefix is a plain name"):
+        play.main(["shots", "--prefix", "../x"])
+    with pytest.raises(SystemExit, match="inside the checkout"):
+        play.main(["shots", "--script", "/etc/passwd"])
+    (co / "tests" / "tools" / "battle-shots.mjs").unlink()
+    with pytest.raises(SystemExit, match="battle-shots.mjs not found"):
+        play.main(["shots"])
+
+
+def test_tester_prompt_names_the_battle_frames_command_when_the_script_is_there(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _game(st)
+    co = tmp_path / "co"; (co / "tests" / "e2e").mkdir(parents=True); (co / "tests" / "e2e" / "a.spec.ts").write_text("//\n")
+    t = {"id": "T-0173", "title": "flame", "type": "milestone", "state": "released", "problem": "x", "scope": "src/client", "acceptance": ["a"]}
+    kw = dict(base_url="https://g.example.test", local=False, checkout=co, out_dir=tmp_path / "o", tests="")
+    txt = prompts.tester_prompt(p, t, None, "abc", **kw)
+    assert "No `tests/tools/battle-shots.mjs` in the checkout" in txt and "team-play shots" not in txt
+    (co / "tests" / "tools").mkdir(); (co / "tests" / "tools" / "battle-shots.mjs").write_text("//\n")
+    txt = prompts.tester_prompt(p, t, None, "abc", **kw)
+    assert "`team-play shots --weapon KEY --ability KEY --prefix T-0173`" in txt and "Read them and compare with the design" in txt
