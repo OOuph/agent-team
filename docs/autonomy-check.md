@@ -28,7 +28,7 @@ WARN and FAIL line otherwise. The full table is kept in `data/autonomy/<stamp>.m
 | C4 | Role runs in 24 h | `run` events | failures < 10 % (WARN < 25 %) | read the failed runs' `run.json`; plan or credit limits show up in C14 |
 | C5 | Code and watchdog | `HEAD`, `data/framework/last-good`, `data/watchdog.log` | HEAD = last-good, 0 watchdog interventions (WARN: they differ or 1–2 interventions; FAIL: ≥ 3) | ≥ 3 interventions a day = the loop is breaking itself: `touch STOP` and wait for a human |
 | C6 | Tests on HEAD | `pytest tests` | green | the loop never merges red; a red HEAD means a manual change; revert it |
-| C7 | State backup | `data/backups/products-*.tgz` | newest ≤ 26 h | run `backup-state.sh` |
+| C7 | State backup | `data/backups/products-*.tgz` (the same run writes `services-*.tgz` with the data of service products) | newest ≤ 26 h | run `backup-state.sh` |
 | C8 | Site builds pushed | `data/builds.log`, `data/diary.log` | each site and the diary pushed ≤ 26 h ago | the site keeps yesterday's data; rerun `build-site.sh <slug>` |
 | C9 | Sites answer, certificates | HTTPS to every product site | 200 and certificate > 14 days (WARN ≤ 14) | droplet: `systemctl status agent-team-publish.timer nginx`; certbot renews itself |
 | C10 | A public post in 26 h | `posts` table per product with channels | every such product posted (WARN otherwise: quality, not outage) | the PO sees it in the digest; the marketer's next slot |
