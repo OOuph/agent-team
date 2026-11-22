@@ -54,6 +54,12 @@
     "properties": {"question": {"type": "string", "maxLength": 500}, "why_owner": {"type": "string", "maxLength": 300}}
    }
   },
-  "friction": {"type": "array", "maxItems": 5, "items": {"type": "string", "maxLength": 300}, "description": "where the framework got in the way: missing input, unclear task, schema that did not fit"}
+  "friction": {
+   "type": "array", "maxItems": 5,
+   "description": "where the FRAMEWORK got in your way (not the game): a missing input, an unclear task, a schema that did not fit, data you could not reach",
+   "items": {"type": "object", "additionalProperties": false, "required": ["kind", "what"],
+             "properties": {"kind": {"type": "string", "enum": ["missing_tool", "denied_permission", "unclear_instruction", "schema_mismatch", "missing_data", "environment", "other"]},
+                            "what": {"type": "string", "maxLength": 300}}}
+  }
  }
 }

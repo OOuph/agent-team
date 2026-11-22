@@ -74,7 +74,7 @@ class FakeRunner:
 
 
 def _settings(tmp_path: Path) -> C.Settings:
-    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_n_cycles": 0, "digest_hour_utc": 99}})
+    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_h": 0, "digest_hour_utc": 99}})
     st = C.Settings(raw, tmp_path, tmp_path / "products", tmp_path / "data", tmp_path / "data" / "repos")
     return st
 

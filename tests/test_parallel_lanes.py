@@ -36,7 +36,7 @@ SLOTS = {"developer": 1, "designer": 1, "game-designer": 1, "analyst": 1, "marke
 
 def _settings(tmp_path: Path, over: dict | None = None) -> C.Settings:
     base = copy.deepcopy(C.DEFAULTS)
-    cyc = {"review_after_min": 0, "persona_every_n_cycles": 0, "digest_hour_utc": 99, "execute_slots": dict(SLOTS)}
+    cyc = {"review_after_min": 0, "persona_every_h": 0, "digest_hour_utc": 99, "execute_slots": dict(SLOTS)}
     raw = C._merge(base, C._merge({"cycle": cyc}, over or {}))
     return C.Settings(raw, tmp_path, tmp_path / "products", tmp_path / "data", tmp_path / "data" / "repos")
 

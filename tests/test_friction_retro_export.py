@@ -219,3 +219,66 @@ def test_stuck_check_tolerates_string_friction() -> None:
     assert cycle._friction_items("x") == ["x"] and cycle._friction_items(None) == [] and cycle._friction_items([1, "a"]) == [1, "a"]
     assert cycle._friction_text("slow e2e") == "slow e2e" and cycle._friction_text({"kind": "k", "what": "w"}) == "w"
     assert cycle._friction_text({"kind": "k"}).startswith("{")
+
+
+def test_string_friction_gives_a_reported_record_and_collection_goes_on(tmp_path: Path) -> None:
+    """Server 20–21.11: the game designer's result carried `friction: ["text"]` (its schema asked for strings) and the
+    hourly friction/retro pass failed with `'str' object has no attribute 'get'`."""
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    t = s.create_task(title="gdd", type_="design", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    s.add_result(t["id"], {"run_id": "gd1", "role": "game-designer", "status": "done", "friction": ["text"]})
+    s.close()
+    assert friction.collect_all(st, [p]) == 1                                   # does not raise
+    recs = friction.Register(friction.register_dir(st)).records
+    assert [(r["kind"], r["product"], r["role"], r["task"]) for r in recs] == [("reported", "p1", "game-designer", t["id"])]
+    assert recs[0]["summary"].endswith("text")
+    assert friction.collect_all(st, [p]) == 0                                   # and stays idempotent
+
+
+def test_design_spec_friction_is_kind_and_what_like_task_result() -> None:
+    """The source of the string items: design-spec was the only result schema whose friction items were strings."""
+    import jsonschema
+    schemas = Path(friction.__file__).resolve().parent / "schemas"
+    ds = json.loads((schemas / "design-spec.schema.json").read_text(encoding="utf-8"))
+    tr = json.loads((schemas / "task-result.schema.json").read_text(encoding="utf-8"))
+    assert ds["properties"]["friction"]["items"] == tr["properties"]["friction"]["items"]
+    assert tuple(ds["properties"]["friction"]["items"]["properties"]["kind"]["enum"]) == friction.REPORTED_KINDS
+    base = {"summary": "s", "files": [{"path": "GAME-DESIGN.md", "content": "# rules\n"}]}
+    jsonschema.validate({**base, "friction": [{"kind": "missing_data", "what": "no metrics in the prompt"}]}, ds)
+    try:
+        jsonschema.validate({**base, "friction": ["no metrics in the prompt"]}, ds)
+    except jsonschema.ValidationError:
+        pass
+    else:
+        raise AssertionError("a bare string must not pass the design-spec schema")
+    card = (schemas.parent / "roles" / "game-designer.md").read_text(encoding="utf-8")
+    assert "{kind, what}" in card and "missing_data" in card
+
+
+def test_collect_all_goes_on_when_one_product_fails(tmp_path: Path, monkeypatch, caplog) -> None:
+    """One product whose records cannot be read must not keep the others out of the register (20–21.11: every
+    product after ai-battles in the alphabet was left out for a day)."""
+    st = _settings(tmp_path)
+    bad, good = _product(st, "a-bad"), _product(st, "b-good")
+    for p in (bad, good):
+        s = Store(p.dir)
+        t = s.create_task(title="x", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+        s.add_result(t["id"], {"run_id": f"r-{p.slug}", "status": "partial", "friction": [{"kind": "missing_tool", "what": f"no curl on {p.slug}"}]})
+        s.close()
+    real = friction.collect_product
+
+    def flaky(p, store):
+        if p.slug == "a-bad":
+            raise AttributeError("'str' object has no attribute 'get'")
+        return real(p, store)
+    monkeypatch.setattr(friction, "collect_product", flaky)
+    with caplog.at_level("ERROR", logger="team.friction"):
+        assert friction.collect_all(st, [bad, good]) == 1                       # the failure comes first and does not stop the pass
+    recs = friction.Register(friction.register_dir(st)).records
+    assert [r["product"] for r in recs] == ["b-good"] and "no curl on b-good" in recs[0]["summary"]
+    assert "collection failed for a-bad" in caplog.text and "not collected: a-bad" in caplog.text
+    monkeypatch.setattr(friction, "collect_product", real)                      # the next pass picks the failed product up
+    assert friction.collect_all(st, [bad, good]) == 1
+    assert sorted(r["product"] for r in friction.Register(friction.register_dir(st)).records) == ["a-bad", "b-good"]

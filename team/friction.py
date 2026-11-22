@@ -217,16 +217,30 @@ def register_dir(st: Settings) -> Path:
 
 
 def collect_all(st: Settings, products: list[Product]) -> int:
+    """Collect every product into the register. A product whose records cannot be read is logged and skipped: one bad
+    record must not keep the products after it out of the register (20–21.11: a string friction item of ai-battles
+    stopped the collection for every product after it in the alphabet, and the retro behind it). Never raises on a
+    product; returns the number of new records."""
     reg = Register(register_dir(st))
-    n = 0
+    n, failed = 0, []
+    log.debug("friction: collecting %d product(s): %s", len(products), ", ".join(p.slug for p in products))
     for p in products:
-        s = Store(p.dir)
+        s = None
         try:
-            n += reg.add(collect_product(p, s))
+            s = Store(p.dir)
+            added = reg.add(collect_product(p, s))
+            n += added
+            log.debug("friction: %s: %d new record(s)", p.slug, added)
+        except Exception as exc:  # noqa: BLE001 — the register of the other products matters more than one product's records
+            failed.append(p.slug)
+            log.exception("friction: collection failed for %s, the other products go on: %s", p.slug, exc)
         finally:
-            s.close()
+            if s is not None:
+                s.close()
     if n:
         log.info("friction: %d new records (%d total)", n, len(reg.records))
+    if failed:
+        log.error("friction: %d of %d product(s) not collected: %s", len(failed), len(products), ", ".join(failed))
     return n
 
 

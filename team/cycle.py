@@ -379,10 +379,23 @@ class Cycle:
         self.collect_critic()
         self.support_replies()
         self.seo_check()
-        n = len(self.store.cycles())
-        every = int(self.st.cycle.get("persona_every_n_cycles", 6))
-        if every and n % every == 1 and self.p.gate_open("persona"):      # game profile: personas from the stage VISION names
+        if self.personas_due():
             self.run_personas()
+
+    def personas_due(self) -> bool:
+        """Personas run by the clock: every `cycle.persona_every_h` hours per product (default 12), the last run is
+        in products/<slug>/personas-last.json (team/ux.py). A game product starts them at the stage VISION names
+        (gate `persona`)."""
+        from . import ux
+        every = ux.persona_every_h(self.st.cycle)
+        if every <= 0 or not self.p.gate_open("persona"):
+            log.debug("%s: personas not scheduled (every %s h, gate open: %s)", self.p.slug, every, self.p.gate_open("persona"))
+            return False
+        due = ux.personas_due(self.p.dir, every, _now(), ux.persona_retry_h(self.st.cycle))
+        mark = ux.persona_mark(self.p.dir)
+        log.log(logging.INFO if due else logging.DEBUG, "%s: personas %s (every %d h; last run started %s, results %s)", self.p.slug,
+                "due" if due else "not due", every, mark.get("started") or "never", mark.get("ok", "—"))
+        return due
 
     def collect_feedback(self) -> int:
         """External feedback -> observation cards: GitHub issues of the site repository, replies and mentions on Bluesky.
@@ -513,9 +526,32 @@ class Cycle:
         if not all_sc:
             return
         per_run = max(1, int(self.st.cycle.get("persona_scenarios_per_run", 2)))
-        now = _now()
-        start = ((now.timetuple().tm_yday * 24 + now.hour) // max(1, int(self.st.cycle.get("persona_every_n_cycles", 12)))) * per_run
+        prev = ux.persona_mark(self.p.dir)
+        try:
+            start = int(prev.get("next") or 0) % len(all_sc)             # the rotation continues where the last run stopped
+        except (TypeError, ValueError):
+            start = 0
         picked = [all_sc[(start + i) % len(all_sc)] for i in range(min(per_run, len(all_sc)))]
+        mark = {"started": utcnow(), "cycle": self.cycle_id, "scenarios": [sp.stem for sp in picked],
+                "next": (start + len(picked)) % len(all_sc), "finished": None, "ok": 0, "last_ok": prev.get("last_ok")}
+        if not self.dry_run:
+            ux.write_persona_mark(self.p.dir, mark)                      # before the runs: a cycle killed mid-run is not retried every cycle
+        log.info("%s: persona run: scenarios %s (%d of %d, from index %d)%s", self.p.slug, ", ".join(mark["scenarios"]), len(picked),
+                 len(all_sc), start, " [dry-run: no mark written]" if self.dry_run else "")
+        try:
+            mark["ok"] = self._run_persona_scenarios(picked, sdir, pdir)
+        finally:
+            if not self.dry_run:
+                mark["finished"] = utcnow()
+                if mark["ok"]:
+                    mark["last_ok"] = mark["started"]
+                ux.write_persona_mark(self.p.dir, mark)
+                self.store.event("persona.run", self.p.slug, "dispatcher", {"scenarios": mark["scenarios"], "ok": mark["ok"]})
+
+    def _run_persona_scenarios(self, picked: list[Path], sdir: Path, pdir: Path) -> int:
+        """One persona run per picked scenario; returns how many returned a result."""
+        from . import ux
+        ok = 0
         for sp in picked:
             smeta, sbody = front_matter(sp.read_text(encoding="utf-8"))
             pp = pdir / f"{smeta.get('persona', '')}.md"
@@ -529,7 +565,11 @@ class Cycle:
             rr = self.role_run("persona", prompt, "persona-result", cwd=work, label=f"persona-{smeta['id']}",
                                cap=float(self.st.cycle.get("persona_cap_usd", 1.0)), max_turns=25)
             if not (rr and rr.ok and rr.structured):
+                if not self.dry_run:
+                    log.warning("%s: persona scenario %s brought no result (%s)", self.p.slug, smeta["id"],
+                                "not started: budget or cap" if rr is None else (rr.error or "empty result"))
                 continue
+            ok += 1
             res = rr.structured
             persona = str(smeta.get("persona"))
             exp = res.get("experience") or {}
@@ -551,6 +591,7 @@ class Cycle:
                     "classification": "value_gap", "source": f"persona:{persona}", "scenario": smeta["id"], "run_id": run_id,
                     "url": self.p.site_base, "expected": str(exp.get("wish") or "")[:300], "actual": str(exp.get("first_impression") or "")[:300],
                     "fingerprint": fingerprint(smeta["id"], "value_gap", "", persona)})
+        return ok
 
     # review: released tasks → reviewer --------------------------------------------------------------
 
