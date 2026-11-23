@@ -6,7 +6,9 @@
 #                       [--install CMD] [--health /healthz] [--ports A,B] [--no-deploy]
 #   slug   [a-z0-9-], the product slug in the dispatcher (products/<slug>/product.yaml)
 #   host   FQDN; the owner's DNS A record must already point here (checked first; exit 2 otherwise, nothing changed)
-#   repo   https git URL of the game repository (a public one, or one the droplet's deploy key can read)
+#   repo   git URL of the game repository: https (public, or private — read with the dispatcher's token through
+#          git-credential-dispatcher) or git@… (private, a deploy key of the service user). The clone, install and
+#          build of a deploy run as the service user, never as root — README «Приватный репозиторий».
 # Env: CERTBOT_EMAIL (or CERTBOT_EMAIL= in /etc/agent-team/env) — required for a new certificate.
 #
 # Steps (idempotent, re-running is safe):

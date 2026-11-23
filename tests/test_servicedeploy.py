@@ -287,6 +287,196 @@ def test_nginx_failure_restores_the_upstream_and_stops_the_new_colour(tmp_path: 
         h.stop_all()
 
 
+# ---- who runs the repository's code (scheme audit 21.11: install and build ran as root, with scripts from the product repository)
+
+FAKE_RUNUSER = '''\
+    #!/usr/bin/env bash
+    # fake runuser: `runuser -u <user> -- env -i K=V … cmd …`. Logs the call and runs the command as the current user;
+    # VIA_RUNUSER=1 goes in right after `env -i`, so a command can tell that it was started through runuser.
+    echo "$*" >> "$FAKE_RUNUSER_LOG"
+    [ "$1" = "-u" ] && [ "$3" = "--" ] && [ "$4" = "env" ] && [ "$5" = "-i" ] || { echo "fake runuser: unexpected call: $*" >&2; exit 99; }
+    shift 5
+    exec env -i VIA_RUNUSER=1 "$@"
+    '''
+
+FAKE_NPM = '''\
+    #!/usr/bin/env python3
+    """fake npm: `npm install|ci` runs scripts.postinstall of ./package.json, `npm run <name>` runs scripts.<name>."""
+    import json, subprocess, sys
+    args = [a for a in sys.argv[1:] if not a.startswith("--")]
+    name = "postinstall" if args[0] in ("install", "ci") else args[1]
+    cmd = json.load(open("package.json")).get("scripts", {}).get(name)
+    sys.exit(subprocess.call(cmd, shell=True) if cmd else 0)
+    '''
+
+MARK = "echo via=${VIA_RUNUSER:-0} token=${GITHUB_TOKEN:-none} tg=${TELEGRAM_BOT_TOKEN:-none} extra=${LEAK_ME:-none} node_env=$NODE_ENV user=$USER"
+
+
+def _game_with_package_scripts(host: Host) -> str:
+    """The product repository carries the commands: postinstall and build of package.json leave a marker each."""
+    (host.src / "package.json").write_text(json.dumps({"name": "fleets", "scripts": {
+        "postinstall": f"{MARK} > postinstall.marker", "build": f"{MARK} > build.marker"}}))
+    gitops.git(host.src, "add", "-A"); gitops.git(host.src, "commit", "-q", "-m", "package scripts")
+    gitops.git(host.src, "push", "-q", str(host.origin), "main")
+    conf = host.etc / "services" / "fleets.conf"
+    conf.write_text(conf.read_text().replace("BUILD_CMD=''", "BUILD_CMD='npm run build'"))
+    _exe(host.bin / "npm", FAKE_NPM)
+    return gitops.head(host.src)
+
+
+def test_clone_install_and_build_run_through_runuser_with_a_clean_environment(host: Host):
+    """The deploy is called as root (sudo); everything that reads or executes the product repository goes through
+    `runuser -u <service user> -- env -i …`: the scripts of package.json are started by runuser and see nothing of the
+    caller's environment."""
+    _game_with_package_scripts(host)
+    _exe(host.bin / "runuser", FAKE_RUNUSER)
+    log = host.tmp / "runuser.log"
+    user = host.env()["SVC_USER"]
+    env = {**host.env(), "SVC_VIA_RUNUSER": "1", "FAKE_RUNUSER_LOG": str(log),
+           "GITHUB_TOKEN": "tok-must-not-leak", "TELEGRAM_BOT_TOKEN": "tg-must-not-leak", "LEAK_ME": "anything"}
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=120)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert f"repo-steps-as={user} (runuser)" in cp.stdout and f"install as {user}: npm install" in cp.stdout and f"build as {user}: npm run build" in cp.stdout
+    calls = log.read_text().splitlines()
+    assert calls and all(c.startswith(f"-u {user} -- env -i HOME=") for c in calls)          # nothing of these went another way
+    for needle in (" git clone ", " rsync -a ", "npm install --no-audit --no-fund", "npm run build", " checkout --quiet --detach "):
+        assert any(needle in c for c in calls), (needle, calls)
+    assert not any("tok-must-not-leak" in c or "LEAK_ME" in c for c in calls)
+    rel = Path(host.state_json()["release"])
+    post, build = (rel / "postinstall.marker").read_text(), (rel / "build.marker").read_text()
+    assert "via=1 token=none tg=none extra=none node_env=development" in post and f"user={user}" in post
+    assert "via=1 token=none tg=none extra=none node_env=production" in build
+    assert (rel / ".install.log").exists() and (rel / ".build.log").exists() and (rel / ".built").exists()
+    # a second commit: fetch, staging and pruning go the same way
+    host.commit("two")
+    log.write_text("")
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=120)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    calls = log.read_text().splitlines()
+    assert any(" fetch --quiet origin " in c for c in calls) and all(c.startswith(f"-u {user} -- env -i HOME=") for c in calls)
+
+
+def test_build_script_never_runs_when_root_cannot_become_the_service_user(host: Host):
+    """No fallback: when runuser refuses or is missing, the deploy stops before the clone, and the marker a package.json
+    script would leave does not appear anywhere — the script was not executed by the caller's (root's) own process."""
+    _game_with_package_scripts(host)
+    _exe(host.bin / "runuser", "#!/usr/bin/env bash\necho 'runuser: may not be used by non-root users' >&2; exit 1\n")
+    for extra in ({}, {"RUNUSER": str(host.tmp / "no-such-runuser")}):
+        env = {**host.env(), "SVC_VIA_RUNUSER": "1", **extra}
+        cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=60)
+        assert cp.returncode == 1 and "nothing was run as root" in cp.stderr, cp.stdout + cp.stderr
+        assert not list(host.tmp.rglob("*.marker")) and not (host.services / "fleets" / "repo").exists()
+        assert not list((host.var / "fleets" / "releases").iterdir()) and not (host.state / "svc-fleets.json").exists()
+        assert not (host.systemd / "calls.log").exists()                       # nothing was started either
+    # the same repository deploys once the user can be changed: the marker comes from the runuser side only
+    _exe(host.bin / "runuser", FAKE_RUNUSER)
+    env = {**host.env(), "SVC_VIA_RUNUSER": "1", "FAKE_RUNUSER_LOG": str(host.tmp / "runuser.log")}
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=120)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert [m.read_text().split()[0] for m in sorted(host.tmp.rglob("*.marker"))] == ["via=1", "via=1"]
+
+
+def test_clone_and_releases_of_another_owner_are_handed_to_the_service_user(host: Host):
+    """Before 22.11 root made the clone and the releases. Rollback, --force, a repeated sha and the next fetch must work
+    on such trees: the script chowns a tree whose top directory is not the service user's before that user touches it.
+    Here the service user is `nobody`, so every tree of the test's own user counts as «another owner»; chown is a fake."""
+    _exe(host.bin / "runuser", FAKE_RUNUSER)
+    _exe(host.bin / "chown", '#!/usr/bin/env bash\necho "$*" >> "$FAKE_CHOWN_LOG"\n')
+    chown_log = host.tmp / "chown.log"
+    env = {**host.env(), "SVC_USER": "nobody", "SVC_HOME": str(host.tmp), "SVC_VIA_RUNUSER": "1",
+           "FAKE_RUNUSER_LOG": str(host.tmp / "runuser.log"), "FAKE_CHOWN_LOG": str(chown_log)}
+
+    def deploy(*args: str) -> subprocess.CompletedProcess:
+        chown_log.write_text("")
+        return subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets", *args], capture_output=True, text=True, env=env, timeout=120)
+
+    def chowned(path: Path, recursive: bool) -> bool:
+        return any(ln.startswith("-R -h nobody:" if recursive else "-h nobody:") and ln.endswith(f" {path}") for ln in chown_log.read_text().splitlines())
+
+    cp = deploy()
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    rel1 = Path(host.state_json()["release"]); sha1 = host.state_json()["sha"]
+    # the directories root makes are given to the service user before the clone: the node only, never recursively
+    for d in (host.services / "fleets", host.var / "fleets" / "releases", host.var / "fleets" / "data"):
+        assert chowned(d, recursive=False) and not chowned(d, recursive=True)
+    assert not any(str(host.var / "fleets" / "instances") in ln or str(host.state) in ln for ln in chown_log.read_text().splitlines())
+    sha2 = host.commit("two")
+    cp = deploy("--sha", sha2)                                   # next deploy: the existing clone is adopted before the fetch
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert chowned(host.services / "fleets" / "repo", recursive=True) and "handing the tree over" in cp.stdout
+    rel2 = Path(host.state_json()["release"])
+    cp = deploy("--rollback")                                    # the previous release is adopted before its server starts
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert chowned(rel1, recursive=True) and host.state_json()["sha"] == sha1
+    cp = deploy("--sha", sha2)                                   # a built release deployed again: reused, adopted
+    assert cp.returncode == 0 and "already built — reusing" in cp.stdout, cp.stdout + cp.stderr
+    assert chowned(rel2, recursive=True) and host.state_json()["sha"] == sha2
+    cp = deploy("--sha", sha2, "--force")                        # --force rebuilds the live release: adopted, removed, staged again
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert chowned(rel2, recursive=True) and (rel2 / ".built").exists() and host.state_json()["sha"] == sha2
+    assert "action=adopted" in host.log.read_text()
+
+
+def test_trees_the_service_user_already_owns_are_not_chowned(host: Host):
+    _exe(host.bin / "chown", '#!/usr/bin/env bash\necho "$*" >> "$FAKE_CHOWN_LOG"\n')
+    env = {**host.env(), "FAKE_CHOWN_LOG": str(host.tmp / "chown.log")}
+    for args in ([], ["--force"]):
+        cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets", *args], capture_output=True, text=True, env=env, timeout=120)
+        assert cp.returncode == 0, cp.stdout + cp.stderr
+    assert not (host.tmp / "chown.log").exists() and "action=adopted" not in host.log.read_text()
+
+
+def test_credential_helper_gives_the_token_only_to_github_over_https(tmp_path: Path):
+    """git-credential-dispatcher (friction F11): the token is read from the dispatcher's .env when git asks; no other host
+    or protocol gets it, nothing is stored, and the helper's own messages never carry it."""
+    helper = DEPLOY_DIR / "git-credential-dispatcher"
+    assert subprocess.run(["bash", "-n", str(helper)]).returncode == 0 and os.access(helper, os.X_OK)
+    envf = tmp_path / ".env"
+    envf.write_text("TELEGRAM_BOT_TOKEN=tg\nGITHUB_TOKEN=old-value\nGITHUB_TOKEN=\"tok-abc123\"      # push to site repos\nOTHER=1\n")
+    before = envf.read_text()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "AGENT_TEAM_DISPATCHER_ENV": str(envf), "AGENT_TEAM_CREDENTIAL_LOG": str(tmp_path / "cred.log")}
+
+    def ask(verb: str, protocol: str, host_: str, e: dict | None = None) -> subprocess.CompletedProcess:
+        return subprocess.run([str(helper), verb], input=f"protocol={protocol}\nhost={host_}\n\n", capture_output=True, text=True, env=e or env)
+
+    cp = ask("get", "https", "github.com")
+    assert cp.returncode == 0 and cp.stdout == "username=x-access-token\npassword=tok-abc123\n"
+    assert "tok-abc123" not in cp.stderr and "GITHUB_TOKEN" in cp.stderr and str(envf) in cp.stderr
+    for verb, protocol, host_ in (("get", "https", "example.com"), ("get", "http", "github.com"), ("get", "https", "github.com.evil.test"),
+                                  ("store", "https", "github.com"), ("erase", "https", "github.com")):
+        cp = ask(verb, protocol, host_)
+        assert cp.returncode == 0 and cp.stdout == "", (verb, protocol, host_, cp.stdout)
+    assert envf.read_text() == before and "tok-abc123" not in (tmp_path / "cred.log").read_text()
+    cp = ask("get", "https", "github.com", {**env, "AGENT_TEAM_DISPATCHER_ENV": str(tmp_path / "missing.env")})
+    assert cp.returncode == 0 and cp.stdout == "" and "cannot read" in cp.stderr
+    (tmp_path / "agent-team" / "dispatcher").mkdir(parents=True)                # the default place: ~/agent-team/dispatcher/.env
+    (tmp_path / "agent-team" / "dispatcher" / ".env").write_text("GITHUB_TOKEN=from-home\n")
+    cp = ask("get", "https", "github.com", {"PATH": os.environ["PATH"], "HOME": str(tmp_path)})
+    assert "password=from-home" in cp.stdout
+    # the exact options deploy-service.sh gives git: every other helper dropped, this one answers
+    cp = subprocess.run(["git", "-c", "credential.helper=", "-c", f"credential.helper={helper}", "credential", "fill"],
+                        input="protocol=https\nhost=github.com\n\n", capture_output=True, text=True,
+                        env={**env, "GIT_TERMINAL_PROMPT": "0", "GIT_CONFIG_NOSYSTEM": "1"}, cwd=str(tmp_path))
+    assert cp.returncode == 0 and "password=tok-abc123" in cp.stdout, cp.stdout + cp.stderr
+
+
+def test_https_repository_is_cloned_with_the_helper_and_nothing_else(tmp_path: Path):
+    h = Host(tmp_path)
+    conf = h.etc / "services" / "fleets.conf"
+    conf.write_text(conf.read_text().replace(f"REPO={h.origin}", "REPO=https://github.com/example-org/private-game.git"))
+    glog = tmp_path / "git.log"                                  # the path is in the fake itself: git runs with a clean environment
+    _exe(h.bin / "git", f'#!/usr/bin/env bash\necho "$*" >> {glog}\necho "fatal: could not read Username" >&2; exit 128\n')
+    helper = DEPLOY_DIR / "git-credential-dispatcher"
+    env = {**h.env(), "GIT_CREDENTIAL_HELPER": str(helper)}
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env=env, timeout=60)
+    assert cp.returncode == 1 and "git clone of https://github.com/example-org/private-game.git failed" in cp.stderr and "credential helper" in cp.stderr
+    assert glog.read_text().splitlines()[0] == f"-c credential.helper= -c credential.helper={helper} clone --quiet --branch main https://github.com/example-org/private-game.git {h.services}/fleets/repo"
+    assert "action=error step=clone" in h.log.read_text()
+    glog.write_text("")
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "deploy-service.sh"), "fleets"], capture_output=True, text=True, env={**env, "GIT_CREDENTIAL_HELPER": ""}, timeout=60)
+    assert cp.returncode == 1 and glog.read_text().startswith("clone --quiet")           # no helper: the user's own git configuration applies
+
+
 def test_usage_and_validation(tmp_path: Path):
     h = Host(tmp_path)
     env = h.env()
@@ -308,14 +498,18 @@ def test_svc_run_substitutes_port_and_sources_secrets(tmp_path: Path):
 
 
 def test_install_and_add_service_scripts_parse_and_render(tmp_path: Path):
-    for f in ("install.sh", "add-service.sh", "deploy-service.sh", "svc-run.sh"):
+    for f in ("install.sh", "add-service.sh", "deploy-service.sh", "svc-run.sh", "git-credential-dispatcher"):
         assert subprocess.run(["bash", "-n", str(DEPLOY_DIR / f)]).returncode == 0
     unit = (DEPLOY_DIR / "agent-team-svc@.service").read_text()
     assert "ExecStart=/opt/agent-team/bin/svc-run.sh %i" in unit and "User=__USER__" in unit
     # F36 (ai-battles 21.11): a role's `pkill -f` stopped the live server, which exits 0 on SIGTERM — it must come back by itself
     assert "\nRestart=always\n" in unit and "\nRestart=on-failure" not in unit
     assert "pkill" in (DEPLOY_DIR.parent.parent / "team" / "roles" / "developer.md").read_text()
-    assert "NOPASSWD: /opt/agent-team/bin/deploy-service.sh" in (DEPLOY_DIR / "agent-team-deploy.sudoers").read_text()
+    sudoers = (DEPLOY_DIR / "agent-team-deploy.sudoers").read_text()
+    assert "NOPASSWD: /opt/agent-team/bin/deploy-service.sh" in sudoers
+    # scheme audit 21.11: the rule's comment claimed «no command text comes from the caller», while package.json scripts ran as root
+    assert "no command text comes from the caller" not in sudoers and "runuser" in sudoers and "package.json" in sudoers
+    assert [ln for ln in sudoers.splitlines() if ln and not ln.startswith("#")] == ["__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh"]
     tpl = (DEPLOY_DIR / "service.conf.template").read_text()
     assert "proxy_pass http://svc___SLUG_U__;" in tpl and "Upgrade $http_upgrade" in tpl and "/_team/metrics.json" in tpl
     assert "svc___SLUG__" not in tpl   # a slug with "-" must become a valid nginx identifier (F: ai-battles)
@@ -325,10 +519,25 @@ def test_install_and_add_service_scripts_parse_and_render(tmp_path: Path):
            "SUDOERS_DIR": str(tmp_path / "sudoers"), "NGINX_CONFD": str(tmp_path / "confd"), "SVC_USER": "gamer", "PATH": os.environ["PATH"]}
     fake = tmp_path / "fakebin"; fake.mkdir()
     _exe(fake / "nginx", "#!/usr/bin/env bash\nexit 0\n"); _exe(fake / "flock", "#!/usr/bin/env bash\nexit 0\n")
+    _exe(fake / "runuser", "#!/usr/bin/env bash\nexit 0\n")              # install.sh refuses a host where root cannot become the service user
     env["PATH"] = f"{fake}:{env['PATH']}"
     cp = subprocess.run(["bash", str(DEPLOY_DIR / "install.sh")], capture_output=True, text=True, env=env)
     assert cp.returncode == 0, cp.stdout + cp.stderr
     assert (tmp_path / "opt" / "bin" / "deploy-service.sh").exists() and (tmp_path / "etc" / "service.conf.template").exists()
+    helper = tmp_path / "opt" / "bin" / "git-credential-dispatcher"
+    assert helper.read_text() == (DEPLOY_DIR / "git-credential-dispatcher").read_text() and stat.S_IMODE(helper.stat().st_mode) == 0o755
+    assert "GITHUB_TOKEN" in helper.read_text() and not (tmp_path / "opt" / "bin" / "git-credential-dispatcher.before-repo").exists()
+    helper.write_text("#!/bin/sh\n# hand-made\n")                         # a helper put there by hand is kept once, then replaced
+    for _ in range(2):
+        assert subprocess.run(["bash", str(DEPLOY_DIR / "install.sh")], capture_output=True, text=True, env=env).returncode == 0
+    assert helper.read_text() == (DEPLOY_DIR / "git-credential-dispatcher").read_text()
+    assert (tmp_path / "opt" / "bin" / "git-credential-dispatcher.before-repo").read_text() == "#!/bin/sh\n# hand-made\n"
+    no_runuser = {**env, "PATH": f"{fake}:/usr/bin:/bin"}
+    (fake / "runuser").rename(fake / "runuser.off")
+    if subprocess.run(["bash", "-c", "command -v runuser"], capture_output=True, env=no_runuser).returncode != 0:
+        cp = subprocess.run(["bash", str(DEPLOY_DIR / "install.sh")], capture_output=True, text=True, env=no_runuser)
+        assert cp.returncode == 1 and "runuser" in cp.stderr
+    (fake / "runuser.off").rename(fake / "runuser")
     assert "User=gamer" in (tmp_path / "systemd" / "agent-team-svc@.service").read_text()
     assert (tmp_path / "sudoers" / "agent-team-deploy").read_text().startswith("#") and "gamer ALL=(root) NOPASSWD" in (tmp_path / "sudoers" / "agent-team-deploy").read_text()
     # add-service.sh --no-deploy with DNS and cert skipped and a fake render-vhost: conf, secrets placeholder, upstream placeholder
