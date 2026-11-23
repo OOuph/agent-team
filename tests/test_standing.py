@@ -434,3 +434,23 @@ def test_cards_and_schema_name_the_directions_and_the_mechanic_test_path():
     assert schema["properties"]["ready_tasks"]["items"]["properties"]["standing"]["type"] == "string"
     scheme = (ROOT / "SCHEME.md").read_text(encoding="utf-8")
     assert "Постоянные направления" in scheme and "standing.created" in scheme and "win_rate_band" in scheme
+
+
+def test_game_designer_gets_reports_named_by_the_task_and_standing_docs_always(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st, repo=True)
+    (p.repo_dir / "reports").mkdir()
+    (p.repo_dir / "reports" / "stat-weights.md").write_text("# weights\nrailgun 1.7\n")
+    s = Store(p.dir)
+    t = s.create_task(title="Read reports/stat-weights.md", type_="design", problem="see reports/stat-weights.md and reports/missing.json",
+                      scope="s", acceptance=["a"], goal="g", created_by="po", role="game-designer")
+    gp = prompts.game_designer_prompt(p, t, p.repo_dir, s)
+    assert "# REPORTS NAMED BY THE TASK" in gp and "--- reports/stat-weights.md ---\n# weights\nrailgun 1.7" in gp
+    assert "--- reports/missing.json ---\n(does not exist in the repository)" in gp
+    assert prompts.task_reports({"problem": "see ../reports/x.md and reports/../../etc.md"}) == []
+    # a hand-made standing task without `docs` still carries the direction's documents
+    m = s.create_task(title="Mechanics", type_="design", problem="p", scope="s", acceptance=["a"], goal="g", created_by="human", role="game-designer")
+    m["standing"] = "mechanics"
+    s.save_task(m)
+    mp = prompts.game_designer_prompt(p, m, p.repo_dir, s)
+    assert "# DOCUMENTS OF THIS TASK" in mp and "--- design/ideas/mechanics.md ---" in mp
