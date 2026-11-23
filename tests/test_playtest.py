@@ -167,7 +167,8 @@ def test_team_play_test_runs_fake_playwright_and_copies_artifacts(tmp_path: Path
     monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:4321")
     monkeypatch.setenv("TEAM_PLAY_OUT", str(out)); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
     rc = play.main(["test", "--grep", "rooms"])
-    o = capsys.readouterr().out
+    cap = capsys.readouterr(); o = cap.out
+    assert "playwright test started" in cap.err
     assert rc == 1 and "passed 1, failed 1, skipped 1" in o and "✗ rooms.spec.ts › rooms › illegal move rejected" in o
     assert "artifacts: rooms-illegal__test-failed-1.png" in o and (out / "rooms-illegal__test-failed-1.png").exists()
     assert list(out.glob("playwright-*.json"))
@@ -419,3 +420,23 @@ def test_inconclusive_rule_follows_the_product_setting_and_the_profile(tmp_path:
     cyc.p.raw["profile"] = "site"
     assert cyc.inconclusive_policy() == "accept"
     cyc.store.close()
+def test_team_play_test_argv_project_before_spec_and_grep_joined(monkeypatch):
+    monkeypatch.setenv("TEAM_PLAY_NPX", "npx")
+    ap = play.argparse.ArgumentParser(); sub = ap.add_subparsers()
+    s = sub.add_parser("test"); s.add_argument("--grep", action="append"); s.add_argument("--spec"); s.add_argument("--project")
+    a = ap.parse_args(["test", "--spec", "tests/e2e/x.spec.ts", "--project", "desktop"])
+    argv = play.build_test_argv(a)
+    assert argv.index("--project") + 1 == argv.index("desktop") < argv.index("--") < argv.index("tests/e2e/x.spec.ts")
+    assert argv[-2:] == ["--", "tests/e2e/x.spec.ts"]
+    a = ap.parse_args(["test", "--grep", "one", "--grep", "two"])
+    argv = play.build_test_argv(a)
+    assert argv[argv.index("--grep") + 1] == "one|two" and argv.count("--grep") == 1
+
+
+def test_team_play_test_progress_line_on_stderr_at_start(tmp_path: Path, monkeypatch, capsys):
+    npx = _fake_npx(tmp_path, 'print(json.dumps({"suites": []}))\n')
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(tmp_path)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:1")
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(tmp_path / "out")); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
+    play.main(["test", "--spec", "a.spec.ts", "--project", "desktop", "--grep", "x", "--grep", "y"])
+    cap = capsys.readouterr()
+    assert "playwright test started" in cap.err and "playwright test started" not in cap.out

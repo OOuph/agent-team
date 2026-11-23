@@ -1,7 +1,7 @@
 """`team-play` — the tester's only shell command (game profile, slice 4; owner 20.11). Like `team-fetch` for the reviewer:
 one allow-listed binary that runs Playwright in a fixed checkout against a fixed base URL and prints a compact result.
 
-  team-play test [--grep TEXT] [--spec PATH] [--project NAME]    run the repository's Playwright tests (tests/e2e) against BASE_URL
+  team-play test [--grep TEXT ...] [--spec PATH] [--project NAME]    run the repository's Playwright tests (tests/e2e) against BASE_URL
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
   team-play shots [--weapon KEY] [--ability KEY] [--prefix NAME]  frames of a battle (the repository's tests/tools/battle-shots.mjs) into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
@@ -19,6 +19,7 @@ import os
 import re
 import shutil
 import subprocess
+import threading
 import sys
 import time
 from pathlib import Path
@@ -29,6 +30,7 @@ SCREENSHOT_TIMEOUT_S = 60
 MAX_ERROR_CHARS = 400
 MAX_TESTS_SHOWN = 60
 NAME_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,60}$")
+PROGRESS_EVERY_S = 60
 GREP_DENIED = set('|;&$`"<>()')
 DEFAULT_VIEWPORT = (360, 740)        # the phone first (VISION: portrait, 360 px)
 MAX_VIEWPORT = 4000
@@ -112,32 +114,49 @@ def summarize(report: dict) -> tuple[list[str], dict[str, int]]:
     return lines, totals
 
 
+def build_test_argv(a: argparse.Namespace) -> list[str]:
+    """Options first (--project, --grep joined with '|'), then `--` and the spec as a separate positional argument."""
+    argv = [*npx(), "playwright", "test", "--reporter=json"]
+    if a.project:
+        argv += ["--project", a.project]
+    if a.grep:
+        argv += ["--grep", "|".join(a.grep)]
+    if a.spec:
+        argv += ["--", a.spec]
+    return argv
+
+
+def _progress(stop: threading.Event, t0: float) -> None:
+    while not stop.wait(PROGRESS_EVERY_S):
+        print(f"team-play: playwright test still running ({time.time() - t0:.0f}s)", file=sys.stderr, flush=True)
+
+
 def cmd_test(a: argparse.Namespace) -> int:
-    if a.grep and (set(a.grep) & GREP_DENIED or a.grep.startswith("-")):
-        sys.exit("team-play: --grep takes plain text (no | ; & $ ` \" < > ( ) and no leading -)")
+    for g in a.grep or []:
+        if set(g) & GREP_DENIED or g.startswith("-"):
+            sys.exit("team-play: --grep takes plain text (no | ; & $ ` \" < > ( ) and no leading -); repeat --grep to select several tests")
     if a.spec and (".." in Path(a.spec).parts or Path(a.spec).is_absolute()):
         sys.exit("team-play: --spec is a path inside the checkout")
     base = _env("TEAM_PLAY_BASE_URL")
     if not base:
         sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to test against")
-    argv = [*npx(), "playwright", "test", "--reporter=json"]
-    if a.project:
-        argv += ["--project", a.project]
-    if a.grep:
-        argv += ["--grep", a.grep]
-    if a.spec:
-        argv.append(a.spec)
+    argv = build_test_argv(a)
     env = dict(os.environ)
     env.update({"BASE_URL": base, "PLAYWRIGHT_BASE_URL": base, "PW_TEST_HTML_REPORT_OPEN": "never", "CI": "1"})
     if a.project and a.project.lower().startswith("mobile"):
         env["E2E_MOBILE"] = "1"  # the repository's playwright.config enables its mobile projects on this
     t0 = time.time()
+    print(f"team-play: playwright test started (progress every {PROGRESS_EVERY_S}s)", file=sys.stderr, flush=True)
+    stop = threading.Event()
+    threading.Thread(target=_progress, args=(stop, t0), daemon=True).start()
     try:
         cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=TEST_TIMEOUT_S, env=env)
     except FileNotFoundError:
         sys.exit(f"team-play: {argv[0]} not found — Node and Playwright are not installed on this machine (friction for the retro)")
     except subprocess.TimeoutExpired:
         sys.exit(f"team-play: playwright test timed out after {TEST_TIMEOUT_S}s")
+    finally:
+        stop.set()
     out = out_dir()
     stamp = time.strftime("%Y%m%dT%H%M%S")
     raw_path = out / f"playwright-{stamp}.json"
@@ -337,7 +356,7 @@ def cmd_load(a: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="team-play", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("test"); s.add_argument("--grep"); s.add_argument("--spec"); s.add_argument("--project"); s.set_defaults(fn=cmd_test)
+    s = sub.add_parser("test"); s.add_argument("--grep", action="append"); s.add_argument("--spec"); s.add_argument("--project"); s.set_defaults(fn=cmd_test)
     s = sub.add_parser("screenshot"); s.add_argument("url"); s.add_argument("--out", required=True); s.add_argument("--width", type=int)
     s.add_argument("--height", type=int); s.add_argument("--full-page", action="store_true"); s.add_argument("--wait-ms", type=int, default=800)
     s.set_defaults(fn=cmd_screenshot)
