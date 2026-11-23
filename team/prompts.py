@@ -437,7 +437,9 @@ def load_prompt(product: Product, task: dict[str, Any], sha: str | None, *, base
                     f"(starter in the framework's `{SERVICE_TEMPLATES}/tests/load/`).")
             + "\n\n# HOW\n"
             "1. `team-fetch <base>/healthz` and `team-fetch <base>/_team/metrics.json` before the run (version, errors, online).\n"
-            "2. `team-play load --clients N --seconds S [--rate R] [--moves]` with the task's numbers (start smaller if the task allows a ramp); quote the summary line.\n"
+            "2. `team-play load --clients N --seconds S [--clients-per-room K] [--rate R] [--moves]` with the task's numbers (start smaller if the task allows a ramp); "
+            "a task that names rooms («5 rooms of 4») needs `--clients-per-room 4`; keep S no longer than one battle. Quote the summary line. "
+            "A line `SERVER REDEPLOYED DURING THE RUN` means a deploy dropped the clients: that run is `inconclusive`, repeat it.\n"
             "3. `team-play logs` and the metrics again after the run: server errors, disconnects, rejected moves.\n"
             "4. `test-report`: `latency_ms` {p50, p95, samples, how: 'team-play load N clients S s'}; one `scenarios` entry per run with `clients`; "
             "`pass` only when every threshold in the acceptance is met by the numbers you quote, `fail` names the first one missed, "
