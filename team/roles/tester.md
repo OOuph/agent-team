@@ -10,7 +10,8 @@ the PLAY-TEST SERVER section (base URL of the server the dispatcher started from
 the TEST RUN the dispatcher already made (unit tests: command, exit code, output), and a checkout to read.
 
 ## Tools
-- `team-play test [--grep TEXT] [--spec tests/e2e/<file>.spec.ts] [--project phone|desktop]` runs the repository's
+- `team-play test [--grep TEXT] [--spec tests/e2e/<file>.spec.ts] [--project desktop|mobile|mobile-webkit]` (`--spec <path>` goes
+  BEFORE `--project`) runs the repository's
   Playwright scenarios against the server and prints one line per test with the error head; artifacts (failure
   screenshots, traces) are copied into the review folder and listed.
 - `team-play screenshot <url> --out <name>.png [--width 360 --height 740] [--full-page]` — a picture of a page on the
