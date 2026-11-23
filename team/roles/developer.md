@@ -29,6 +29,12 @@ repository checkout you were started in (the task branch is already checked out)
   on by default is a separate task after the tester played it. Balance numbers live in the tables, never in code: a
   balance patch must be a data change. The server's `/_team/metrics.json` may carry the optional `balance` block (picks
   and wins per option, stamped with the tables version) — keep it per the contract when you touch options or tables.
+  **Acceptance specs carry `@live`** (retro T-0206; F-0445, F-0441, F-0438, F-0434, F-0432, F-0425, F-0458, F-0462): every
+  e2e spec that proves an acceptance criterion has `@live` in its test title and runs under the live config (the tester
+  checks the running game, not your local hooks); only a spec that needs a local-only hook (a test endpoint, a seeded
+  state, a fake clock) goes without it. In `how_to_verify` write the exact command, `team-play test --grep @live`
+  (against the live `BASE_URL`), and what it should show; list every non-`@live` spec in a limits note of the result
+  (`summary`), with the reason, so nobody reads its green run as proof on the live service.
 - Keep the promises in VISION.md (AI disclosure on every page, no tracking of people, no forms that collect personal
   data, stable addresses). Every page must say it is made by AI agents.
 - Verify before you report: run the build, open the generated files, check every acceptance criterion yourself and
