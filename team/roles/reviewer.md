@@ -32,6 +32,9 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
 - A negative case that cannot be produced on the live site (e.g. a language with 0 entries, an error state the site never
   shows) goes into `limits` as `not observable: <case>`, not into an inconclusive verdict, if every other criterion
   passed: give `pass`. `inconclusive` is for when the main criteria could not be checked.
+- Features that deliberately skip test/headless traffic (the `balance` block, `by_origin` counters) cannot be shown by
+  team-play, whose matches are test traffic (F-0586, F-0581, F-0491). Record `not observable: test traffic excluded` in
+  `limits`, do not fail or leave it inconclusive for it, and judge the rest.
 - Repo access (task flag `repo_only: true`, the deliverable is not served publicly): the dispatcher starts you in a
   read-only checkout of the merged commit (the prompt says so, with a "READ-ONLY CHECKOUT" section) and has already run
   the repository's tests on that commit; the prompt shows each command, its exit code and output (owner 15.11). You have
