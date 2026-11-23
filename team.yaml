@@ -44,6 +44,9 @@ billing:                           # owner 04.11: "лимит расхода 100
 budget:                           # USD-equivalents from the CLI's total_cost_usd; with an OAuth token nothing is billed but the caps still hold
   max_usd_per_product_per_day: 20.0
   max_usd_per_run: 3.0
+  run_caps: {}                    # cap of ONE run per role, USD, e.g. {po: 6.0}: replaces the caller's own cap (the PO's $2, a task's
+                                  # budget_usd, max_usd_per_run). Set it together with a dearer model for the role; product.yaml
+                                  # `run_caps: {<role>: N}` overrides per product. The daily cap of the product still holds.
   min_usd_per_run: 0.3            # below this remaining daily budget no run is started
   unknown_cost_reserve_usd: 0.5   # a run without a reported cost is booked at this much
   warn_share: 0.8

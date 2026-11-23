@@ -7,6 +7,7 @@ the PR, a human merges.
 
 ## 2026-11-23
 
+- The cap of one role run can follow the role's model: `run_caps: {<role>: USD}` in product.yaml, `budget.run_caps` in team.yaml (owner 23.11: «PO и главному треду быть на Fable, а реализации писать Opus-ом» → «Да, оба»). The PO's run cap was a literal $2 written for Opus (average PO run of ai-battles $0.95, maximum $1.58); on a model about 3 times dearer the run would hit `--max-budget-usd`, be cut and bring no decision. A configured cap replaces the caller's own cap for that role; what is left of the product's day still limits it. Models per role were configurable before (`claude.models` in team.yaml, `models` in product.yaml); a model per task is not (task T in the agent-team backlog).
 - A deploy waits for the longest battle: `DRAIN_MAX_SEC` default 240 → 300 s in `deploy/service/deploy-service.sh` (ai-battles: the room creator may choose a 240 s battle since 22.11, and a cap equal to the battle length stops the old colour at the battle's last second; owner 23.11 «все сливай», installed on the droplet together with PR 367). A service with longer matches sets `DRAIN_MAX_SEC` in its `<slug>.conf`.
 
 ## 2026-11-22

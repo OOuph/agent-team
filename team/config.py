@@ -377,6 +377,28 @@ class Product:
         v = self.raw.get("budget_usd_per_day")
         return float(v) if v is not None else float(self.st.budget["max_usd_per_product_per_day"])
 
+    def run_cap(self, role: str) -> tuple[float, str] | None:
+        """The owner's cap of ONE run of `role`, USD: product.yaml `run_caps.<role>`, else team.yaml
+        `budget.run_caps.<role>`; None = the caller's own cap (the PO's $2, the task's `budget_usd`, `max_usd_per_run`).
+        Owner 23.11: a role moved to a dearer model (`models: {po: claude-fable-5-2}`) needs a higher cap with it —
+        the PO's $2 was written for Opus, and a run that hits `--max-budget-usd` is cut and brings no decision.
+        A wrong value is logged and skipped. Returns (cap, where it came from)."""
+        for where, block in ((f"product.yaml run_caps.{role}", self.raw.get("run_caps")),
+                             (f"team.yaml budget.run_caps.{role}", self.st.budget.get("run_caps"))):
+            if block is None:
+                continue
+            if not isinstance(block, dict):
+                log.warning("%s: %s must be a mapping like {po: 6.0}, got %r — ignored", self.slug, where.rsplit(".", 1)[0], block)
+                continue
+            v = block.get(role)
+            if v is None:
+                continue
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or v <= 0:
+                log.warning("%s: %s=%r is not a positive number of dollars — ignored", self.slug, where, v)
+                continue
+            return float(v), where
+        return None
+
     @property
     def stop_file(self) -> Path:
         return self.dir / "STOP"

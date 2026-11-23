@@ -1235,3 +1235,34 @@ def test_base_conflict_at_start_is_never_resolved_silently(tmp_path: Path):
     except gitops.MergeConflict as e:
         assert "style.css" in e.files
     assert ".fullscreen{display:none}" in (repo / "style.css").read_text(encoding="utf-8")          # main keeps the other task's lines
+
+
+# ------------------------------------------------------------------ owner 23.11: the cap of one run follows the role's model
+
+def test_the_cap_of_one_run_comes_from_run_caps_of_the_role(tmp_path: Path):
+    """product.yaml `run_caps: {developer: 5}` replaces the $3 of `max_usd_per_run` for that role only; team.yaml
+    `budget.run_caps` is the layer below; a wrong value is ignored; the daily cap still holds."""
+    st = _sequential(tmp_path, {"budget": {"max_usd_per_run": 3.0, "min_usd_per_run": 0.3, "run_caps": {"designer": 1.5, "po": 4.0}}})
+    p = _product(st, extra="budget_usd_per_day: 50\nrun_caps:\n  developer: 5\n  po: 6.5\n  tester: -1\n")
+    assert p.run_cap("developer") == (5.0, "product.yaml run_caps.developer")
+    assert p.run_cap("po") == (6.5, "product.yaml run_caps.po")                        # the product layer wins
+    assert p.run_cap("designer") == (1.5, "team.yaml budget.run_caps.designer")
+    assert p.run_cap("tester") is None and p.run_cap("game-designer") is None           # wrong value and no value: the caller's cap
+    _task(p, "developer"); _task(p, "designer"); _task(p, "game-designer")
+    r = LaneRunner(cost=0.1)
+    cyc = Cycle(st, p, r, "c1")
+    cyc.run(["execute"])
+    by_role = dict(zip(r.calls, r.caps))
+    assert by_role == {"developer": 5.0, "designer": 1.5, "game-designer": 3.0}
+    cyc.store.close()
+
+
+def test_run_caps_never_lift_a_run_above_what_is_left_of_the_day(tmp_path: Path):
+    st = _sequential(tmp_path, {"budget": {"max_usd_per_run": 3.0, "min_usd_per_run": 0.3}})
+    p = _product(st, extra="budget_usd_per_day: 4\nrun_caps:\n  developer: 9\n")
+    _task(p, "developer")
+    r = LaneRunner(cost=0.1)
+    cyc = Cycle(st, p, r, "c1")
+    cyc.run(["execute"])
+    assert r.caps == [4.0]
+    cyc.store.close()

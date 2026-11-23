@@ -240,6 +240,10 @@ class Cycle:
             # N lanes starting together cannot each see the same «remaining» and overshoot the daily cap between them.
             reserved = sum(self._reserved.values())
             cap = float(cap or self.st.budget["max_usd_per_run"])
+            own = self.p.run_cap(role)                                  # owner 23.11: the cap of one run follows the role's model
+            if own is not None:
+                log.info("%s: run %s: cap of one %s run $%.2f (%s) instead of $%.2f", self.p.slug, run_id, role, own[0], own[1], cap)
+                cap = own[0]
             credit_left = billing.remaining_today(self.st)             # None inside the subscription
             remaining = self.p.daily_cap - self.store.spent_today() - reserved
             if credit_left is not None:
