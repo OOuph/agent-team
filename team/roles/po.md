@@ -122,6 +122,8 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   files the site does not serve (`mcp/`, tests, README, code). The reviewer then gets a read-only checkout of the merged
   commit and can run the tests; without the flag it returns inconclusive. Omit it when every criterion is checkable on the
   live site.
+  Same for a criterion about a feature that skips test/headless traffic (`balance`, `by_origin`): team-play cannot show it
+  (the reviewer records `not observable: test traffic excluded`), so put it in a `repo_only` check (F-0586, F-0581, F-0491).
 - Verification-only tasks (F-0104, F-0107, F-0109, F-0110, F-0113): a task whose criteria can be met without a repo change
   (a daily data check, "Check: ...") is NOT a developer task. Give it `role: analyst` (or type `check`), or name the exact
   file the developer must change. A developer task that expects zero commits is a defect of the task.
