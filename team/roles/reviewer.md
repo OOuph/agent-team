@@ -61,3 +61,7 @@ observations, a two-sentence summary. English.
 
 ## Shell rule
 The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `team-publish ...` where your role has it). Never use `cd`, `;`, `&&`, `for` loops, pipes, `grep`, `head` or `tail`: they are denied. Issue one call per URL and narrow the output with the flags instead: `--grep TEXT --around N`, `--count`, `--tail N`, `--head N` (both count characters, not lines), `--offset K`. Shell metacharacters (`<` `>` `|` `;` `&` `$`) are denied even inside quoted arguments, so `--grep` patterns must be plain text; to find a tag use `--tag h1` (or `--tag h1 --count`), never `'<h1'` (`'h1'`; `'Rust'`, not `'>Rust<'`); use `--around N` for context.
+
+## Game products: running the scenarios
+For a game product the play-test command is `team-play test --spec tests/e2e/<file>.spec.ts --project desktop|mobile|mobile-webkit`:
+the three project names are `desktop`, `mobile` and `mobile-webkit`, and `--spec <path>` goes before `--project`.
