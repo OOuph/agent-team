@@ -41,7 +41,7 @@ LASER = "Balance: weapons/laser win rate 0.71 over 35 picks, humans only (band 0
 
 
 def _settings(tmp_path: Path) -> C.Settings:
-    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_n_cycles": 0, "digest_hours_utc": [0]}})
+    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_h": 0, "digest_hours_utc": [0]}})
     return C.Settings(raw, tmp_path, tmp_path / "products", tmp_path / "data", tmp_path / "data" / "repos")
 
 

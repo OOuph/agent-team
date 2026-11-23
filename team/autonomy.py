@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from . import billing
+from . import billing, ux
 from .config import Product, Settings, load_products
 from .store import Store
 
@@ -41,7 +41,8 @@ CRON_REQUIRED = {
 }
 BUILD_SITES = ("agentsmd-tracker", "release-radar", "luz-amanha")
 MAX_AGE_H = {"cycle_warn": 1.25, "cycle_fail": 2.5, "backup": 26, "build": 26, "diary": 26, "report": 13, "posts": 26,
-             "owner_q": 2, "critic_report": 3, "critic_responses": 2, "billing": 2}
+             "owner_q": 2, "critic_report": 3, "critic_responses": 2, "billing": 2,
+             "persona": 26}       # two missed 12-hour persona runs plus the hourly cycle's slack
 
 
 @dataclass
@@ -301,6 +302,27 @@ def check_budget(products: list[Product]) -> Check:
     return Check("C17", "daily budget per product (UTC day)", worst, "; ".join(rows))
 
 
+def check_personas(st: Settings, products: list[Product], now: datetime) -> Check:
+    """Last persona run that returned a result, per product whose `persona` gate is open and that has scenarios.
+    WARN (reader experience is quality, not an outage) when a product has had none for more than 26 h: from 04.11 to
+    22.11 the personas ran on no product and nothing in this table showed it."""
+    name = "persona runs per product"
+    every = ux.persona_every_h(st.cycle)
+    if every <= 0:
+        return Check("C18", name, OK, "switched off (cycle.persona_every_h: 0)")
+    rows, worst = [], OK
+    for p in products:
+        sdir = p.dir / "scenarios"
+        if p.raw.get("paused") or not p.gate_open("persona") or not sdir.is_dir() or not any(sdir.glob("*.md")):
+            continue
+        h = _age_h(ux.last_persona_ok(p), now)
+        if h is None or h > MAX_AGE_H["persona"]:
+            worst = WARN
+        rows.append(f"{p.slug} {_fmt_h(h)}")
+    return Check("C18", name, worst, ("; ".join(rows) + f" (every {every} h, WARN > {MAX_AGE_H['persona']} h)") if rows
+                 else "no product with scenarios and an open persona gate")
+
+
 def run_all(st: Settings, *, tests: bool = True, now: datetime | None = None) -> list[Check]:
     now = now or datetime.now(timezone.utc)
     products = load_products(st)
@@ -310,7 +332,7 @@ def run_all(st: Settings, *, tests: bool = True, now: datetime | None = None) ->
         lambda: check_backup(st, now), lambda: check_builds(st, now), lambda: check_sites(products),
         lambda: check_posts(products, now), lambda: check_report(st, now), lambda: check_owner_questions(products, now),
         lambda: check_critic(st, now), lambda: check_billing(st, now), lambda: check_disk(st), lambda: check_secrets(st),
-        lambda: check_budget(products)]
+        lambda: check_budget(products), lambda: check_personas(st, products, now)]
     out = []
     for fn in checks:
         try:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from team import config as C
@@ -73,3 +74,97 @@ def test_po_prompt_carries_reader_experience(tmp_path: Path) -> None:
     txt = prompts.po_prompt(p, s, cycle_id="c1", observations=[], questions=[], metrics_md="", spent_today=0, cap=20, max_ready=3, idle=False)
     assert "READER EXPERIENCE" in txt and "no persona experience scores yet" in txt
     s.close()
+
+
+# ------------------------------------------------------------------ schedule: by the clock, not by the cycle count
+
+GOOD = {"first_impression": "clear", "steps_to_understand": 1, "interest": 4, "usefulness": 4, "would_return": "yes",
+        "would_share": "maybe", "why": "answers my question", "wish": "nothing"}
+
+
+def _age_mark(p: C.Product, hours: float, **over) -> dict:
+    """Move the product's persona mark `hours` into the past (as if the last run started then)."""
+    m = {**ux.persona_mark(p.dir), **over}
+    m["started"] = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat(timespec="seconds")
+    if m.get("last_ok"):
+        m["last_ok"] = m["started"]
+    ux.write_persona_mark(p.dir, m)
+    return m
+
+
+def test_personas_run_on_schedule_in_a_store_with_60_cycles(tmp_path: Path) -> None:
+    """04.11–22.11 the personas ran on no product: the schedule was `len(store.cycles()) % every == 1` and
+    `Store.cycles()` returns at most 50 rows, so after a product's 50th cycle the condition was false for good."""
+    st = _settings(tmp_path)
+    p = _product(st)
+    s = Store(p.dir)
+    for i in range(60):
+        s.cycle_start(f"old-{i:02d}")
+        s.cycle_finish(f"old-{i:02d}", ["collect"], 0.0)
+    assert len(s.cycles()) == 50 and len(s.cycles()) % 12 != 1                # the old condition can never hold here again
+    s.close()
+    assert st.cycle["persona_every_h"] == 12 and ux.persona_every_h(st.cycle) == 12
+
+    r = Runner([GOOD] * 6)
+    Cycle(st, p, r, "c61").run(["collect"])                                   # never ran → due at once
+    assert [c[0] for c in r.calls] == ["persona", "persona"]
+    m = ux.persona_mark(p.dir)
+    assert m["cycle"] == "c61" and m["scenarios"] == ["s0", "s1"] and m["ok"] == 2 and m["finished"] and m["last_ok"] == m["started"]
+
+    Cycle(st, p, r, "c62").run(["collect"])                                   # an hour later: not due
+    assert len(r.calls) == 2
+    _age_mark(p, 11.5)
+    Cycle(st, p, r, "c63").run(["collect"])                                   # 11.5 h: still not due
+    assert len(r.calls) == 2
+    _age_mark(p, 12.1)
+    Cycle(st, p, r, "c64").run(["collect"])                                   # 12 h passed: due, the rotation goes on
+    assert len(r.calls) == 4
+    m = ux.persona_mark(p.dir)
+    assert m["cycle"] == "c64" and m["scenarios"] == ["s2", "s0"] and m["next"] == 1
+    s = Store(p.dir)
+    assert len([e for e in s.events(limit=200) if e["kind"] == "persona.run"]) == 2
+    assert not [e for e in s.events(limit=200) if e["kind"] == "phase.error"]
+    s.close()
+
+    st.raw["cycle"]["persona_every_h"] = 0                                    # 0 switches the personas off
+    _age_mark(p, 100)
+    Cycle(st, p, r, "c65").run(["collect"])
+    assert len(r.calls) == 4
+
+
+def test_persona_run_without_a_result_is_retried_sooner_and_dry_run_leaves_no_mark(tmp_path: Path) -> None:
+    from team.runner import RunResult
+    st = _settings(tmp_path)
+    p = _product(st)
+
+    class Failing:
+        calls = 0
+
+        def run(self, role, prompt, schema, **kw):
+            Failing.calls += 1
+            return RunResult(False, None, None, 0.0, 0, "timeout")
+
+    Cycle(st, p, Failing(), "d1", dry_run=True).run(["collect"])              # dry run: nothing runs, no mark, due again
+    assert Failing.calls == 0 and ux.persona_mark(p.dir) == {} and ux.personas_due(p.dir, 12)
+    Cycle(st, p, Failing(), "c1").run(["collect"])
+    m = ux.persona_mark(p.dir)
+    assert Failing.calls == 2 and m["ok"] == 0 and m["finished"] and not m["last_ok"]
+    now = datetime.now(timezone.utc)
+    assert not ux.personas_due(p.dir, 12, now + timedelta(hours=2), retry_h=3)     # not every cycle
+    assert ux.personas_due(p.dir, 12, now + timedelta(hours=3, minutes=1), retry_h=3)   # but well before the 12 h
+    assert not ux.personas_due(p.dir, 2, now + timedelta(hours=1), retry_h=3)       # the retry never waits longer than the period
+    assert ux.personas_due(p.dir, 2, now + timedelta(hours=2, minutes=1), retry_h=3)
+    (p.dir / ux.PERSONA_MARK_FILE).write_text("{broken", encoding="utf-8")    # an unreadable mark reads as «never ran»
+    assert ux.persona_mark(p.dir) == {} and ux.personas_due(p.dir, 12)
+
+
+def test_persona_every_h_reads_the_deprecated_key_as_hours(caplog) -> None:
+    assert ux.persona_every_h({}) == 12
+    assert ux.persona_every_h({"persona_every_h": 6, "persona_every_n_cycles": 24}) == 6      # the new key wins
+    assert ux.persona_every_h({"persona_every_h": "soon"}) == 12
+    ux._legacy_warned = False
+    with caplog.at_level("WARNING", logger="team.ux"):
+        assert ux.persona_every_h({"persona_every_n_cycles": 8}) == 8
+        assert ux.persona_every_h({"persona_every_n_cycles": 0}) == 0
+    assert caplog.text.count("deprecated") == 1                               # one warning per process
+    assert "persona_every_n_cycles" not in C.DEFAULTS["cycle"]

@@ -20,7 +20,7 @@ SHIPS = json.dumps({"ships": [{"name": "scout", "move": 3, "range": 1, "hp": 1}]
 
 
 def _settings(tmp_path: Path) -> C.Settings:
-    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_n_cycles": 2, "digest_hours_utc": [0],
+    raw = C._merge(C.DEFAULTS, {"cycle": {"review_after_min": 0, "persona_every_h": 2, "digest_hours_utc": [0],
                                           "execute_slots": {"developer": 1, "marketer": 1, "analyst": 1}}})
     return C.Settings(raw, tmp_path, tmp_path / "products", tmp_path / "data", tmp_path / "data" / "repos")
 
@@ -115,7 +115,7 @@ def test_gated_phases_do_not_run_before_their_stage(tmp_path: Path, monkeypatch)
         raise AssertionError("seocheck.report must not run before its stage")
     monkeypatch.setattr(seocheck, "report", _no_network)
     p.raw["site_base"] = "https://fleets.example.test"            # a site exists, yet the gates are closed at M0
-    cyc = Cycle(st, p, r, "c1")                                     # cycle 1 of 2 → personas would fire without the gate
+    cyc = Cycle(st, p, r, "c1")                                     # no persona run yet → personas would fire without the gate
     cyc.run(["collect", "geo", "voice"])
     assert "persona" not in r.calls and "geo-probe" not in r.calls and "voice" not in r.calls
     assert not [e for e in cyc.store.events() if e["kind"] == "phase.error"]
@@ -123,7 +123,7 @@ def test_gated_phases_do_not_run_before_their_stage(tmp_path: Path, monkeypatch)
     # at M2 (seo kept closed so no network) the same cycle runs personas and the geo probe
     p.raw["stage"] = "M2"
     p.raw["phase_gates"]["seo"] = "M3"
-    Cycle(st, p, None, "c2").run(["digest"])                        # cycle 2 → the next one is the odd one personas run on
+    Cycle(st, p, None, "c2").run(["digest"])                        # one more cycle: the schedule is by the clock, not by the count
     r2 = FakeRunner()
     cyc = Cycle(st, p, r2, "c3")
     cyc.run(["collect", "geo"])

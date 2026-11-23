@@ -23,7 +23,7 @@ SPEC = "npx playwright test tests/e2e/two-players.spec.ts"
 
 def _settings(tmp_path: Path, over: dict | None = None) -> C.Settings:
     base = copy.deepcopy(C.DEFAULTS)                                   # the tests below change `claude` in place
-    raw = C._merge(base, C._merge({"cycle": {"review_after_min": 0, "persona_every_n_cycles": 0, "digest_hour_utc": 99}}, over or {}))
+    raw = C._merge(base, C._merge({"cycle": {"review_after_min": 0, "persona_every_h": 0, "digest_hour_utc": 99}}, over or {}))
     return C.Settings(raw, tmp_path, tmp_path / "products", tmp_path / "data", tmp_path / "data" / "repos")
 
 

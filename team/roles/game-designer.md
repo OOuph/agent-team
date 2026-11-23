@@ -63,3 +63,7 @@ The task's own document is in the prompt under DOCUMENTS OF THIS TASK — return
 ## Output
 The design-spec schema: `summary`, `files` (complete documents), `balance_changes`, `proposed_tasks`, `open_questions`,
 `friction`. Write the documents in the language of VISION.
+- `friction` (optional, ≤ 5): where the FRAMEWORK got in your way, not the game — each item is an object
+  `{kind, what}`, never a bare string. `kind` is one of `missing_tool`, `denied_permission`, `unclear_instruction`,
+  `schema_mismatch`, `missing_data`, `environment`, `other`; a missing input (no metrics, no tester report, no
+  autobalance section) is `missing_data`. `what` says it in one sentence, ≤ 300 characters.

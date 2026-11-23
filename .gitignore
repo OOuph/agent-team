@@ -16,6 +16,7 @@ products/*/reviews/
 products/*/digests/
 products/*/metrics/
 products/*/decisions.md
+products/*/personas-last.json
 builds/
 
 # service-account keys and other secret files (owner 10.11: Search Console key)

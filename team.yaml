@@ -52,7 +52,9 @@ cycle:
   review_after_min: 6             # a released task is reviewed once the droplet has had time to pull (timer every 5 min)
   measure_after_h: 24             # an accepted task is measured a day later
   max_review_fails: 2             # then the task is blocked and the owner hears about it
-  persona_every_n_cycles: 12       # twice a day on Opus (was 6 on Sonnet)
+  persona_every_h: 12              # hours between persona runs per product: twice a day on Opus; 0 = off. Last run:
+                                   # products/<slug>/personas-last.json (was persona_every_n_cycles, still read as hours)
+  persona_retry_h: 3               # a persona run that brought no result is tried again this soon
   persona_scenarios_per_run: 2     # scenarios rotate run to run
   persona_cap_usd: 1.0
   digest_hours_utc: [7, 19]        # digests to the owner's ops channel (UTC)

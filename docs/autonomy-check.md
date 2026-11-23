@@ -39,6 +39,7 @@ WARN and FAIL line otherwise. The full table is kept in `data/autonomy/<stamp>.m
 | C15 | Disk | `statvfs` | > 10 GB free (WARN > 3) | clear `data/work/` and old `data/runs/` (not while a cycle runs: `data/work/<slug>/wt/` holds the task checkouts of the repository roles — their commits stay on `task/<id>` in the clone and a checkout is created again, but its installed dependencies are gone) |
 | C16 | Required secrets | names in `.env` (values never printed) | Claude token, GitHub token, Telegram bot and ops chat present | only the owner can add a secret |
 | C17 | Daily budget per product | product stores | below 90 % of the product cap (WARN otherwise) | the product stops for the rest of the UTC day by design |
+| C18 | Persona runs per product | `products/<slug>/personas-last.json` (`last_ok`), else the newest line of `ux-scores.jsonl`; only products with scenarios whose `persona` gate is open and that are not paused | a run with a result ≤ 26 h ago (WARN otherwise: reader experience is quality, not an outage) | the schedule is `cycle.persona_every_h` (12); read the product's cycle log for `personas due` and `persona scenario … brought no result`, then the `*-persona-*` runs under `data/runs/<slug>/` |
 
 ## Drills (live contour, run with the owner's consent)
 
