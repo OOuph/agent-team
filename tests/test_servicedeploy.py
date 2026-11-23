@@ -729,3 +729,85 @@ def test_vhost_template_renders_valid_nginx_identifiers_for_hyphenated_slug():
     assert "${SLUG//-/_}" in upstream_line
     add = (DEPLOY_DIR / "add-service.sh").read_text()
     assert "certbot certonly --webroot -w /var/www/acme" in add and "location /.well-known/acme-challenge/ { root /var/www/acme; }" in add
+
+
+# ------------------------------------------------------------------ owner 23.11: a service moves to a new host name
+
+def _move_host_env(tmp_path: Path) -> tuple[dict[str, str], Path]:
+    """A droplet in tmp dirs for move-host.sh: a registered service `fleets` on old.example.test with its live vhost,
+    and fakes of nginx, systemctl, certbot, curl and render-vhost.sh that write what they were asked to do."""
+    etc, na, ne, le, fake = tmp_path / "etc", tmp_path / "na", tmp_path / "ne", tmp_path / "le", tmp_path / "fakebin"
+    for d in (etc / "services", na, ne, le / "old.example.test", fake, tmp_path / "log"):
+        d.mkdir(parents=True)
+    (etc / "service.conf.template").write_text("template\n")
+    (etc / "env").write_text("CERTBOT_EMAIL=ops@example.test\n")
+    (etc / "services" / "fleets.conf").write_text("# fleets\nHOST=old.example.test\nREPO=https://github.com/x/fleets.git\nHEALTH_PATH=/healthz\nPORT_A=8101\nPORT_B=8102\n")
+    (le / "old.example.test" / "fullchain.pem").write_text("old cert\n")
+    (na / "fleets.conf").write_text("live vhost of old.example.test\n")
+    (ne / "fleets.conf").symlink_to(na / "fleets.conf")
+    calls = tmp_path / "calls.txt"
+    _exe(fake / "nginx", f"#!/usr/bin/env bash\necho \"nginx $*\" >> {calls}\n[ -f {tmp_path}/nginx-fails ] && exit 1\nexit 0\n")
+    _exe(fake / "systemctl", f"#!/usr/bin/env bash\necho \"systemctl $*\" >> {calls}\nexit 0\n")
+    _exe(fake / "curl", f"#!/usr/bin/env bash\necho \"curl $*\" >> {calls}\nexit 0\n")
+    # certbot: writes the certificate and records what the web server looked like while the challenge ran
+    _exe(fake / "certbot", f"#!/usr/bin/env bash\necho \"certbot $*\" >> {calls}\n"
+                           f"echo \"during-certbot live=$(cat {na}/fleets.conf) acme=$(ls {ne} | tr '\\n' ' ')\" >> {calls}\n"
+                           f"[ -f {tmp_path}/certbot-fails ] && exit 1\n"
+                           f"mkdir -p {le}/new.example.test && echo new > {le}/new.example.test/fullchain.pem\n")
+    _exe(fake / "render-vhost.sh", f"#!/usr/bin/env bash\necho \"render $*\" >> {calls}\necho \"vhost of $2\" > {na}/$1.conf\nln -sfn {na}/$1.conf {ne}/$1.conf\nexit 3\n")
+    env = {**os.environ, "REQUIRE_ROOT": "0", "SKIP_DNS": "1", "ETC_DIR": str(etc), "NGINX_AVAILABLE": str(na), "NGINX_ENABLED": str(ne),
+           "LETSENCRYPT_LIVE": str(le), "ACME_ROOT": str(tmp_path / "acme"), "LOG_DIR": str(tmp_path / "log"),
+           "RENDER_VHOST": str(fake / "render-vhost.sh"), "PATH": f"{fake}:{os.environ['PATH']}"}
+    return env, calls
+
+
+def test_move_host_issues_the_certificate_beside_the_live_vhost_and_redirects_the_old_name(tmp_path: Path):
+    env, calls = _move_host_env(tmp_path)
+    script = str(DEPLOY_DIR / "move-host.sh")
+    assert subprocess.run(["bash", "-n", script]).returncode == 0
+    cp = subprocess.run(["bash", script, "fleets", "new.example.test"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    log = calls.read_text()
+    # while certbot ran, the live vhost of the old host was untouched and the ACME block was a separate file
+    assert "during-certbot live=live vhost of old.example.test acme=fleets-acme.conf fleets.conf" in log
+    assert "certbot certonly --webroot" in log and "-d new.example.test" in log and "-m ops@example.test" in log
+    na, ne = tmp_path / "na", tmp_path / "ne"
+    assert not (na / "fleets-acme.conf").exists() and not (ne / "fleets-acme.conf").exists()        # the bootstrap is gone
+    assert (na / "fleets.conf").read_text() == "vhost of new.example.test\n" and "render fleets new.example.test --no-reload" in log
+    old = (na / "fleets-old-host.conf").read_text()
+    assert old.count("server_name old.example.test;") == 2 and old.count("return 301 https://new.example.test$request_uri;") == 2
+    assert "/le/old.example.test/fullchain.pem" in old and "acme-challenge" in old and (ne / "fleets-old-host.conf").is_symlink()
+    conf = (tmp_path / "etc" / "services" / "fleets.conf").read_text()
+    assert "HOST=new.example.test\n" in conf and "OLD_HOST=old.example.test\n" in conf and conf.count("\nHOST=") == 1 and "PORT_A=8101" in conf
+    assert len(list((tmp_path / "etc" / "services").glob("fleets.conf.before-move-*"))) == 1
+    assert "action=host-moved from=old.example.test to=new.example.test" in (tmp_path / "log" / "deploy.log").read_text()
+    assert log.count("systemctl reload nginx") == 2 and "curl -fsS" in log and "https://new.example.test/healthz" in log
+    # a second run: the certificate exists, the definition already names the new host — no certbot, no second redirect file
+    calls.write_text("")
+    cp = subprocess.run(["bash", script, "fleets", "new.example.test"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 0 and "certbot" not in calls.read_text()
+    assert "OLD_HOST=old.example.test\n" in (tmp_path / "etc" / "services" / "fleets.conf").read_text()
+    assert len(list((tmp_path / "etc" / "services").glob("fleets.conf.before-move-*"))) == 1
+
+
+def test_move_host_leaves_the_service_as_it_was_when_certbot_or_nginx_fails(tmp_path: Path):
+    env, calls = _move_host_env(tmp_path)
+    script = str(DEPLOY_DIR / "move-host.sh")
+    na, ne, conf = tmp_path / "na", tmp_path / "ne", tmp_path / "etc" / "services" / "fleets.conf"
+    before = conf.read_text()
+    (tmp_path / "certbot-fails").write_text("x")
+    cp = subprocess.run(["bash", script, "fleets", "new.example.test"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 1 and "certbot did not issue" in cp.stderr
+    assert (na / "fleets.conf").read_text() == "live vhost of old.example.test\n" and conf.read_text() == before
+    assert not (na / "fleets-acme.conf").exists() and not (na / "fleets-old-host.conf").exists() and "render" not in calls.read_text()
+    (tmp_path / "certbot-fails").unlink()
+    # the certificate is there now; nginx refuses the new vhosts: the previous vhost comes back, nothing is reloaded after it
+    (tmp_path / "le" / "new.example.test").mkdir(); (tmp_path / "le" / "new.example.test" / "fullchain.pem").write_text("new\n")
+    (tmp_path / "nginx-fails").write_text("x"); calls.write_text("")
+    cp = subprocess.run(["bash", script, "fleets", "new.example.test"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 1 and "nginx -t failed" in cp.stderr
+    assert (na / "fleets.conf").read_text() == "live vhost of old.example.test\n" and conf.read_text() == before
+    assert not (ne / "fleets-old-host.conf").exists() and "systemctl reload" not in calls.read_text()
+    # usage and validation
+    for args, code in ((["fleets"], 64), (["Fleets", "new.example.test"], 64), (["fleets", "not a host"], 64), (["other", "new.example.test"], 1)):
+        assert subprocess.run(["bash", script, *args], capture_output=True, text=True, env=env).returncode == code
