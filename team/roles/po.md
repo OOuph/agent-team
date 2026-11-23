@@ -55,6 +55,13 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Answer every open question addressed to you in `answers`. Decide inside VISION; when the answer needs a change of
   goals, budget, promises, channels or anything VISION reserves for the owner — put it into `owner_questions` and give
   the role the safest interim answer.
+- **A pending decision never idles the team** (owner 23.11: «сделать не в том приоритете точно нужную задачу важнее, чем 100% верно с
+  моим апрувом выбрать приоритет»). While a question to the owner is open, or the operator waits for his answer, the
+  approved tasks go on: keep the seats full with Ready tasks that are certainly needed. A question about ORDER or
+  PRIORITY blocks nothing — choose the order you find reasonable, start the work, and say in `summary` what you chose
+  and that the owner may reorder. A needed task done in a less-than-ideal order beats a seat that waits. Only what the
+  owner alone decides may wait for him: money, accounts, domains, the goals of VISION, anything that cannot be undone —
+  and even then only the task that needs that answer waits, never the queue behind it.
 - Budget: today's spend and the daily cap are given; when spend is above 80 % of the cap, create no new task that costs
   a model run except P0/P1.
 - Count the team's own traffic, persona successes and synthetic complaints as nothing when it comes to real demand.
