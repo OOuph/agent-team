@@ -58,7 +58,8 @@ DRAIN_SEC="${DRAIN_SEC:-5}"                                     # old colour kee
 # matches end. It reports them itself: a JSON document with a number that is > 0 while a match is running.
 DRAIN_BUSY_PATH="${DRAIN_BUSY_PATH-/_team/metrics.json}"        # path on the old colour; empty = no busy check (plain DRAIN_SEC)
 DRAIN_BUSY_FIELD="${DRAIN_BUSY_FIELD:-now.rooms_playing}"       # dotted path to the number of running matches in that JSON
-DRAIN_MAX_SEC="${DRAIN_MAX_SEC:-240}"                           # cap on the wait (a match is 180 s); then the old colour is stopped anyway
+DRAIN_MAX_SEC="${DRAIN_MAX_SEC:-300}"                           # cap on the wait; then the old colour is stopped anyway. 300 since 23.11: a room
+                                                                # battle of ai-battles may last 240 s (the creator's choice), the cap of 240 cut it at its last second
 DRAIN_POLL_SEC="${DRAIN_POLL_SEC:-5}"                           # how often the old colour is asked
 KEEP_RELEASES="${KEEP_RELEASES:-3}"
 INSTALL_TIMEOUT_SEC="${INSTALL_TIMEOUT_SEC:-600}"
