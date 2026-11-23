@@ -208,22 +208,45 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
     raise PlaytestError(f"server did not answer {health} within {start_timeout_s}s\n" + _tail(log_path))
 
 
-def stop(server: Server) -> None:
-    p = server.proc
-    if p is None or p.poll() is not None:
-        return
+def _port_open(port: int) -> bool:
+    with socket.socket() as s:
+        s.settimeout(0.5)
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def _kill_group(p: subprocess.Popen, sig: int) -> None:
     try:
-        os.killpg(os.getpgid(p.pid), 15)
+        os.killpg(os.getpgid(p.pid), sig)
     except (ProcessLookupError, PermissionError, OSError):
-        p.terminate()
-    try:
-        p.wait(timeout=STOP_GRACE_S)
-    except subprocess.TimeoutExpired:
         try:
-            os.killpg(os.getpgid(p.pid), 9)
-        except (ProcessLookupError, PermissionError, OSError):
-            p.kill()
-        p.wait(timeout=STOP_GRACE_S)
+            p.send_signal(sig)
+        except (ProcessLookupError, OSError):
+            pass
+
+
+def stop(server: Server) -> None:
+    """Stop the server; returns only after the process has exited and the port is closed (bounded by timeouts)."""
+    p = server.proc
+    if p is None:
+        return
+    if p.poll() is None:
+        _kill_group(p, 15)
+        try:
+            p.wait(timeout=STOP_GRACE_S)
+        except subprocess.TimeoutExpired:
+            _kill_group(p, 9)
+            p.wait(timeout=STOP_GRACE_S)
+    port = server.port
+    if not port:
+        return
+    deadline = time.monotonic() + STOP_GRACE_S
+    while _port_open(port) and time.monotonic() < deadline:
+        time.sleep(0.05)
+    if _port_open(port):  # a child outside the leader still holds the port
+        _kill_group(p, 9)
+        deadline = time.monotonic() + STOP_GRACE_S
+        while _port_open(port) and time.monotonic() < deadline:
+            time.sleep(0.05)
 
 
 def _tail(p: Path, n: int = LOG_TAIL_CHARS) -> str:
