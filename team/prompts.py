@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -175,13 +176,40 @@ def task_docs(task: dict[str, Any] | None) -> list[str]:
     return [str(d) for d in (docs if isinstance(docs, list) else [docs]) if str(d).strip() and safe_rel_path(str(d))][:TASK_DOCS_MAX]
 
 
+def task_docs_for(product: Product, task: dict[str, Any] | None) -> list[str]:
+    """`task_docs`, and a task of a standing direction that lost its `docs` (made by hand, or by an older dispatcher) gets the
+    direction's own documents: DOCUMENTS OF THIS TASK is never missing for `standing: mechanics` (F-0605)."""
+    docs = task_docs(task)
+    sid = (task or {}).get("standing")
+    if docs or not sid:
+        return docs
+    from . import standing
+    d = next((d for d in standing.directions(product) if d.id == str(sid)), None)
+    return task_docs({"docs": list(d.docs)}) if d else docs
+
+
+REPORT_RE = re.compile(r"(?<![\w/.-])(reports/[\w./-]+\.(?:md|json|txt|csv))")
+REPORTS_MAX = 5
+REPORT_CHARS = 6000
+
+
+def task_reports(task: dict[str, Any] | None) -> list[str]:
+    """Safe `reports/...` paths the task text names (title, problem, scope, acceptance), in order, without repeats."""
+    text = _y(_task_brief(task or {}))
+    out: list[str] = []
+    for m in REPORT_RE.findall(text):
+        if m not in out and safe_rel_path(m):
+            out.append(m)
+    return out[:REPORTS_MAX]
+
+
 def truncated_design_docs(product: Product, gdd_dir: Path, task: dict[str, Any] | None = None) -> set[str]:
     """Repository-relative paths the game designer saw only in part: the dispatcher must not let it overwrite them."""
     gdd_limit, table_limit = _design_limits(product)
     out = set()
     if _doc_for_rewrite(gdd_dir / GDD_FILE, gdd_limit)[1]:
         out.add(GDD_FILE)
-    for d in task_docs(task):
+    for d in task_docs_for(product, task):
         if _doc_for_rewrite(gdd_dir / d, TASK_DOC_CHARS)[1]:
             out.add(d)
     for f in _balance_files(gdd_dir):
@@ -465,8 +493,12 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
     metrics = _read_tail(latest, GD_METRICS_CHARS)
     obs = [o for o in store.observations() if o.get("status") in ("new", "triaged") and o.get("classification") in GD_OBS_CLASSES][-15:]
     docs = ""
-    for d in task_docs(task):                # a standing direction's own document (mechanics catalogue, balance reading): whole, to be returned whole
+    for d in task_docs_for(product, task):   # a standing direction's own document (mechanics catalogue, balance reading): whole, to be returned whole
         docs += f"\n--- {d} ---\n" + (_doc_for_rewrite(gdd_dir / d, TASK_DOC_CHARS)[0] or "(does not exist yet — this task creates it)")
+    reps = ""
+    for r in task_reports(task):             # repo reports the task text names: read-only, the tail
+        body = _read_tail(gdd_dir / r, REPORT_CHARS)
+        reps += f"\n--- {r} ---\n" + (body or "(does not exist in the repository)")
     from . import balance
     sim_path = balance.settings(product.raw).sim_report
     sim = _read_tail(gdd_dir / sim_path, balance.SIM_REPORT_CHARS) if safe_rel_path(sim_path) else ""
@@ -486,6 +518,7 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
             + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
             + ("\n\n# BALANCE TABLES" + tables if tables else "")
             + ("\n\n# DOCUMENTS OF THIS TASK (return each one COMPLETE in `files`)" + docs if docs else "")
+            + ("\n\n# REPORTS NAMED BY THE TASK (read-only: read them, do not return them in `files`)" + reps if reps else "")
             + "\n\n# GAME METRICS\n" + (metrics or "(no metrics yet: no rounds have been played)")
             + sim_txt
             + "\n\n# WHAT TESTERS, PLAYERS AND THE PO OBSERVED\n" + (_y([{k: o.get(k) for k in ("id", "title", "classification", "actual", "source")} for o in obs]) if obs else "(nothing yet)") + "\n")
