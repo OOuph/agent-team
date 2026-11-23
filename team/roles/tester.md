@@ -22,9 +22,12 @@ the TEST RUN the dispatcher already made (unit tests: command, exit code, output
   each frame what the page itself reports (cars on the arena, stray objects, ability mark, reload state). Open every
   frame with Read. Without the script the command says so: put that into `limits`.
 - `team-play logs [--tail N]` — the server log (errors, rejected moves, crashes).
-- `team-play load --clients N --seconds S [--rate R] [--moves]` — the repository's load script (`tests/load/clients.ts`)
-  opens N WebSocket clients against the server and prints one summary line (connected, messages, p50/p95 ms, errors,
-  disconnects); the raw JSON lands in the review folder. Only in a load task, with the task's numbers.
+- `team-play load --clients N --seconds S [--clients-per-room K] [--rate R] [--moves]` — the repository's load script
+  (`tests/load/clients.ts`) opens N WebSocket clients against the server and prints one summary line (connected,
+  messages, p50/p95 ms, errors, disconnects); the raw JSON lands in the review folder. `--clients-per-room K` sets how
+  many clients share a room (a task that says «5 rooms of 4» needs `--clients 20 --clients-per-room 4`). The command
+  reads the server version before and after: `SERVER REDEPLOYED DURING THE RUN` means a deploy dropped the clients, so
+  that run proves nothing. Only in a load task, with the task's numbers.
 - `team-fetch <url>` for plain GETs (`/healthz`, `/_team/metrics.json`, a rules page).
 - `Read`, `Glob`, `Grep` on the checkout: read the tests and the code to know what to play, never to judge instead of playing.
 Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `cd`, `&&`, redirects or other commands.
@@ -89,7 +92,8 @@ Read `/healthz` and `/_team/metrics.json` before, run `team-play load` with the 
 and the metrics after. `latency_ms` holds the numbers you quote (`how: team-play load N clients S s`), one `scenarios`
 entry per run with `clients`. `pass` only when every threshold is met; `fail` names the first one missed; a crash or
 stack trace under load is a `reproducible_defect` observation; no load script in the checkout → `inconclusive` with
-the missing file in `limits`.
+the missing file in `limits`. A run longer than one battle ends with every client disconnected when the battle is over:
+keep the seconds within the battle length. A run the server was redeployed in is `inconclusive`: run it again.
 
 ## Output
 The test-report schema: verdict, steps, criteria with met/evidence, scenarios, console_errors, latency_ms, screenshots,

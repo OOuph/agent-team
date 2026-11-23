@@ -5,7 +5,7 @@ one allow-listed binary that runs Playwright in a fixed checkout against a fixed
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
   team-play shots [--weapon KEY] [--ability KEY] [--prefix NAME]  frames of a battle (the repository's tests/tools/battle-shots.mjs) into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
-  team-play load --clients N --seconds S [--rate R] [--script tests/load/clients.ts] [--moves]   N WebSocket clients against BASE_URL
+  team-play load --clients N --seconds S [--clients-per-room K] [--rate R] [--script tests/load/clients.ts] [--moves]   N WebSocket clients against BASE_URL
 
 Environment set by the dispatcher: TEAM_PLAY_CWD (the checkout), TEAM_PLAY_BASE_URL (the server), TEAM_PLAY_OUT (where
 screenshots and reports go), TEAM_PLAY_SERVER_LOG, TEAM_PLAY_NPX (default `npx`), TEAM_PLAY_TIMEOUT_S. URLs must be on
@@ -39,6 +39,8 @@ LOAD_SCRIPT = "tests/load/clients.ts"   # the repository's load script (starter:
 LOAD_RUNNER = ["tsx"]                   # `npx tsx <script>`; TEAM_PLAY_LOAD_RUNNER overrides (e.g. "node" for a .js script)
 MAX_LOAD_CLIENTS = 200
 MAX_LOAD_SECONDS = 300
+MAX_LOAD_PER_ROOM = 16                  # --clients-per-room: how many clients share one room (the script decides what a room is)
+LOAD_VERSION_TIMEOUT_S = 5              # reading /healthz before and after a load run
 LOAD_EXTRA_TIMEOUT_S = 120
 SHOTS_SCRIPT = "tests/tools/battle-shots.mjs"   # the repository's battle-frames script (owner 22.11, ai-battles day review: «глаза в бою»)
 SHOTS_TIMEOUT_S = 180
@@ -258,6 +260,19 @@ def load_summary(d: dict, base: str, seconds: float) -> str:
     return f"load against {base}: " + ", ".join(parts) + f" · {seconds:.0f}s"
 
 
+def server_version(base: str) -> str:
+    """The `version` of `<base>/healthz`, "" when the server has no such field or does not answer. A load run reads it before
+    and after: a deploy in the middle restarts the server and drops every client, and those disconnects are not the game's
+    (ai-battles 23.11: a load task got `fail` for exactly this)."""
+    import urllib.request
+    try:
+        with urllib.request.urlopen(base.rstrip("/") + "/healthz", timeout=LOAD_VERSION_TIMEOUT_S) as r:
+            d = json.loads(r.read().decode("utf-8", "replace"))
+        return str(d.get("version") or "")[:64] if isinstance(d, dict) else ""
+    except Exception:  # noqa: BLE001 — best effort: no version is not an error of the run
+        return ""
+
+
 def cmd_shots(a: argparse.Namespace) -> int:
     """`team-play shots`: run the repository's battle-frames script against BASE_URL. The script plays one battle in one
     browser and writes PNG frames into the review folder; its last stdout line is a JSON summary {frames: [{file, what, facts}]}.
@@ -315,6 +330,9 @@ def cmd_load(a: argparse.Namespace) -> int:
     """`team-play load`: run the repository's load script (slice 6) with bounded clients/seconds, print its JSON summary."""
     if not (1 <= a.clients <= MAX_LOAD_CLIENTS) or not (1 <= a.seconds <= MAX_LOAD_SECONDS):
         sys.exit(f"team-play: --clients 1..{MAX_LOAD_CLIENTS}, --seconds 1..{MAX_LOAD_SECONDS}")
+    per_room = getattr(a, "clients_per_room", None)
+    if per_room is not None and not (1 <= per_room <= MAX_LOAD_PER_ROOM):
+        sys.exit(f"team-play: --clients-per-room 1..{MAX_LOAD_PER_ROOM}")
     script = Path(a.script or LOAD_SCRIPT)
     if ".." in script.parts or script.is_absolute():
         sys.exit("team-play: --script is a path inside the checkout")
@@ -329,6 +347,10 @@ def cmd_load(a: argparse.Namespace) -> int:
         argv.append("--moves")
     env = dict(os.environ)
     env.update({"BASE_URL": base, "CI": "1"})
+    if per_room is not None:   # the profile of the task («5 rooms of 4»): the script reads the flag or the variable
+        argv += ["--clients-per-room", str(per_room)]
+        env["CLIENTS_PER_ROOM"] = str(per_room)
+    v_before = server_version(base)
     t0 = time.time()
     try:
         cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=a.seconds + LOAD_EXTRA_TIMEOUT_S, env=env)
@@ -344,9 +366,16 @@ def cmd_load(a: argparse.Namespace) -> int:
     if d is None:
         print(f"team-play: the load script printed no JSON summary (exit {cp.returncode}); output tail:\n{(cp.stdout + cp.stderr)[-2000:]}")
         return 2
-    d = {**d, "base_url": base, "script": str(script), "exit": cp.returncode, "took_s": round(took, 1)}
+    v_after = server_version(base)
+    redeployed = bool(v_before and v_after and v_before != v_after)
+    d = {**d, "base_url": base, "script": str(script), "exit": cp.returncode, "took_s": round(took, 1),
+         **({"clients_per_room": per_room} if per_room is not None else {}),
+         **({"version_before": v_before, "version_after": v_after} if v_before or v_after else {})}
     raw_path.write_text(json.dumps(d, indent=1), encoding="utf-8")
     print(load_summary(d, base, took) + f" · exit {cp.returncode}")
+    if redeployed:
+        print(f"SERVER REDEPLOYED DURING THE RUN: version {v_before[:12]} -> {v_after[:12]}. A deploy restarts the server and drops every "
+              "client, so the disconnects and the missing samples of this run are not the game's: verdict `inconclusive`, run it again.")
     if cp.stderr.strip():
         print("stderr: " + re.sub(r"\x1b\[[0-9;]*m", "", cp.stderr).strip()[-MAX_ERROR_CHARS:])
     print(f"report: {raw_path}")
@@ -364,7 +393,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--width", type=int); s.add_argument("--height", type=int); s.set_defaults(fn=cmd_shots)
     s = sub.add_parser("logs"); s.add_argument("--tail", type=int, default=3000); s.set_defaults(fn=cmd_logs)
     s = sub.add_parser("load"); s.add_argument("--clients", type=int, required=True); s.add_argument("--seconds", type=int, required=True)
-    s.add_argument("--rate", type=float, default=2.0); s.add_argument("--script"); s.add_argument("--moves", action="store_true"); s.set_defaults(fn=cmd_load)
+    s.add_argument("--rate", type=float, default=2.0); s.add_argument("--script"); s.add_argument("--moves", action="store_true")
+    s.add_argument("--clients-per-room", type=int, dest="clients_per_room"); s.set_defaults(fn=cmd_load)
     a = ap.parse_args(argv)
     return int(a.fn(a) or 0)
 

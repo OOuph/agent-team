@@ -116,6 +116,49 @@ def test_team_play_load_runs_the_script_and_files_the_summary(tmp_path: Path, mo
     assert play.parse_load_output('x\n{"a": 1}\nnot json\n') == {"a": 1} and play.parse_load_output("") is None
 
 
+def test_team_play_load_passes_clients_per_room_and_flags_a_redeploy(tmp_path: Path, monkeypatch, capsys):
+    """ai-battles 23.11: the load task asked for «5 rooms of 4» and the wrapper could only run rooms of 2; a deploy in the
+    middle of the run dropped every client and the task got `fail`. The room size reaches the script, and a changed server
+    version is said in plain words."""
+    co = tmp_path / "checkout"; (co / "tests" / "load").mkdir(parents=True)
+    (co / "tests" / "load" / "clients.ts").write_text("// load\n")
+    out = tmp_path / "out"
+    npx = _fake_npx(tmp_path, '''
+        args = sys.argv[1:]
+        k = int(args[args.index("--clients-per-room") + 1]) if "--clients-per-room" in args else 0
+        assert str(k or "") == os.environ.get("CLIENTS_PER_ROOM", ""), (k, os.environ.get("CLIENTS_PER_ROOM"))
+        print(json.dumps({"clients": int(args[args.index("--clients") + 1]), "connected": 20, "errors": 0, "disconnects": 0, "per_room_seen": k}))
+        ''')
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", "http://127.0.0.1:9")
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(out)); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
+    monkeypatch.delenv("CLIENTS_PER_ROOM", raising=False)
+    versions = iter(["aaa111", "aaa111"])
+    monkeypatch.setattr(play, "server_version", lambda base: next(versions))
+    assert play.main(["load", "--clients", "20", "--seconds", "3", "--clients-per-room", "4"]) == 0
+    text = capsys.readouterr().out
+    assert "REDEPLOYED" not in text
+    d = json.loads(sorted(out.glob("load-*.json"))[-1].read_text())
+    assert d["per_room_seen"] == 4 and d["clients_per_room"] == 4 and d["version_before"] == d["version_after"] == "aaa111"
+    # without the flag nothing is added: the script keeps its own default
+    versions = iter(["", ""])
+    assert play.main(["load", "--clients", "20", "--seconds", "3"]) == 0
+    capsys.readouterr()
+    with pytest.raises(SystemExit, match="--clients-per-room 1..16"):
+        play.main(["load", "--clients", "20", "--seconds", "3", "--clients-per-room", "0"])
+    # a deploy in the middle: the version differs after the run
+    versions = iter(["aaa111", "bbb222"])
+    for f in out.glob("load-*.json"):
+        f.unlink()
+    assert play.main(["load", "--clients", "20", "--seconds", "3", "--clients-per-room", "4"]) == 0
+    text = capsys.readouterr().out
+    assert "SERVER REDEPLOYED DURING THE RUN: version aaa111 -> bbb222" in text and "inconclusive" in text
+    d = json.loads(next(out.glob("load-*.json")).read_text())
+    assert d["version_before"] == "aaa111" and d["version_after"] == "bbb222"
+    # an unreachable server gives no version and no error
+    monkeypatch.undo()
+    assert play.server_version("http://127.0.0.1:9") == ""
+
+
 # ------------------------------------------------------------------ the tester executes a load task
 
 def _settings(tmp_path: Path) -> C.Settings:
