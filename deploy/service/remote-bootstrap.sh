@@ -27,7 +27,8 @@ CERTBOT_EMAIL="${CERTBOT_EMAIL:-}"
 SVC_USER="${SVC_USER:-ubuntu}"
 REMOTE_TMP="${REMOTE_TMP:-/tmp/agent-team-deploy}"
 DRY_RUN="${DRY_RUN:-0}"
-SSH_OPTS=(-i "$GAME_KEY" -o BatchMode=yes -o ConnectTimeout=15)
+# accept-new: a fresh server has no entry in known_hosts yet, and BatchMode cannot ask; a CHANGED key is still refused
+SSH_OPTS=(-i "$GAME_KEY" -o BatchMode=yes -o ConnectTimeout=15 -o StrictHostKeyChecking=accept-new)
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$HERE/../.." && pwd)"
