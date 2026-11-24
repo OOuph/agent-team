@@ -918,6 +918,7 @@ def test_bootstrap_scripts_parse_validate_and_dry_run(tmp_path: Path):
                         env={**os.environ, "DRY_RUN": "1", "GAME_HOST": "root@203.0.113.7", "DEPLOY_PUBKEY": key, "CERTBOT_EMAIL": "o@example.org"})
     assert cp.returncode == 0 and "DRY-RUN remote-bootstrap root@203.0.113.7" in cp.stdout
     assert "AAAAC3" not in cp.stdout
+    assert "StrictHostKeyChecking=accept-new" in (DEPLOY_DIR / "remote-bootstrap.sh").read_text()   # ai-battles 24.11: the first connection to a fresh server
     order = [cp.stdout.index(s) for s in ("deploy/service/bootstrap-host.sh", "deploy/droplet/install.sh", "deploy/service/install.sh")]
     assert order == sorted(order)                                     # host first, vhost tooling second, the service stack last
     for env_bad, needle in (({"GAME_HOST": "ubuntu@x", "DEPLOY_PUBKEY": key}, "GAME_HOST must be root@"), ({"GAME_HOST": "root@x"}, "DEPLOY_PUBKEY is empty")):
