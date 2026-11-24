@@ -6,7 +6,10 @@
 #                       [--install CMD] [--health /healthz] [--ports A,B] [--no-deploy]
 #   slug   [a-z0-9-], the product slug in the dispatcher (products/<slug>/product.yaml)
 #   host   FQDN; the owner's DNS A record must already point here (checked first; exit 2 otherwise, nothing changed)
-#   repo   git URL of the game repository: https (public, or private — read with the dispatcher's token through
+#   repo   `local` — a bare repository on this server, <state>/<slug>/origin.git, created here and owned by the service
+#          user: the dispatcher on another machine pushes the commit into it over ssh before each deploy (product.yaml
+#          deploy: {host: user@this-server, origin: <that path>}); this server then needs no GitHub credential.
+#          Or the git URL of the game repository: https (public, or private — read with the dispatcher's token through
 #          git-credential-dispatcher) or git@… (private, a deploy key of the service user). The clone, install and
 #          build of a deploy run as the service user, never as root — README «Приватный репозиторий».
 # Env: CERTBOT_EMAIL (or CERTBOT_EMAIL= in /etc/agent-team/env) — required for a new certificate.
@@ -33,6 +36,7 @@ LETSENCRYPT_LIVE="${LETSENCRYPT_LIVE:-/etc/letsencrypt/live}"
 PUBLIC_IP_URL="${PUBLIC_IP_URL:-https://ifconfig.me}"
 PORT_BASE="${PORT_BASE:-8100}"                       # first free pair above this: 8101/8102, 8111/8112, …
 SVC_USER="${SVC_USER:-ubuntu}"
+STATE_ROOT="${STATE_ROOT:-/var/lib/agent-team/services}"   # <slug>/origin.git for `repo = local` (same root deploy-service.sh uses)
 REQUIRE_ROOT="${REQUIRE_ROOT:-1}"
 SKIP_DNS="${SKIP_DNS:-0}"
 SKIP_CERT="${SKIP_CERT:-0}"
@@ -62,7 +66,9 @@ SLUG="${pos[0]}"; HOST="${pos[1]}"; REPO="${pos[2]}"
 if [ "$REQUIRE_ROOT" = 1 ] && [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root" >&2; exit 1; fi
 [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]{0,39}$ ]] || { echo "ERROR: slug '$SLUG' must match [a-z0-9][a-z0-9-]*" >&2; exit 64; }
 [[ "$HOST" =~ ^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$ ]] || { echo "ERROR: host '$HOST' is not a valid FQDN" >&2; exit 64; }
-[[ "$REPO" =~ ^(https://|git@)[^[:space:]]+$ ]] || { echo "ERROR: repo '$REPO' must be an https or git@ URL" >&2; exit 64; }
+LOCAL_ORIGIN=""
+if [ "$REPO" = "local" ]; then LOCAL_ORIGIN="$STATE_ROOT/$SLUG/origin.git"; REPO="$LOCAL_ORIGIN"; fi
+[[ "$REPO" =~ ^(https://|git@)[^[:space:]]+$ ]] || [ -n "$LOCAL_ORIGIN" ] || { echo "ERROR: repo '$REPO' must be an https or git@ URL, or the word local" >&2; exit 64; }
 case "$HEALTH_PATH" in /*) ;; *) HEALTH_PATH="/$HEALTH_PATH" ;; esac
 [ -f "$TEMPLATE" ] || { echo "ERROR: $TEMPLATE missing — run deploy/service/install.sh first" >&2; exit 1; }
 [ -x "$DEPLOY" ] || { echo "ERROR: $DEPLOY missing — run deploy/service/install.sh first" >&2; exit 1; }
@@ -92,6 +98,26 @@ if [ "$SKIP_DNS" != 1 ]; then
   done <<< "$resolved"
   [ "$dns_ok" = 1 ] || { echo "ERROR: $HOST resolves to [$(echo "$resolved" | tr '\n' ' ')], this server is [$(echo "$local_ips" | tr '\n' ' ')${public_ip:+ public $public_ip}]. Nothing changed." >&2; exit 2; }
   echo "DNS: ok ($HOST → $(echo "$resolved" | tr '\n' ' '))"
+fi
+
+# ---------------------------------------------------------------- bare origin on this server (repo = local)
+if [ -n "$LOCAL_ORIGIN" ]; then
+  if [ -d "$LOCAL_ORIGIN/objects" ]; then
+    echo "origin: $LOCAL_ORIGIN exists — keeping it"
+  else
+    mkdir -p "$(dirname "$LOCAL_ORIGIN")"
+    if [ "$REQUIRE_ROOT" = 1 ]; then
+      install -d -o "$SVC_USER" -g "$SVC_USER" -m 0755 "$LOCAL_ORIGIN"
+      runuser -u "$SVC_USER" -- git init --quiet --bare --initial-branch="$BRANCH" "$LOCAL_ORIGIN"
+    else
+      git init --quiet --bare --initial-branch="$BRANCH" "$LOCAL_ORIGIN"
+    fi
+    echo "origin: created the bare repository $LOCAL_ORIGIN (branch $BRANCH, owner $SVC_USER); the dispatcher pushes into it over ssh"
+  fi
+  if [ "$DO_DEPLOY" = 1 ] && ! git --git-dir="$LOCAL_ORIGIN" rev-parse --verify --quiet "refs/heads/$BRANCH" >/dev/null 2>&1; then
+    echo "origin: $LOCAL_ORIGIN has no commit on $BRANCH yet — the first deploy comes from the dispatcher (team deploy $SLUG); nothing is deployed now"
+    DO_DEPLOY=0
+  fi
 fi
 
 # ---------------------------------------------------------------- service definition + ports

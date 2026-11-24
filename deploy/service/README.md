@@ -107,6 +107,53 @@ printf 'protocol=https\nhost=github.com\n\n' | sudo -u ubuntu /opt/agent-team/bi
    tester играет против живого хоста, а при провале health задача блокируется с вопросом PO, прошлый релиз остаётся в строю.
    Руками: `team deploy <slug> [--sha S | --rollback] [--show]`.
 
+## Отдельный сервер игры
+
+Владелец 24.11: «надо, наверное, нам разбить команду агентов и игру». Причина: игра и прогоны агентов делили 4 ядра
+одного droplet, прогоны поднимали нагрузку до 26, сервис игры шёл с `Nice=5`. Игра переезжает на свою машину, диспетчер
+остаётся на прежней. На сервере игры нет ни токена GitHub, ни доступа к машине диспетчера.
+
+Как туда попадает код. На сервере игры лежит пустое хранилище `/var/lib/agent-team/services/<slug>/origin.git`
+(`add-service.sh <slug> <host> local`). Диспетчер перед выкладкой отправляет в него нужный коммит по ssh из своего клона
+(`git push --force <host>:<origin> <sha>:refs/heads/main`) и тем же ключом зовёт там `sudo -n deploy-service.sh`. Скрипт
+выкладки берёт код из этого хранилища так же, как раньше брал с GitHub. Настройка в `products/<slug>/product.yaml`:
+
+```yaml
+deploy:
+  mode: service
+  host: ubuntu@<адрес сервера игры>
+  origin: /var/lib/agent-team/services/<slug>/origin.git
+```
+
+Ошибка отправки останавливает выкладку до вызова скрипта (код 30, в отчёте «nothing was deployed»). Откат (`--rollback`)
+ничего не отправляет: релиз уже лежит на сервере игры. `team deploy <slug> --sha <commit>` для коммита, которого ещё нет
+в клоне диспетчера, сначала делает `git fetch origin`.
+
+| Файл | Где запускается | Что делает |
+|---|---|---|
+| `remote-bootstrap.sh` | Mac владельца | одна команда: загружает `deploy/service`, `deploy/droplet` и `team/sitemetrics.py` на новый сервер и запускает там по очереди три шага ниже |
+| `bootstrap-host.sh` | новый сервер, root | пакеты, Node 20, сервисный пользователь с публичным ключом диспетчера, формат журнала nginx `full`, `worker_connections` 8192, файлы TLS, firewall (ssh, 80, 443) |
+| `deploy/droplet/install.sh` | новый сервер, root | `render-vhost.sh`, сниппет заголовков, `/etc/agent-team/env` |
+| `install.sh` | новый сервер, root | `deploy-service.sh`, `add-service.sh`, юнит, правило sudo |
+
+Переезд по шагам (кто делает):
+
+1. Владелец: новый сервер Ubuntu 24.04 с ключом Mac для root; запись DNS временного имени (например `game1.<домен>`) на его адрес.
+2. Владелец, с Mac: `GAME_HOST=root@<адрес> DEPLOY_PUBKEY="<строка публичного ключа диспетчера>" CERTBOT_EMAIL=<почта> deploy/service/remote-bootstrap.sh`.
+   Публичный ключ диспетчера: `cat ~/.ssh/id_ed25519.pub` под его пользователем. Скрипт можно повторять.
+3. Владелец, на новом сервере под root: `/opt/agent-team/bin/add-service.sh <slug> <временное имя> local --run "<команда запуска>" --build "<команда сборки>"`.
+   Он получит сертификат временного имени, создаст хранилище и ничего не выложит: кода ещё нет.
+4. Владелец: секреты сервиса. Файл `/etc/agent-team/services/<slug>.secrets.env` копируется со старой машины на новую под root
+   (`root:<сервисный пользователь>`, `0640`). Значения не печатать и не класть в git.
+5. Оператор: `deploy.host` и `deploy.origin` в `product.yaml`, один раз принять ключ нового сервера у пользователя диспетчера
+   (`ssh -o StrictHostKeyChecking=accept-new ubuntu@<адрес> true`), затем `team deploy <slug> --sha <коммит main>` и проверки на временном имени.
+6. Владелец: запись DNS основного имени на новый адрес; затем на новом сервере под root `/opt/agent-team/bin/move-host.sh <slug> <основное имя>`
+   (сертификат основного имени, временное имя начинает отдавать 301).
+7. Через сутки владелец останавливает старые юниты на машине диспетчера: `systemctl disable --now agent-team-svc@<slug>-a agent-team-svc@<slug>-b`.
+
+Откат на любом шаге: запись DNS обратно на старый адрес и `deploy: {mode: service, host: local}` в `product.yaml`. Данные сервиса
+(`data/`: записи боёв, журнал запросов генерации, счётчики) на новый сервер не переносятся, он начинает с пустых.
+
 ## Как проверить
 
 ```bash

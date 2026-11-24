@@ -7,7 +7,13 @@ builds, starts the idle colour, waits for the health path, switches the nginx up
 failed health check leaves the live release untouched (exit 20). This module only runs the command, parses its last
 `== deployed …` line and reports; the task's fate (released → tester, or blocked with a PO question) is `Cycle`'s.
 
-`team deploy <slug> [--sha S | --rollback]` is the owner's manual entry. Nothing here touches git or secrets.
+A game on its own server (owner 24.11: the agents' runs and the game no longer share one box): `deploy.host: user@host`
+plus `deploy.origin: /path/origin.git`. The dispatcher then pushes the commit from its own clone of the product
+repository into that bare repository over ssh (`push_command`) and only then calls the deploy script there; the game
+host holds no GitHub token and cannot reach the dispatcher.
+
+`team deploy <slug> [--sha S | --rollback]` is the owner's manual entry. No secret is read or passed here; the only git
+this module runs is that push (and a fetch of the product's origin when the asked commit is not in the local clone yet).
 """
 from __future__ import annotations
 
@@ -34,8 +40,12 @@ OUTPUT_TAIL_CHARS = 2500
 EXIT_NOTHING_TO_DO = 10
 EXIT_HEALTH_FAILED = 20
 EXIT_NGINX_FAILED = 21
+EXIT_PUSH_FAILED = 30                                                # the commit did not reach the game host's bare repository
+PUSH_TIMEOUT_S = 180
+GIT_SSH_COMMAND = "ssh -o BatchMode=yes -o ConnectTimeout=15"
 EXIT_MEANING = {EXIT_NOTHING_TO_DO: "already live", EXIT_HEALTH_FAILED: "health check failed: the new release was stopped, the live one is untouched",
-                EXIT_NGINX_FAILED: "nginx refused the new upstream; previous one restored", 64: "usage error", 1: "install/build/clone failed"}
+                EXIT_NGINX_FAILED: "nginx refused the new upstream; previous one restored", 64: "usage error", 1: "install/build/clone failed",
+                EXIT_PUSH_FAILED: "the commit could not be pushed to the game host; nothing was deployed"}
 
 RunFn = Callable[..., subprocess.CompletedProcess]
 
@@ -91,6 +101,39 @@ def command(product: Product, *, sha: str = "", rollback: bool = False, force: b
     return args
 
 
+def pushes(product: Product) -> bool:
+    """True when the commit travels from the dispatcher's clone to a bare repository on a remote game host."""
+    return bool(product.deploy_origin) and product.deploy_host not in LOCAL_HOSTS
+
+
+def push_command(product: Product, *, sha: str = "") -> list[str]:
+    """`git -C <clone> push --force <host>:<origin> <sha or branch>:refs/heads/<branch>` — the game host's bare repository
+    is a mirror of what the dispatcher decided to deploy, so a forced update is right (a rollback never pushes)."""
+    src = sha or f"refs/heads/{product.deploy_branch}"
+    return ["git", "-C", str(product.repo_dir), "push", "--force", f"{product.deploy_host}:{product.deploy_origin}", f"{src}:refs/heads/{product.deploy_branch}"]
+
+
+def _push(product: Product, sha: str, runner: RunFn) -> tuple[int, str, list[str]]:
+    """Fetch the product's origin when the commit is not in the local clone yet (a manual deploy of a commit pushed by a
+    human), then push it to the game host. Returns (exit code, output, the push command)."""
+    env = {**clean_env(), "GIT_SSH_COMMAND": GIT_SSH_COMMAND, "GIT_TERMINAL_PROMPT": "0"}
+    out = ""
+    if sha:
+        have = runner(["git", "-C", str(product.repo_dir), "cat-file", "-e", f"{sha}^{{commit}}"], capture_output=True, text=True, timeout=PUSH_TIMEOUT_S, env=env)
+        if int(have.returncode) != 0:
+            fetched = runner(["git", "-C", str(product.repo_dir), "fetch", "--quiet", "origin"], capture_output=True, text=True, timeout=PUSH_TIMEOUT_S, env=env)
+            out += f"(commit {sha[:12]} not in the local clone: fetched origin, exit {fetched.returncode})\n" + (fetched.stderr or "")
+    cmd = push_command(product, sha=sha)
+    log.info("%s: push to the game host: %s", product.slug, " ".join(cmd))
+    try:
+        cp = runner(cmd, capture_output=True, text=True, timeout=PUSH_TIMEOUT_S, env=env)
+        return int(cp.returncode), out + (cp.stdout or "") + (cp.stderr or ""), cmd
+    except subprocess.TimeoutExpired:
+        return 124, out + f"(push timed out after {PUSH_TIMEOUT_S}s)", cmd
+    except OSError as exc:
+        return 127, out + f"(push could not start: {exc})", cmd
+
+
 def parse_result_line(output: str) -> dict[str, str]:
     """The script's last stdout line: `== deployed slug=… sha=… colour=… port=… url=…` → dict (empty when absent)."""
     for line in reversed((output or "").splitlines()):
@@ -108,8 +151,23 @@ def run(product: Product, *, sha: str = "", rollback: bool = False, force: bool 
         timeout_s: int = TIMEOUT_S, log_path: Path | None = None) -> DeployResult:
     """Run the deploy command with a secret-free environment; never raises on a failed deploy (the result says why)."""
     cmd = command(product, sha=sha, rollback=rollback, force=force)
-    log.info("%s: deploy %s", product.slug, " ".join(cmd))
     t0 = time.monotonic()
+    push_out = ""
+    if pushes(product) and not rollback:                              # a rollback redeploys a release the host already has
+        code, push_out, push_cmd = _push(product, sha, runner)
+        if code != 0:
+            err = f"push to {product.deploy_host}:{product.deploy_origin} failed (exit {code})"
+            log.error("%s: %s", product.slug, err)
+            res = DeployResult(ok=False, sha=sha, exit_code=EXIT_PUSH_FAILED, output=push_out[-OUTPUT_TAIL_CHARS:], error=err,
+                               duration_s=time.monotonic() - t0, command=push_cmd)
+            if log_path is not None:
+                try:
+                    log_path.parent.mkdir(parents=True, exist_ok=True)
+                    log_path.write_text(push_out, encoding="utf-8")
+                except OSError:
+                    pass
+            return res
+    log.info("%s: deploy %s", product.slug, " ".join(cmd))
     try:
         cp = runner(cmd, capture_output=True, text=True, timeout=timeout_s, env=clean_env())
         out = (cp.stdout or "") + (("\n" + cp.stderr) if cp.stderr else "")
@@ -141,6 +199,8 @@ def describe(product: Product) -> str:
     if not enabled(product):
         return f"deploy.mode={product.deploy_mode} (no dispatcher deploy)"
     where = "this host via sudo" if product.deploy_host in LOCAL_HOSTS else f"ssh {product.deploy_host}"
+    if pushes(product):
+        where += f" (the commit is pushed to {product.deploy_origin} first)"
     return f"deploy.mode=service → {where}: {product.deploy_cmd or DEFAULT_CMD} {product.slug} --sha <merged>"
 
 
