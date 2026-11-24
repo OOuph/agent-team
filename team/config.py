@@ -309,6 +309,19 @@ class Product:
         return str((self.raw.get("deploy") or {}).get("cmd") or "")
 
     @property
+    def deploy_origin(self) -> str:
+        """`deploy.origin`: path of a bare git repository on a remote game host (owner 24.11: the game gets its own server).
+        When set together with a remote `deploy.host`, the dispatcher pushes the commit there over ssh before it calls the
+        deploy script, so the game host needs no GitHub credential and no way back to the dispatcher. Empty = the deploy
+        script fetches from its own `REPO` (the same-host setup)."""
+        return str((self.raw.get("deploy") or {}).get("origin") or "")
+
+    @property
+    def deploy_branch(self) -> str:
+        """Branch of the game host's bare repository the deploy script reads (`BRANCH` in its conf, default main)."""
+        return str((self.raw.get("deploy") or {}).get("branch") or "main")
+
+    @property
     def repo_dir(self) -> Path:
         return self.st.repos_dir / self.slug
 

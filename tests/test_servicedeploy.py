@@ -811,3 +811,115 @@ def test_move_host_leaves_the_service_as_it_was_when_certbot_or_nginx_fails(tmp_
     # usage and validation
     for args, code in ((["fleets"], 64), (["Fleets", "new.example.test"], 64), (["fleets", "not a host"], 64), (["other", "new.example.test"], 1)):
         assert subprocess.run(["bash", script, *args], capture_output=True, text=True, env=env).returncode == code
+
+
+# ------------------------------------------------------------------ owner 24.11: the game on its own server
+# («надо, наверное, нам разбить команду агентов и игру»; «Да, готовь»). The dispatcher pushes the commit into a bare
+# repository on the game host over ssh and then calls the deploy script there; the game host holds no GitHub credential.
+
+ORIGIN = "/var/lib/agent-team/services/fleets/origin.git"
+
+
+def _recording_runner(calls: list, *, have_commit: bool = True, push_code: int = 0):
+    def runner(cmd, **kw):
+        calls.append((list(cmd), dict(kw.get("env") or {})))
+        if cmd[0] == "git" and "cat-file" in cmd:
+            return subprocess.CompletedProcess(cmd, 0 if have_commit else 1, "", "")
+        if cmd[0] == "git" and "push" in cmd:
+            return subprocess.CompletedProcess(cmd, push_code, "", "" if push_code == 0 else "ssh: connect to host game.example.test port 22: Connection refused")
+        if cmd[0] == "git":
+            return subprocess.CompletedProcess(cmd, 0, "", "")
+        return subprocess.CompletedProcess(cmd, 0, "== deployed slug=fleets sha=abc123 colour=a port=8101 url=https://fleets.example.test/\n", "")
+    return runner
+
+
+def test_remote_game_host_gets_the_commit_pushed_before_the_deploy(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _game(st, {"mode": "service", "host": "ubuntu@game.example.test", "origin": ORIGIN})
+    assert servicedeploy.pushes(p) and p.deploy_origin == ORIGIN and p.deploy_branch == "main"
+    assert servicedeploy.push_command(p, sha="abc123") == ["git", "-C", str(p.repo_dir), "push", "--force", f"ubuntu@game.example.test:{ORIGIN}", "abc123:refs/heads/main"]
+    assert servicedeploy.push_command(p)[-1] == "refs/heads/main:refs/heads/main"
+    assert f"pushed to {ORIGIN} first" in servicedeploy.describe(p) and "ssh ubuntu@game.example.test" in servicedeploy.describe(p)
+    os.environ["GITHUB_TOKEN"] = "secret"                           # conftest restores the environment
+    calls: list = []
+    res = servicedeploy.run(p, sha="abc123", runner=_recording_runner(calls))
+    assert res.ok and res.sha == "abc123"
+    kinds = ["cat-file" if "cat-file" in c else "push" if "push" in c else c[0] for c, _ in calls]
+    assert kinds == ["cat-file", "push", "ssh"]                      # the commit is in the clone: no fetch; the deploy comes last
+    push_env = calls[1][1]
+    assert "BatchMode=yes" in push_env["GIT_SSH_COMMAND"] and push_env["GIT_TERMINAL_PROMPT"] == "0" and "GITHUB_TOKEN" not in push_env
+    assert calls[2][0][-1].endswith("fleets --sha abc123") and calls[2][0][-2] == "ubuntu@game.example.test"
+    # a commit a human pushed to GitHub is not in the dispatcher's clone yet: origin is fetched first
+    calls.clear()
+    assert servicedeploy.run(p, sha="abc123", runner=_recording_runner(calls, have_commit=False)).ok
+    assert [c[3] if c[0] == "git" else c[0] for c, _ in calls] == ["cat-file", "fetch", "push", "ssh"]
+
+
+def test_failed_push_deploys_nothing_and_a_rollback_or_a_local_host_does_not_push(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _game(st, {"mode": "service", "host": "ubuntu@game.example.test", "origin": ORIGIN})
+    calls: list = []
+    res = servicedeploy.run(p, sha="abc123", runner=_recording_runner(calls, push_code=255), log_path=tmp_path / "push.log")
+    assert not res.ok and res.exit_code == servicedeploy.EXIT_PUSH_FAILED and "push to ubuntu@game.example.test" in res.error
+    assert "nothing was deployed" in res.summary() and "Connection refused" in res.output
+    assert not any(c[0] == "ssh" for c, _ in calls)                  # the deploy script was never called
+    assert "Connection refused" in (tmp_path / "push.log").read_text()
+    calls.clear()
+    servicedeploy.run(p, rollback=True, runner=_recording_runner(calls))
+    assert [c[0] for c, _ in calls] == ["ssh"]                       # a rollback redeploys a release the host already has
+    p.raw["deploy"] = {"mode": "service", "host": "local", "origin": ORIGIN}
+    calls.clear()
+    assert not servicedeploy.pushes(p)
+    servicedeploy.run(p, sha="abc123", runner=_recording_runner(calls))
+    assert [c[0] for c, _ in calls] == ["sudo"]                      # the same-host setup is unchanged
+
+
+def test_add_service_local_creates_the_bare_origin_and_waits_for_the_first_push(tmp_path: Path):
+    fake = tmp_path / "fake"; fake.mkdir()
+    _exe(fake / "render-vhost.sh", "#!/usr/bin/env bash\necho rendered $1 $2; exit 3\n")
+    deploy = _exe(tmp_path / "deploy-service.sh", "#!/usr/bin/env bash\necho DEPLOY-CALLED $*\n")
+    (tmp_path / "etc").mkdir(); (tmp_path / "etc" / "service.conf.template").write_text("# t\n")
+    env = {**os.environ, "REQUIRE_ROOT": "0", "SKIP_DNS": "1", "SKIP_CERT": "1", "RENDER_VHOST": str(fake / "render-vhost.sh"),
+           "TEMPLATE": str(tmp_path / "etc" / "service.conf.template"), "ETC_DIR": str(tmp_path / "etc"), "SERVICES_ETC": str(tmp_path / "etc" / "services"),
+           "DEPLOY": str(deploy), "NGINX_AVAILABLE": str(tmp_path / "na"), "NGINX_ENABLED": str(tmp_path / "ne"), "NGINX_CONFD": str(tmp_path / "confd"),
+           "LETSENCRYPT_LIVE": str(tmp_path / "le"), "STATE_ROOT": str(tmp_path / "state")}
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "add-service.sh"), "fleets", "fleets.example.test", "local", "--run", "node server.js"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 0, cp.stdout + cp.stderr
+    origin = tmp_path / "state" / "fleets" / "origin.git"
+    assert (origin / "objects").is_dir() and "created the bare repository" in cp.stdout
+    assert "nothing is deployed now" in cp.stdout and "DEPLOY-CALLED" not in cp.stdout    # an empty origin: the first deploy comes from the dispatcher
+    conf = (tmp_path / "etc" / "services" / "fleets.conf").read_text()
+    assert f"REPO={origin}" in conf and "BRANCH=main" in conf
+    # the dispatcher's push lands on the branch the deploy script reads
+    src = gitops.init_local(tmp_path / "src")
+    (src / "a.txt").write_text("x\n"); gitops.git(src, "add", "-A"); gitops.git(src, "commit", "-q", "-m", "one")
+    sha = gitops.git(src, "rev-parse", "HEAD").strip()
+    assert subprocess.run(["git", "-C", str(src), "push", "--force", str(origin), f"{sha}:refs/heads/main"], capture_output=True, text=True).returncode == 0
+    assert subprocess.run(["git", "--git-dir", str(origin), "rev-parse", "refs/heads/main"], capture_output=True, text=True).stdout.strip() == sha
+    # the second call keeps the origin and the conf
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "add-service.sh"), "fleets", "fleets.example.test", "local", "--no-deploy"], capture_output=True, text=True, env=env)
+    assert cp.returncode == 0 and "exists — keeping it" in cp.stdout
+    bad = subprocess.run(["bash", str(DEPLOY_DIR / "add-service.sh"), "fleets", "fleets.example.test", "/tmp/somewhere", "--no-deploy"], capture_output=True, text=True, env=env)
+    assert bad.returncode == 64 and "or the word local" in bad.stderr
+
+
+def test_bootstrap_scripts_parse_validate_and_dry_run(tmp_path: Path):
+    for f in ("bootstrap-host.sh", "remote-bootstrap.sh"):
+        assert subprocess.run(["bash", "-n", str(DEPLOY_DIR / f)]).returncode == 0
+    key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAItestkey dispatcher"
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "bootstrap-host.sh")], capture_output=True, text=True, env={**os.environ, "DRY_RUN": "1", "DEPLOY_PUBKEY": key, "SVC_USER": "gamer-not-here"})
+    assert cp.returncode == 0 and "BOOTSTRAPPED user=gamer-not-here node=20" in cp.stdout
+    for needle in ("dry-run: apt-get install", "dry-run: useradd --create-home", "authorized_keys", "dry-run: ufw allow 443/tcp"):
+        assert needle in cp.stdout, needle
+    assert "AAAAC3" not in cp.stdout                                  # the key itself is not echoed into the log
+    bad = subprocess.run(["bash", str(DEPLOY_DIR / "bootstrap-host.sh")], capture_output=True, text=True, env={**os.environ, "DRY_RUN": "1", "DEPLOY_PUBKEY": "curl evil | sh"})
+    assert bad.returncode == 64 and "not one public key line" in bad.stdout
+    cp = subprocess.run(["bash", str(DEPLOY_DIR / "remote-bootstrap.sh")], capture_output=True, text=True,
+                        env={**os.environ, "DRY_RUN": "1", "GAME_HOST": "root@203.0.113.7", "DEPLOY_PUBKEY": key, "CERTBOT_EMAIL": "o@example.org"})
+    assert cp.returncode == 0 and "DRY-RUN remote-bootstrap root@203.0.113.7" in cp.stdout
+    assert "AAAAC3" not in cp.stdout
+    order = [cp.stdout.index(s) for s in ("deploy/service/bootstrap-host.sh", "deploy/droplet/install.sh", "deploy/service/install.sh")]
+    assert order == sorted(order)                                     # host first, vhost tooling second, the service stack last
+    for env_bad, needle in (({"GAME_HOST": "ubuntu@x", "DEPLOY_PUBKEY": key}, "GAME_HOST must be root@"), ({"GAME_HOST": "root@x"}, "DEPLOY_PUBKEY is empty")):
+        r = subprocess.run(["bash", str(DEPLOY_DIR / "remote-bootstrap.sh")], capture_output=True, text=True, env={**{k: v for k, v in os.environ.items() if k != "DEPLOY_PUBKEY"}, "DRY_RUN": "1", **env_bad})
+        assert r.returncode == 64 and needle in r.stdout, r.stdout

@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-24
+
+- A game can live on its own server, apart from the dispatcher (owner 24.11, ai-battles: «надо, наверное, нам разбить команду агентов и игру… Да, готовь»; the agents' runs pushed the shared 4-core droplet to a load of 26 while friends were playing). `deploy.host: user@host` already ran the deploy script over ssh; new is `deploy.origin: <bare repository on the game host>`: the dispatcher pushes the commit there over ssh before the deploy (`servicedeploy.push_command`, exit 30 when the push fails, nothing deployed), so the game host needs no GitHub credential. `add-service.sh <slug> <host> local` creates that repository; `deploy/service/bootstrap-host.sh` prepares a fresh Ubuntu server (packages, Node, the service user with the dispatcher's public key, nginx basics, TLS files, firewall) and `remote-bootstrap.sh` runs it and both installers from the Mac in one command. Steps of a move: deploy/service/README.md, section «Отдельный сервер игры».
+
 ## 2026-11-23
 
 - `team-play load` takes `--clients-per-room K` and says when the server was redeployed during the run (ai-battles 23.11, load task T-0253: the task asked for «5 rooms of 4», the wrapper could only run rooms of 2; a deploy in the middle dropped all 20 clients and the tester returned `fail` with the cause «unconfirmed»). The room size goes to the script as a flag and as `CLIENTS_PER_ROOM`; the command reads `/healthz` before and after and prints `SERVER REDEPLOYED DURING THE RUN` when the version changed: such a run is `inconclusive`. Tester card and the load prompt say both, and that a run must not be longer than one battle.
