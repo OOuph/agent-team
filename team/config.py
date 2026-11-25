@@ -128,6 +128,7 @@ def stage_index(stage: str) -> int:
     return MILESTONES.index(s) if s in MILESTONES else (len(MILESTONES) if s else -1)
 
 
+DEPLOY_BATCH_MAX_WAIT_MIN = 45.0           # product.yaml `deploy.batch_max_wait_min` default: the longest a merged commit waits for the batch deploy
 CYCLE_EVERY_MIN_RANGE = (5, 60)            # product.yaml `cycle.every_min`: 5 = the fast cron step, 60 = the hourly cron itself
 
 
@@ -319,6 +320,28 @@ class Product:
         deploy script, so the game host needs no GitHub credential and no way back to the dispatcher. Empty = the deploy
         script fetches from its own `REPO` (the same-host setup)."""
         return str((self.raw.get("deploy") or {}).get("origin") or "")
+
+    @property
+    def deploy_batch(self) -> bool:
+        """`deploy.batch: true` (owner 25.11, service deploys only): merges go on as tasks finish, the live host is
+        switched once per cycle — at the end of the execute phase, to the last merged commit — instead of after every
+        merge (67 deploys on 25.11, each one cutting the matches of live players). Default false: deploy after each merge."""
+        v = (self.raw.get("deploy") or {}).get("batch")
+        if v is not None and not isinstance(v, bool):
+            log.warning("%s: deploy.batch=%r is not true/false — false in use", self.slug, v)
+        return v is True
+
+    @property
+    def deploy_batch_max_wait_min(self) -> float:
+        """`deploy.batch_max_wait_min` (default 45, 1..720): a merged commit never waits longer than this for the batch —
+        a long cycle (refill, a 45-minute run) deploys in between."""
+        v = (self.raw.get("deploy") or {}).get("batch_max_wait_min")
+        if v is None:
+            return DEPLOY_BATCH_MAX_WAIT_MIN
+        if isinstance(v, bool) or not isinstance(v, (int, float)) or not 1 <= v <= 720:
+            log.warning("%s: deploy.batch_max_wait_min=%r is not a number of minutes 1..720 — %s in use", self.slug, v, DEPLOY_BATCH_MAX_WAIT_MIN)
+            return DEPLOY_BATCH_MAX_WAIT_MIN
+        return float(v)
 
     @property
     def deploy_branch(self) -> str:

@@ -201,7 +201,9 @@ def describe(product: Product) -> str:
     where = "this host via sudo" if product.deploy_host in LOCAL_HOSTS else f"ssh {product.deploy_host}"
     if pushes(product):
         where += f" (the commit is pushed to {product.deploy_origin} first)"
-    return f"deploy.mode=service → {where}: {product.deploy_cmd or DEFAULT_CMD} {product.slug} --sha <merged>"
+    when = (f"; batch: once per cycle, on the last merged commit, at most {product.deploy_batch_max_wait_min:g} min after a merge"
+            if product.deploy_batch else "; after every merge")
+    return f"deploy.mode=service → {where}: {product.deploy_cmd or DEFAULT_CMD} {product.slug} --sha <merged>{when}"
 
 
 def result_card(product: Product, task: dict[str, Any], res: DeployResult) -> dict[str, Any]:
