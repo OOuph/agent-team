@@ -76,6 +76,7 @@ DEFAULTS: dict[str, Any] = {
     "overlap_roles": [],          # roles whose several seats (execute_slots.<role> > 1) work at once; [] = one task of a role at a time
     "max_merge_conflicts": 2,     # merge conflicts in a row on one task before it is blocked with a question to the PO
     "worktree_keep_h": 72,        # a blocked / deferred / waiting_owner task keeps its checkout this many hours (the branch stays for ever)
+    "workdir_keep_h": 24,         # a finished cycle keeps the checkouts of its reviews and play-tests this many hours (the logs stay for ever)
 }
 MAX_RUNS_CEILING = 8              # whatever the config says: the subscription's rate limits and the host's CPU are shared
 LANE_THREADS_MAX = 32             # threads of the pool; lanes beyond `max_runs` wait at the gate, not in the pool's queue
@@ -95,6 +96,7 @@ class Config:
     overlap_roles: tuple[str, ...] = ()
     max_merge_conflicts: int = 2
     worktree_keep_h: float = 72.0
+    workdir_keep_h: float = 24.0
 
     def describe(self) -> str:
         if not self.enabled:
@@ -142,13 +144,16 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
     if not isinstance(roles, (list, tuple)) or not all(isinstance(r, str) for r in roles):
         log.warning("%soverlap_roles=%r is not a list of role names — ignored", pre, roles)
         roles = []
-    keep = raw["worktree_keep_h"]
-    if isinstance(keep, bool) or not isinstance(keep, (int, float)) or keep < 0:
-        log.warning("%sworktree_keep_h=%r is not a number of hours — %s in use", pre, keep, DEFAULTS["worktree_keep_h"])
-        keep = DEFAULTS["worktree_keep_h"]
+    hours: dict[str, float] = {}
+    for key in ("worktree_keep_h", "workdir_keep_h"):
+        keep = raw[key]
+        if isinstance(keep, bool) or not isinstance(keep, (int, float)) or keep < 0:
+            log.warning("%s%s=%r is not a number of hours — %s in use", pre, key, keep, DEFAULTS[key])
+            keep = DEFAULTS[key]
+        hours[key] = float(keep)
     cfg = Config(enabled=enabled, max_runs=max_runs, review_max_runs=review, overlap_roles=tuple(str(r) for r in roles),
                  max_merge_conflicts=_int(raw["max_merge_conflicts"], int(DEFAULTS["max_merge_conflicts"]), 1, 20, pre + "max_merge_conflicts"),
-                 worktree_keep_h=float(keep))
+                 worktree_keep_h=hours["worktree_keep_h"], workdir_keep_h=hours["workdir_keep_h"])
     log.debug("%s: lanes: %s", slug, cfg.describe())
     return cfg
 

@@ -29,6 +29,7 @@ import yaml
 
 from . import balance, geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, servicedeploy, standing, voice
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
+from .config import WORKTREES_DIRNAME
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
@@ -47,6 +48,13 @@ CONFLICT_NOTE_CHARS = 200                                 # of the file list in 
 RUN_PORT_ENV = "TEAM_PORT"                                # environment of a repository role's run on a service repository: a port of its own for a server it starts
 
 # run continuation (owner 21.11, frictions F23/F30): a run stopped by the time limit is continued, not restarted
+# what a review leaves on the disk (25.11: 154 GB full after five days — 803 node_modules in 226 cycle folders, team/cycle.py
+# `Cycle.drop_review_dirs` and `Cycle.sweep_work_dirs`)
+WORKDIR_HEAVY_DIRS = ("checkout", "tests-run")           # data/work/<slug>/<cycle>/<label>/<one of these>: clones made for one run
+WORKDIR_HEAVY_NAME = "node_modules"                      # removed wherever it lies inside a cycle folder
+WORKDIR_KEEP = (WORKTREES_DIRNAME, "deploy", "onboarding")   # folders of data/work/<slug> that are not cycle folders: never swept
+WORKDIR_SWEPT_MARK = ".swept"                            # written into a swept cycle folder: the next sweeps skip it
+WORKDIR_SWEEP_MAX_S = 120.0                              # one sweep stops after this long; the rest waits for the next cycle
 CONTINUE_ROLES = ("developer", "designer")               # roles that work in a product repository checkout
 INTERRUPTED = "interrupted"                               # result status of a run the dispatcher stopped: not a failed attempt for the replan counter
 WIP_WHY = {"timeout": "run stopped by the time limit, continues next cycle",          # text of the service commit, by reason
@@ -95,6 +103,44 @@ REPO_ONLY_PROMPT = (
     "copy; their command, exit code and output are below. A criterion about tests is judged from that output: exit 0 and the "
     "named test present → pass; a failing or missing test → fail with its name. A criterion about code is judged by reading "
     "the files.\n\n## TEST RUN (by the dispatcher)\n{tests}\n")
+
+
+def remove_tree(path: Path) -> bool:
+    """Delete the directory `path` with everything in it, read-only files and folders included (`gitops.readonly_checkout`
+    takes the write bit off). A symlink is never followed and never removed. Returns True when the directory is gone;
+    a failure is logged, not raised — housekeeping must not cost a review its verdict."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_dir():
+        return False
+
+    def _writable_then_retry(func: Any, failed: str, _exc: Any) -> None:
+        for q in (os.path.dirname(failed), failed):
+            try:
+                if not os.path.islink(q):
+                    os.chmod(q, 0o700)
+            except OSError:
+                pass
+        func(failed)
+
+    try:
+        # `onerror` is deprecated since Python 3.12 in favour of `onexc`; the handler ignores its third argument
+        shutil.rmtree(path, **{"onexc" if sys.version_info >= (3, 12) else "onerror": _writable_then_retry})
+    except OSError as exc:
+        log.warning("could not remove %s: %s", path, str(exc)[:200])
+    return not path.exists()
+
+
+def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
+    """Delete every directory called `name` under `root` (not followed into, symlinks left alone). Returns what went."""
+    gone: list[Path] = []
+    if Path(root).is_symlink() or not Path(root).is_dir():
+        return gone
+    for r, ds, _fs in os.walk(root, followlinks=False):
+        if name in ds:
+            ds.remove(name)
+            if remove_tree(Path(r) / name):
+                gone.append(Path(r) / name)
+    return gone
 
 
 def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None) -> str:
@@ -775,10 +821,34 @@ class Cycle:
         finally:
             if server is not None:
                 playtest.stop(server)
+            self.drop_review_dirs(t["id"])           # the verdict needs none of it: the run is over, the evidence lies elsewhere
         if rr is None:
             return
         with self.store.lock:                        # applied as the run finishes, in one piece (team/lanes.py invariant 4)
             self.apply_review(self.store.task(t["id"]) or t, rr)
+
+    def drop_review_dirs(self, task_id: str, labels: tuple[str, ...] = ("review", "playtest")) -> list[Path]:
+        """Free what one review (or load test) put on the disk, as soon as its run is over: the clones the tests ran in
+        (`tests-run`, with their node_modules), the reviewer's read-only checkout, and every node_modules of the
+        play-test checkout. What stays: `server.log`, the play-test checkout itself (the files the server wrote; it goes
+        with `sweep_work_dirs` later) and everything the run wrote beside them. The tester's screenshots and reports are
+        not here at all — they are in products/<slug>/reviews/<task>. Never raises. Returns the directories removed."""
+        gone: list[Path] = []
+        try:
+            for label in labels:
+                work = self.p.work_dir / self.cycle_id / f"{label}-{task_id}"
+                if work.is_symlink() or not work.is_dir():
+                    continue
+                for sub in ("tests-run",) + (("checkout",) if label == "review" else ()):
+                    if remove_tree(work / sub):
+                        gone.append(work / sub)
+                gone += remove_named_dirs(work)
+            if gone:
+                log.info("%s: %s: %d working director%s of the finished review removed: %s", self.p.slug, task_id, len(gone),
+                         "y" if len(gone) == 1 else "ies", ", ".join(str(g.relative_to(self.p.work_dir / self.cycle_id)) for g in gone))
+        except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the review its verdict
+            log.warning("%s: %s: review working directories not removed: %s", self.p.slug, task_id, str(exc)[:300])
+        return gone
 
     def apply_review(self, t: dict[str, Any], rr: RunResult) -> None:
         """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run)."""
@@ -1123,6 +1193,10 @@ class Cycle:
             self.sweep_worktrees()
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
             log.warning("%s: worktree sweep failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
+        try:
+            self.sweep_work_dirs()
+        except Exception as exc:  # noqa: BLE001 — the same: a full disk is worse, but the tasks come first
+            log.warning("%s: sweep of old cycle folders failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
         slots = self.execute_slots()
         used: dict[str, int] = {}
         if self.lanes.parallel and self.flow.refill and not self.dry_run:
@@ -1301,6 +1375,45 @@ class Cycle:
             self.store.event("worktree.removed", d.name, "dispatcher", {"state": state, "path": str(d)})
             removed.append(d.name)
         return removed
+
+    def sweep_work_dirs(self) -> list[str]:
+        """Free the folders of finished cycles: in every data/work/<slug>/<cycle> whose newest entry is older than
+        `cycle.parallel.workdir_keep_h` hours, remove the clones made for one run (`<label>/checkout`, `<label>/tests-run`)
+        and every node_modules. The folder itself stays with its logs (`server.log`, `deploy-*.log`) and the files the
+        runs wrote. Never touched: the folder of this cycle, `wt` (the task checkouts, `sweep_worktrees`), `deploy`,
+        `onboarding`. A swept folder gets the mark `.swept` and is skipped from then on. One sweep works for at most
+        WORKDIR_SWEEP_MAX_S; what is left waits for the next cycle. Returns the names of the folders swept."""
+        root = self.p.work_dir
+        if self.dry_run or not root.is_dir():
+            return []
+        keep_s = self.par.workdir_keep_h * 3600
+        started, now = time.monotonic(), time.time()
+        swept: list[str] = []
+        removed = 0
+        free_before = shutil.disk_usage(root).free
+        for d in sorted(x for x in root.iterdir() if x.is_dir() and not x.is_symlink()):
+            if d.name in WORKDIR_KEEP or d.name == self.cycle_id or (d / WORKDIR_SWEPT_MARK).exists():
+                continue
+            subs = [x for x in d.iterdir() if x.is_dir() and not x.is_symlink()]
+            newest = max(x.lstat().st_mtime for x in [d, *subs])
+            if now - newest < keep_s:
+                continue
+            if time.monotonic() - started > WORKDIR_SWEEP_MAX_S:
+                log.info("%s: sweep of old cycle folders stopped after %.0fs; the rest waits for the next cycle", self.p.slug, WORKDIR_SWEEP_MAX_S)
+                break
+            gone = [sub / h for sub in subs for h in WORKDIR_HEAVY_DIRS if remove_tree(sub / h)]
+            gone += remove_named_dirs(d)
+            (d / WORKDIR_SWEPT_MARK).write_text(f"{utcnow()} {len(gone)} director{'y' if len(gone) == 1 else 'ies'} removed\n", encoding="utf-8")
+            log.info("%s: cycle folder %s (%.0f h old): %d working director%s removed", self.p.slug, d.name, (now - newest) / 3600,
+                     len(gone), "y" if len(gone) == 1 else "ies")
+            swept.append(d.name)
+            removed += len(gone)
+        if swept:
+            freed_mb = max(0, shutil.disk_usage(root).free - free_before) / 1e6
+            log.info("%s: %d old cycle folder(s) swept, %d director%s removed, about %.0f MB freed", self.p.slug, len(swept), removed,
+                     "y" if removed == 1 else "ies", freed_mb)
+            self.store.event("workdir.swept", self.p.slug, "dispatcher", {"folders": len(swept), "removed": removed, "freed_mb": round(freed_mb)})
+        return swept
 
     def task_checkout(self, t: dict[str, Any], start_point: str | None = None) -> tuple[Path, str]:
         """The task's own checkout and its branch (created, reused, or taken over from the layout before 21.11, where
@@ -1770,6 +1883,7 @@ class Cycle:
                                    allowed_tools=list(TESTER_TOOLS), env_extra=env)
         finally:
             playtest.stop(server)
+            self.drop_review_dirs(t["id"], labels=("load",))
         if rr is None:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False

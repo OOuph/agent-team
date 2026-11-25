@@ -70,7 +70,7 @@ on the base branch for the merges). Merge, push and the deploy after it are one 
 conflict sends the task back to its author with the conflict text. Keys, `cycle.parallel` in team.yaml, overridable per
 key in product.yaml (`cycle: {parallel: {...}}`): `enabled` (default `true`; `false` = the strictly sequential cycle),
 `max_runs` (3: lanes at once in one product's cycle), `review_max_runs` (`max_runs - 1`: reviews among them),
-`overlap_roles` (`[]`: roles whose several seats may work at once), `max_merge_conflicts` (2), `worktree_keep_h` (72).
+`overlap_roles` (`[]`: roles whose several seats may work at once), `max_merge_conflicts` (2), `worktree_keep_h` (72), `workdir_keep_h` (24: hours a finished cycle keeps the clones of its reviews and play-tests; the logs stay).
 `team status` prints the values in use on the `lanes:` line.
 
 Deployment of the sites (nginx + git pull timer + metrics from logs) is in `deploy/droplet/`; a game server (long-running
