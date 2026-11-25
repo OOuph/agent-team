@@ -196,6 +196,7 @@ class Cycle:
         # continuous work of the seats (owner 25.11, team/flow.py): refill inside the execute phase, the next cycle back to back
         self.flow = product.flow
         self._refill_deadline: float | None = None            # monotonic; set by a parallel execute phase with `cycle.flow.refill`
+        self._refill_last: float | None = None                # monotonic; the latest moment refill may stay open for running reviews
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
         self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
@@ -398,8 +399,12 @@ class Cycle:
         if self._refill_deadline is None or self._refill_closed:
             return False
         why = None
-        if time.monotonic() >= self._refill_deadline:
-            why = f"the execute phase is older than cycle.flow.refill_min ({self.flow.refill_min:g} min)"
+        now = time.monotonic()
+        if now >= (self._refill_last or self._refill_deadline):
+            why = f"the execute phase is older than cycle.flow.refill_max_min ({self.flow.refill_max_min:g} min)"
+        elif now >= self._refill_deadline and not self.lanes.gate.in_flight(LANE_REVIEW):
+            # past refill_min the window stays open only while reviews of this cycle hold the cycle anyway
+            why = f"the execute phase is older than cycle.flow.refill_min ({self.flow.refill_min:g} min) and no review is running"
         else:
             why = self.stopped() or flow_mod.allowed(self.st, self.flow)
         if why:
@@ -1123,7 +1128,9 @@ class Cycle:
         if self.lanes.parallel and self.flow.refill and not self.dry_run:
             # owner 25.11 (team/flow.py): a seat that finishes takes the next task until the phase is `refill_min` old
             self._refill_deadline = time.monotonic() + self.flow.refill_min * 60
-            log.info("%s: execute: refill is on — a freed seat takes the next task for %g min", self.p.slug, self.flow.refill_min)
+            self._refill_last = time.monotonic() + self.flow.refill_max_min * 60
+            log.info("%s: execute: refill is on — a freed seat takes the next task for %g min, up to %g min while reviews hold the cycle",
+                     self.p.slug, self.flow.refill_min, self.flow.refill_max_min)
         if not self.lanes.parallel:
             for t in self.execute_candidates():
                 if all(used.get(k, 0) >= v for k, v in slots.items()):

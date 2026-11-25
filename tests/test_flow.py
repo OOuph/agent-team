@@ -136,6 +136,40 @@ def test_refill_ends_when_the_window_is_over(tmp_path: Path):
     assert len(ev) == 1 and "refill_min" in ev[0]["detail"]["why"] and ev[0]["detail"]["refilled"] == 1
 
 
+def test_refill_stays_open_past_the_window_while_a_review_holds_the_cycle(tmp_path: Path):
+    """The window is over after the first developer task, but a review of this cycle is still running: the cycle is held
+    by it anyway, so the seat goes on; when the review is done, nothing more starts. And never past refill_max_min."""
+    from test_parallel_lanes import PASS, _released
+    for name, last_open, expect in (("review-holds", True, 3), ("past-max", False, 1)):
+        st = _settings(tmp_path / name, REFILL)
+        p = _product(st)
+        _released(p)
+        ids = [_task(p, "developer", f"task {i}") for i in range(8)]
+        r = LaneRunner()
+        cyc = Cycle(st, p, r, "c1")
+        review_may_end = threading.Event()
+
+        def dev(cwd: Path, n: int, cyc=cyc, last_open=last_open, review_may_end=review_may_end):
+            _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
+            if n == 1:
+                cyc._refill_deadline = time.monotonic() - 1                  # refill_min is over
+                if not last_open:
+                    cyc._refill_last = time.monotonic() - 1                  # … and refill_max_min too
+            if n == 3 or not last_open:
+                review_may_end.set()                                         # the review ends while the third task runs
+
+        def review(cwd: Path, n: int, review_may_end=review_may_end):
+            review_may_end.wait(20)
+            return dict(PASS)
+        r.work["developer"], r.work["reviewer"] = dev, review
+        cyc.run(["review", "execute"])
+        cyc.store.close()
+        done = [i for i in ids if _state(p, i)["state"] == "released"]
+        assert expect <= len(done) < 8 and (last_open or len(done) == 1), (name, done)           # it went on for the review, and stopped after it
+        why = _events(p, "flow.refill_closed")[0]["detail"]["why"]
+        assert ("no review is running" in why) if last_open else ("refill_max_min" in why), (name, why)
+
+
 def test_refill_stops_after_a_run_that_failed_so_an_outage_does_not_burn_the_backlog(tmp_path: Path):
     st = _settings(tmp_path, REFILL)
     p = _product(st)
