@@ -90,6 +90,8 @@ cycle:
                                   # `execute_slots` then means «places working at once», not «tasks per cycle»
     refill_min: 20                # … until the execute phase is this many minutes old; nothing new starts later, so the cycle is not held
                                   # longer than one long run holds it anyway
+    refill_max_min: 60            # past refill_min refill stays open while reviews of the cycle still run or wait for a slot (the cycle
+                                  # is held by them anyway), but never after the phase is this old
     chain: false                  # true = `team cycle --due` starts the next cycle right after one that carried a task through, while
                                   # startable work waits (no 5–10 min pause until cron looks again)
     chain_max: 6                  # cycles of one product in one process; then cron and cycle.every_min decide

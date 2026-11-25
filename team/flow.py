@@ -14,7 +14,10 @@ tasks waited the whole time. Two causes sat in the shape of the cycle, not in th
   refill   inside the execute phase a seat that finished its task takes the next startable one — read fresh from the
            store, in the usual order — until the phase is `refill_min` minutes old. `execute_slots` then means «places
            working at once», not «tasks per cycle». The cycle is not held longer than it would be by one long run:
-           nothing new starts after `refill_min`.
+           nothing new starts after `refill_min`. One exception, measured 24–25.11: in 23–29 % of the minutes inside a
+           cycle only reviews were running — play-tests of 25 minutes queued for the run slots — and every execute seat
+           waited for them. While reviews of the cycle still run or wait for a slot the cycle is held anyway, so refill
+           stays open, up to `refill_max_min`.
   chain    `team cycle --due` starts the product's next cycle right after the previous one, in the same process, while
            the cycle did work and startable work is waiting — at most `chain_max` cycles per process. Between two
            cycles every lock is given up for `chain_pause_s` seconds: an operator script waiting for the product lock
@@ -40,6 +43,8 @@ log = logging.getLogger("team.flow")
 DEFAULTS: dict[str, Any] = {
     "refill": False,              # a freed seat takes the next startable task inside the same execute phase
     "refill_min": 20,             # … until the execute phase is this many minutes old (1..180); later starts wait for the next cycle
+    "refill_max_min": 60,         # … and beyond that while reviews of this cycle still run or wait for a slot — the cycle is held by
+                                  # them anyway — but never after the phase is this old (refill_min..360)
     "chain": False,               # `team cycle --due` starts the next cycle right after a cycle that did work, while work waits
     "chain_max": 6,               # cycles of one product in one `team cycle --due` process (1..50; 1 = no chaining)
     "chain_pause_s": 5,           # seconds without any lock between two chained cycles: the window of a waiting operator script
@@ -54,6 +59,7 @@ GIT_TIMEOUT_S = 10                # `git rev-parse HEAD` of the dispatcher check
 class Config:
     refill: bool = False
     refill_min: float = 20.0
+    refill_max_min: float = 60.0
     chain: bool = False
     chain_max: int = 6
     chain_pause_s: float = 5.0
@@ -64,7 +70,8 @@ class Config:
     def describe(self) -> str:
         parts = []
         if self.refill:
-            parts.append(f"a freed seat takes the next task for the first {self.refill_min:g} min of the execute phase")
+            parts.append(f"a freed seat takes the next task for the first {self.refill_min:g} min of the execute phase"
+                         + (f" (up to {self.refill_max_min:g} min while reviews hold the cycle)" if self.refill_max_min > self.refill_min else ""))
         if self.chain:
             parts.append(f"up to {self.chain_max} cycles back to back while work waits")
         if not parts:
@@ -107,8 +114,10 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
             log.warning("%s: %s cycle.flow has unknown key(s) %s — ignored", slug, where, ", ".join(unknown))
         raw.update({k: v for k, v in block.items() if k in DEFAULTS})
     pre = f"{slug}: cycle.flow."
+    refill_min = _num(raw["refill_min"], float(DEFAULTS["refill_min"]), 1, 180, pre + "refill_min")
     cfg = Config(refill=_bool(raw["refill"], bool(DEFAULTS["refill"]), pre + "refill"),
-                 refill_min=_num(raw["refill_min"], float(DEFAULTS["refill_min"]), 1, 180, pre + "refill_min"),
+                 refill_min=refill_min,
+                 refill_max_min=max(refill_min, _num(raw["refill_max_min"], float(DEFAULTS["refill_max_min"]), 1, 360, pre + "refill_max_min")),
                  chain=_bool(raw["chain"], bool(DEFAULTS["chain"]), pre + "chain"),
                  chain_max=int(_num(raw["chain_max"], int(DEFAULTS["chain_max"]), 1, 50, pre + "chain_max", whole=True)),
                  chain_pause_s=_num(raw["chain_pause_s"], float(DEFAULTS["chain_pause_s"]), 0, 600, pre + "chain_pause_s"),

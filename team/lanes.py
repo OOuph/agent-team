@@ -231,6 +231,11 @@ class RunGate:
         with self._cv:
             return sum(self._running.values())
 
+    def in_flight(self, kind: str) -> int:
+        """Lanes of `kind` that hold a slot or wait for one right now."""
+        with self._cv:
+            return self._running.get(kind, 0) + sum(1 for tk in self._waiting if tk[2] == kind)
+
 
 class HostLock:
     """Reader–writer lock of the deployed host (invariant 6): `exclusive` for a deploy, `shared` for a play-test or a
