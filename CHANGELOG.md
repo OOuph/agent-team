@@ -5,6 +5,10 @@ request that changes behaviour (roles, phases, states, tools, policies) updates 
 PR, citing the friction records (F-xxxx) or the owner decision behind it. The retro role proposes, the developer writes
 the PR, a human merges.
 
+## 2026-11-25
+
+- `team cost [--product all] [--days 7] [--json] [--out file]`: spend per accepted task and prompt-cache share, read from the run folders and the backlog; no model call, nothing is written to product state (owner 25.11: «надо делать» to the point that «$172 for 1,108 runs» is an invoice, not economics). The numerator holds all spend on runs that carry a task id, failed and rejected work included; with no accepted tasks the report shows attempts and spend without a ratio. Per role: runs, failed runs, spend, median and p90 per run, share of input tokens read from the cache, share of runs whose first call read nothing from it.
+
 ## 2026-11-24
 
 - A game can live on its own server, apart from the dispatcher (owner 24.11, ai-battles: «надо, наверное, нам разбить команду агентов и игру… Да, готовь»; the agents' runs pushed the shared 4-core droplet to a load of 26 while friends were playing). `deploy.host: user@host` already ran the deploy script over ssh; new is `deploy.origin: <bare repository on the game host>`: the dispatcher pushes the commit there over ssh before the deploy (`servicedeploy.push_command`, exit 30 when the push fails, nothing deployed), so the game host needs no GitHub credential. `add-service.sh <slug> <host> local` creates that repository; `deploy/service/bootstrap-host.sh` prepares a fresh Ubuntu server (packages, Node, the service user with the dispatcher's public key, nginx basics, TLS files, firewall) and `remote-bootstrap.sh` runs it and both installers from the Mac in one command. Steps of a move: deploy/service/README.md, section «Отдельный сервер игры».
