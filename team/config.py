@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from .lanes import DEFAULTS as PARALLEL_DEFAULTS, Config as ParallelConfig, settings as parallel_settings
+from .flow import DEFAULTS as FLOW_DEFAULTS, Config as FlowConfig, settings as flow_settings
 
 log = logging.getLogger("team.config")
 
@@ -36,7 +37,10 @@ DEFAULTS: dict[str, Any] = {
               "max_continuations": 3,       # runs stopped by the time limit that may be continued per task before the PO splits it
               # parallel lanes inside one product's cycle (owner 21.11, team/lanes.py): reviews beside execution, one
               # execute lane per seat, one git worktree per task; product.yaml `cycle: {parallel: {...}}` overrides
-              "parallel": dict(PARALLEL_DEFAULTS)},
+              "parallel": dict(PARALLEL_DEFAULTS),
+              # continuous work of the seats (owner 25.11, team/flow.py): a freed seat takes the next task inside the cycle,
+              # the next cycle starts right after the previous one; off by default, product.yaml `cycle: {flow: {...}}` overrides
+              "flow": dict(FLOW_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -347,6 +351,11 @@ class Product:
     def parallel(self) -> ParallelConfig:
         """`cycle.parallel` of team.yaml with this product's `cycle: {parallel: {...}}` on top (validated)."""
         return parallel_settings(self.st.cycle, self.raw, self.slug)
+
+    @property
+    def flow(self) -> FlowConfig:
+        """`cycle.flow` of team.yaml with this product's `cycle: {flow: {...}}` on top (validated; team/flow.py)."""
+        return flow_settings(self.st.cycle, self.raw, self.slug)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 

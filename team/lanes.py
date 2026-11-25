@@ -25,11 +25,16 @@ INVARIANTS (what the rest of the code relies on)
     `npm ci`, build and unit tests it does around the run load the host as much as the run does.
  2. One lane per task. A task is in one lane at a time (`working` / `busy`): review never takes a task whose merge or
     deploy is in flight, execute never takes a task under review. So the read-modify-write of a task's own file inside
-    its lane needs no further lock.
+    its lane needs no further lock. Since 25.11 the mark is also kept in the store (`on_working` → table `working`), so
+    a writer of ANOTHER process — `team task move` typed while the cycle runs — sees it and leaves that task alone.
  3. One lane per role. The tasks of one role run one after another (the marketer's per-day post counts, one load test
-    at a time); only the roles named in `overlap_roles` may use several seats at once.
+    at a time); only the roles named in `overlap_roles` may use several seats at once. `cycle.flow.refill`
+    (team/flow.py) lets a lane take more tasks in one cycle than the seat has places; it never adds a lane, so the
+    work at once stays what this invariant and invariant 1 allow.
  4. The store. Every writing method of `Store` holds `Store.lock` (re-entrant), each thread has its own SQLite
-    connection; ids (T-, Q-, OBS-, R-) are taken and written under that lock. A result is applied to the store AS ITS
+    connection; ids (T-, Q-, OBS-, R-) are taken and written under that lock. Since 25.11 the lock is also a flock on
+    products/<slug>/store.lock (`store.StoreLock`): it excludes the writers of other processes too, so `team obs`,
+    `team task new|move`, `team ask|answer` need no product lock and wait for a single write, not for the cycle. A result is applied to the store AS ITS
     RUN FINISHES, under that lock — not in a fixed order after all runs: a lane mixes runs with writes (marketer →
     editor → marketer; developer → merge → deploy), and holding results back would hold back merges, deploys and
     leases. Each task's own history stays in order; the numbers of observations, questions and reviews born in
@@ -296,13 +301,15 @@ class _Lane:
 class Lanes:
     """The lanes of one cycle: `submit` a piece of work, `join` them. See the module text for the invariants."""
 
-    def __init__(self, cfg: Config, slug: str = "-", on_lane_exit: Callable[[], Any] | None = None):
+    def __init__(self, cfg: Config, slug: str = "-", on_lane_exit: Callable[[], Any] | None = None,
+                 on_working: Callable[[str, str | None], Any] | None = None):
         self.cfg, self.slug = cfg, slug
         self.parallel = bool(cfg.enabled)
         self.gate = RunGate(cfg.max_runs, {LANE_REVIEW: cfg.review_max_runs})
         self.repo_lock = threading.RLock()         # invariant 5
         self.host = HostLock()                     # invariant 6
         self._on_lane_exit = on_lane_exit          # e.g. close the thread's SQLite connection
+        self._on_working = on_working              # (task id, lane label | None): invariant 2 told to the store, for other processes
         self._pool: ThreadPoolExecutor | None = None
         self._lanes: list[_Lane] = []
         self._working: dict[str, str] = {}         # task id -> lane label (invariant 2)
@@ -310,6 +317,17 @@ class Lanes:
         self.started = 0                           # lanes started in this cycle (threads; 0 in a sequential cycle)
 
     # -- one lane per task ---------------------------------------------------------------------------------------
+
+    def _tell(self, task_id: str, label: str | None) -> None:
+        """Pass a task's mark (label) or its removal (None) on to `on_working`. Never under `_mu`: the callback takes the
+        store lock, and code that holds the store lock asks `busy`. A failure is logged, the lane goes on — the mark
+        protects a write from OUTSIDE the cycle, the cycle itself relies on `_working`."""
+        if self._on_working is None:
+            return
+        try:
+            self._on_working(task_id, label)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: task %s: lane mark %s not passed on: %s", self.slug, task_id, label or "removal", exc)
 
     def busy(self, task_id: str) -> bool:
         with self._mu:
@@ -327,12 +345,15 @@ class Lanes:
                 raise RuntimeError(f"task {task_id} is already in lane {other or 'main'}")
             nested = other is not None
             self._working[task_id] = current_lane()
+        if not nested:
+            self._tell(task_id, current_lane() or LANE_MAIN)
         try:
             yield
         finally:
             if not nested:
                 with self._mu:
                     self._working.pop(task_id, None)
+                self._tell(task_id, None)
 
     # -- submit and join -------------------------------------------------------------------------------------------
 
@@ -343,11 +364,13 @@ class Lanes:
             with self.working(task_id):
                 fn(*args)
             return
-        with self._mu:
-            if task_id:
+        if task_id:
+            with self._mu:
                 if task_id in self._working:
                     raise RuntimeError(f"task {task_id} is already in lane {self._working[task_id]}")
                 self._working[task_id] = label     # from now on, not from the moment the thread starts
+            self._tell(task_id, label)             # before the thread exists: its removal can only come after this
+        with self._mu:
             if self._pool is None:
                 self._pool = ThreadPoolExecutor(max_workers=LANE_THREADS_MAX, thread_name_prefix=f"{THREAD_PREFIX}-{self.slug}")
             self.started += 1
@@ -368,6 +391,7 @@ class Lanes:
             if task_id:
                 with self._mu:
                     self._working.pop(task_id, None)
+                self._tell(task_id, None)
             log.info("%s: lane %s ended after %.0fs", self.slug, label, time.monotonic() - t0)
             if self._on_lane_exit is not None:
                 try:
