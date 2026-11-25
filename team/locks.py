@@ -232,6 +232,16 @@ def product_cycle(st: Settings, slug: str, note: str = "", wait_s: float = 0.0) 
         yield got
 
 
+def update_waiting(st: Settings) -> bool:
+    """True while a code update has announced itself at the gate (or holds it). A shared, non-blocking look — it never
+    makes a starting cycle of another process fail at the gate, as an exclusive probe could."""
+    path = gate_path(st)
+    if not path.exists():
+        return False
+    with path.open("a+", encoding="utf-8") as fh:
+        return not _try(fh, fcntl.LOCK_SH)
+
+
 def product_busy(st: Settings, slug: str) -> bool:
     return busy(product_lock_path(st, slug))
 

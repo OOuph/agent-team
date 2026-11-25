@@ -9,6 +9,7 @@ products/*/work/
 agent_team.egg-info/
 .DS_Store
 products/*/team.db
+products/*/store.lock
 products/*/backlog/
 products/*/questions/
 products/*/observations/

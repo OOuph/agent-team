@@ -8,6 +8,7 @@ Every transition is appended to task["history"] with actor and note: that is the
 """
 from __future__ import annotations
 
+import fcntl
 import json
 import logging
 import os
@@ -73,10 +74,80 @@ def _dump(obj: dict[str, Any]) -> str:
 
 
 SQLITE_TIMEOUT_S = 30          # a writer of another process (CLI, another connection) is waited for this long
+STORE_LOCK_FILE = "store.lock"   # products/<slug>/store.lock: the flock half of `Store.lock`
+STORE_LOCK_WAIT_LOG_S = 2.0    # a writer that waited longer than this for another process says so at INFO
+
+
+class StoreLock:
+    """`Store.lock`: one writer at a time — among the threads of a process (a re-entrant thread lock, as before) AND
+    among processes (flock on products/<slug>/store.lock, owner 25.11). The cycle holds it for single writes and for
+    short read-modify-write sections only (team/lanes.py invariants 4 and 8: never across a model run, a slot or the
+    repository lock), so a writer of another process — `team obs`, `team task new|move`, `team ask|answer` typed by the
+    operator while the product's cycle runs — waits milliseconds for it, not the whole cycle for the product lock.
+
+    One object per store directory per process (`for_dir`): two `Store` instances of one product in one process share
+    it, so a write through the second inside a section of the first re-enters instead of deadlocking on the flock."""
+
+    _by_dir: dict[str, "StoreLock"] = {}
+    _registry = threading.Lock()
+
+    def __init__(self, path: Path):
+        self.path = Path(path)
+        self._threads = threading.RLock()
+        self._depth = 0                       # how many times the owning thread holds it; guarded by `_threads`
+        self._fh: Any = None
+
+    @classmethod
+    def for_dir(cls, product_dir: Path) -> "StoreLock":
+        key = os.path.realpath(str(product_dir))
+        with cls._registry:
+            lk = cls._by_dir.get(key)
+            if lk is None:
+                lk = cls._by_dir[key] = cls(Path(key) / STORE_LOCK_FILE)
+            return lk
+
+    def acquire(self) -> bool:
+        self._threads.acquire()
+        if self._depth == 0:
+            try:
+                t0 = time.monotonic()
+                if self._fh is None:
+                    self.path.parent.mkdir(parents=True, exist_ok=True)
+                    self._fh = self.path.open("a+", encoding="utf-8")
+                fcntl.flock(self._fh, fcntl.LOCK_EX)          # blocking: every holder is a short section without model runs
+                waited = time.monotonic() - t0
+                if waited >= STORE_LOCK_WAIT_LOG_S:
+                    log.info("store lock %s: waited %.1fs for a writer of another process", self.path, waited)
+            except BaseException:
+                self._threads.release()
+                raise
+        self._depth += 1
+        return True
+
+    def release(self) -> None:
+        self._depth -= 1
+        if self._depth == 0 and self._fh is not None:
+            try:
+                fcntl.flock(self._fh, fcntl.LOCK_UN)
+            except OSError as exc:                            # the description is closed below: the kernel drops the lock with it
+                log.warning("store lock %s: unlock failed (%s); closing the file", self.path, exc)
+                try:
+                    self._fh.close()
+                finally:
+                    self._fh = None
+        self._threads.release()
+
+    def __enter__(self) -> "StoreLock":
+        self.acquire()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self.release()
 
 
 def _locked(fn: Callable[..., Any]) -> Callable[..., Any]:
-    """The method runs under `Store.lock`: one writer at a time inside the process (parallel lanes, team/lanes.py)."""
+    """The method runs under `Store.lock`: one writer at a time, among the lanes of a cycle (team/lanes.py) and among
+    processes (the operator's CLI beside a running cycle)."""
     @wraps(fn)
     def inner(self: "Store", *args: Any, **kwargs: Any) -> Any:
         with self.lock:
@@ -104,7 +175,8 @@ class Store:
         # interleave inside a method; every thread has its own SQLite connection (`db`), so a lane may also read with
         # `store.db.execute(...)` directly. Code that reads a task, changes it and saves it while another thread may
         # touch the same task wraps the three steps in `with store.lock:`.
-        self.lock = threading.RLock()
+        # Since 25.11 the same lock also excludes the writers of OTHER processes (`StoreLock`: flock on store.lock).
+        self.lock = StoreLock.for_dir(self.dir)
         self._local = threading.local()
         self._conns: list[sqlite3.Connection] = []
         self._conn_lock = threading.Lock()
@@ -116,6 +188,7 @@ class Store:
             CREATE TABLE IF NOT EXISTS spend(day TEXT, run_id TEXT, role TEXT, usd REAL, reported INTEGER, ts TEXT);
             CREATE TABLE IF NOT EXISTS cycles(cycle_id TEXT PRIMARY KEY, started TEXT, finished TEXT, phases TEXT, spent_usd REAL);
             CREATE TABLE IF NOT EXISTS posts(day TEXT, channel TEXT, post_id TEXT, url TEXT, task_id TEXT, ts TEXT);
+            CREATE TABLE IF NOT EXISTS working(task_id TEXT PRIMARY KEY, lane TEXT, pid INTEGER, since TEXT);
         """)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(posts)")}
         if "text" not in cols:          # 03.11: the marketer's memory ("published in the last 7 days") needs the text that went out
@@ -283,6 +356,38 @@ class Store:
         now = time.time()
         return [{"task_id": r[0], "role": r[1], "run_id": r[2]} for r in
                 self.db.execute("SELECT task_id, role, run_id FROM claims WHERE lease_until < ?", (now,))]
+
+    # ------------------------------------------------------------ tasks in a lane of the running cycle
+
+    # team/lanes.py invariant 2 («one lane per task») made visible to other processes: a lane keeps its own copy of the
+    # task for the length of its run and writes it back, so a `team task move` of that task from outside would be lost
+    # or would break the lane. The cycle marks the task here while a lane works on it; the CLI looks before it moves.
+
+    @_locked
+    def mark_working(self, task_id: str, lane: str) -> None:
+        self.db.execute("INSERT OR REPLACE INTO working(task_id, lane, pid, since) VALUES(?,?,?,?)", (task_id, lane or "main", os.getpid(), utcnow()))
+        self.db.commit()
+
+    @_locked
+    def unmark_working(self, task_id: str) -> None:
+        self.db.execute("DELETE FROM working WHERE task_id=?", (task_id,))
+        self.db.commit()
+
+    @_locked
+    def clear_working(self) -> int:
+        """Forget every mark: called by a starting cycle, which holds the product lock — whatever is marked then was
+        left by a cycle that died. Returns how many marks there were."""
+        n = int(self.db.execute("SELECT COUNT(*) FROM working").fetchone()[0])
+        if n:
+            self.db.execute("DELETE FROM working")
+            self.db.commit()
+            log.warning("store %s: %d task mark(s) of a cycle that did not finish were cleared", self.dir.name, n)
+        return n
+
+    def working_lane(self, task_id: str) -> str | None:
+        """The lane of the running cycle that works on the task right now, or None."""
+        r = self.db.execute("SELECT lane FROM working WHERE task_id=?", (task_id,)).fetchone()
+        return str(r[0]) if r else None
 
     # ------------------------------------------------------------ questions
 

@@ -8,6 +8,9 @@
 # (update-code.sh, watchdog.sh, the self-merge); while that is waiting or running, this exits 75 and the next tick looks
 # again. Unlike run-cycle.sh it does not record data/framework/last-good — the rollback point of watchdog.sh stays tied
 # to the hourly pass over every product.
+# With `cycle: {flow: {chain: true}}` in product.yaml (team/flow.py) the process does not end after one cycle: while the
+# cycle did work and startable work waits it starts the product's next cycle itself, up to `chain_max` in a row, giving up
+# every lock for a few seconds in between. The ticks of cron that fall into a chain find the product busy and exit.
 # Optional argument: a product slug, to limit the check to that product (the pre-PR server workaround was called so).
 cd "$(dirname "$0")" || exit 1
 SLUG="${1:-all}"                              # all = every product that has cycle.every_min
