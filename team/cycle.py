@@ -29,11 +29,13 @@ import yaml
 
 from . import balance, geo, gitops, hypothesis, playtest, prompts, prfacts, publish, replan, servicedeploy, standing, voice
 from .config import HYPOTHESIS_FROM_STAGE, Product, Settings, stage_index
+from .config import WORKTREES_DIRNAME
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
 from .runner import killed_kind
 from . import lanes as lanes_mod
+from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
 
 # parallel lanes and per-task checkouts (owner 21.11, frictions F21/F29; team/lanes.py)
@@ -46,6 +48,13 @@ CONFLICT_NOTE_CHARS = 200                                 # of the file list in 
 RUN_PORT_ENV = "TEAM_PORT"                                # environment of a repository role's run on a service repository: a port of its own for a server it starts
 
 # run continuation (owner 21.11, frictions F23/F30): a run stopped by the time limit is continued, not restarted
+# what a review leaves on the disk (25.11: 154 GB full after five days — 803 node_modules in 226 cycle folders, team/cycle.py
+# `Cycle.drop_review_dirs` and `Cycle.sweep_work_dirs`)
+WORKDIR_HEAVY_DIRS = ("checkout", "tests-run")           # data/work/<slug>/<cycle>/<label>/<one of these>: clones made for one run
+WORKDIR_HEAVY_NAME = "node_modules"                      # removed wherever it lies inside a cycle folder
+WORKDIR_KEEP = (WORKTREES_DIRNAME, "deploy", "onboarding")   # folders of data/work/<slug> that are not cycle folders: never swept
+WORKDIR_SWEPT_MARK = ".swept"                            # written into a swept cycle folder: the next sweeps skip it
+WORKDIR_SWEEP_MAX_S = 120.0                              # one sweep stops after this long; the rest waits for the next cycle
 CONTINUE_ROLES = ("developer", "designer")               # roles that work in a product repository checkout
 INTERRUPTED = "interrupted"                               # result status of a run the dispatcher stopped: not a failed attempt for the replan counter
 WIP_WHY = {"timeout": "run stopped by the time limit, continues next cycle",          # text of the service commit, by reason
@@ -94,6 +103,44 @@ REPO_ONLY_PROMPT = (
     "copy; their command, exit code and output are below. A criterion about tests is judged from that output: exit 0 and the "
     "named test present → pass; a failing or missing test → fail with its name. A criterion about code is judged by reading "
     "the files.\n\n## TEST RUN (by the dispatcher)\n{tests}\n")
+
+
+def remove_tree(path: Path) -> bool:
+    """Delete the directory `path` with everything in it, read-only files and folders included (`gitops.readonly_checkout`
+    takes the write bit off). A symlink is never followed and never removed. Returns True when the directory is gone;
+    a failure is logged, not raised — housekeeping must not cost a review its verdict."""
+    path = Path(path)
+    if path.is_symlink() or not path.is_dir():
+        return False
+
+    def _writable_then_retry(func: Any, failed: str, _exc: Any) -> None:
+        for q in (os.path.dirname(failed), failed):
+            try:
+                if not os.path.islink(q):
+                    os.chmod(q, 0o700)
+            except OSError:
+                pass
+        func(failed)
+
+    try:
+        # `onerror` is deprecated since Python 3.12 in favour of `onexc`; the handler ignores its third argument
+        shutil.rmtree(path, **{"onexc" if sys.version_info >= (3, 12) else "onerror": _writable_then_retry})
+    except OSError as exc:
+        log.warning("could not remove %s: %s", path, str(exc)[:200])
+    return not path.exists()
+
+
+def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
+    """Delete every directory called `name` under `root` (not followed into, symlinks left alone). Returns what went."""
+    gone: list[Path] = []
+    if Path(root).is_symlink() or not Path(root).is_dir():
+        return gone
+    for r, ds, _fs in os.walk(root, followlinks=False):
+        if name in ds:
+            ds.remove(name)
+            if remove_tree(Path(r) / name):
+                gone.append(Path(r) / name)
+    return gone
 
 
 def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None) -> str:
@@ -183,7 +230,7 @@ class Cycle:
         # parallel lanes (team/lanes.py): the executor, the repository lock, the live-host lock; what the lanes share in
         # this object is guarded here — the budget (cap reservations, `n_runs`) and the seats of the execute phase
         self.par = product.parallel
-        self.lanes = lanes_mod.Lanes(self.par, product.slug, on_lane_exit=self.store.close_thread)
+        self.lanes = lanes_mod.Lanes(self.par, product.slug, on_lane_exit=self.store.close_thread, on_working=self._task_mark)
         self.repo_lock = self.lanes.repo_lock                 # the product's clone: fetch, worktrees, merge, push, deploy
         self._budget_lock = threading.Lock()
         self._reserved: dict[str, float] = {}                 # run id -> the cap reserved for a run in flight
@@ -192,6 +239,15 @@ class Cycle:
         self._in_run = False                                  # True inside `run`: there the review lanes outlive their phase
         self._failed_phases: set[str] = set()                 # phases one of whose lanes raised
         self._tl = threading.local()                          # per thread: the run profile of its latest role_run
+        # continuous work of the seats (owner 25.11, team/flow.py): refill inside the execute phase, the next cycle back to back
+        self.flow = product.flow
+        self._refill_deadline: float | None = None            # monotonic; set by a parallel execute phase with `cycle.flow.refill`
+        self._refill_last: float | None = None                # monotonic; the latest moment refill may stay open for running reviews
+        self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
+        self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
+        self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
+        self.n_executed = 0                                   # tasks an execute lane carried through in this cycle
+        self.n_refilled = 0                                   # of them taken beyond the seat's places, by refill
 
     @property
     def last_profile(self) -> dict[str, Any] | None:
@@ -203,6 +259,14 @@ class Cycle:
         self._tl.profile = prof
 
     # ------------------------------------------------------------ guards
+
+    def _task_mark(self, task_id: str, lane: str | None) -> None:
+        """A lane took the task (label) or let go of it (None): kept in the store, where `team task move` of another
+        process looks before it changes a task (team/lanes.py invariant 2, seen from outside the cycle)."""
+        if lane is None:
+            self.store.unmark_working(task_id)
+        else:
+            self.store.mark_working(task_id, lane)
 
     def stopped(self) -> str | None:
         from . import cadence
@@ -225,6 +289,7 @@ class Cycle:
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
                  max_turns: int | None = None, model: str | None = None) -> RunResult | None:
+        self._tl.run_ok = False                                     # until a run really finished well (read by `seat_lane` for refill)
         if self.runner is None:
             log.error("no runner: %s skipped", label)
             return None
@@ -294,6 +359,7 @@ class Cycle:
                "lane": lanes_mod.current_lane() or "main"}
         (rd / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
+        self._tl.run_ok = bool(rr.ok)
         return rr
 
     def profile_run(self, rr: RunResult, role: str, run_id: str, limits: dict[str, Any]) -> dict[str, Any] | None:
@@ -335,6 +401,7 @@ class Cycle:
 
     def run(self, phases: list[str] | None = None) -> dict[str, Any]:
         self.store.cycle_start(self.cycle_id)
+        self.store.clear_working()                # the caller holds the product lock: a mark found now is of a cycle that died
         reason = self.stopped()
         if reason:
             log.warning("%s: stopped (%s)", self.p.slug, reason)
@@ -363,9 +430,91 @@ class Cycle:
         spent = self.store.spent_today() - spent0
         self.store.cycle_finish(self.cycle_id, self.phases_done, round(spent, 4))
         peak = self.lanes.gate.peak
-        log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs%s", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent,
-                 time.time() - t0, f", {self.lanes.started} lane(s), up to {peak} at once" if self.lanes.started else "")
+        log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs%s%s", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent,
+                 time.time() - t0, f", {self.lanes.started} lane(s), up to {peak} at once" if self.lanes.started else "",
+                 f", {self.n_executed} task(s) executed, {self.n_refilled} of them by refill" if self.n_refilled else "")
         return {"phases": self.phases_done, "runs": self.n_runs, "spent_usd": round(spent, 4)}
+
+    # ------------------------------------------------------------ continuous work of the seats (team/flow.py)
+
+    def refill_open(self) -> bool:
+        """May a seat that finished its task take one more in this execute phase? Only in a parallel cycle with
+        `cycle.flow.refill`, while the phase is younger than `refill_min`, nothing stopped the product, the last run of
+        every refilling lane went well, and extra work is allowed (weekly limit, credits: `flow.allowed`). The reason it
+        closed is logged once and kept as the `flow.refill_closed` event."""
+        if self._refill_deadline is None or self._refill_closed:
+            return False
+        why = None
+        now = time.monotonic()
+        if now >= (self._refill_last or self._refill_deadline):
+            why = f"the execute phase is older than cycle.flow.refill_max_min ({self.flow.refill_max_min:g} min)"
+        elif now >= self._refill_deadline and not self.lanes.gate.in_flight(LANE_REVIEW):
+            # past refill_min the window stays open only while reviews of this cycle hold the cycle anyway
+            why = f"the execute phase is older than cycle.flow.refill_min ({self.flow.refill_min:g} min) and no review is running"
+        else:
+            why = self.stopped() or flow_mod.allowed(self.st, self.flow)
+        if why:
+            self.close_refill(why)
+            return False
+        return True
+
+    def close_refill(self, why: str) -> None:
+        if self._refill_deadline is None or self._refill_closed:
+            return
+        self._refill_closed = why
+        log.info("%s: refill closed for this cycle: %s (%d task(s) were taken by refill)", self.p.slug, why, self.n_refilled)
+        self.store.event("flow.refill_closed", self.cycle_id, "dispatcher", {"why": why[:300], "refilled": self.n_refilled})
+
+    def next_for_seat(self, key: str, slots: dict[str, int], seen: set[str]) -> dict[str, Any] | None:
+        """Refill: the next task of seat `key`, read from the store now — what a review of this cycle sent back and what
+        another lane unblocked included — in the order of `execute_candidates`. Never a task a lane of this cycle has
+        taken or is working on. Called under `_seat_lock`."""
+        for t in self.execute_candidates():
+            if t["id"] in seen or t["id"] in self._taken or self.lanes.busy(t["id"]):
+                continue
+            if self.seat_key(str(t.get("role") or "developer"), slots) == key:
+                return t
+        return None
+
+    def work_waiting(self) -> list[str]:
+        """Tasks an execute phase starting now could take: ready or in progress, the role has a seat, not scheduled for
+        later, no open question, no unfinished dependency — and not one this cycle already looked at and did not carry
+        through (it would be refused or fail again). Read-only: the checks that write (`startable`) are not called."""
+        slots = self.execute_slots()
+        out: list[str] = []
+        for t in self.execute_candidates():
+            if t["id"] in self._not_done or self.seat_key(str(t.get("role") or "developer"), slots) is None:
+                continue
+            if str(t.get("role") or "developer") in PENDING_ROLES:
+                continue
+            nb = parse_ts(t.get("not_before"))
+            if nb and _now() < nb:
+                continue
+            if t.get("state") == "ready" and (self.open_question_blocks(t) or unmet_dependencies(self.store, t)):
+                continue
+            out.append(t["id"])
+        return out
+
+    def chain_reason(self, res: dict[str, Any]) -> tuple[bool, str]:
+        """Should `team cycle --due` start this product's next cycle right away (`cycle.flow.chain`)? (yes/no, why) —
+        yes only after a cycle that carried a task through, while startable work waits and extra work is allowed."""
+        if not self.flow.chain:
+            return False, "cycle.flow.chain is off"
+        if self.dry_run:
+            return False, "dry run"
+        if res.get("stopped") or self.stopped():
+            return False, f"stopped ({res.get('stopped') or self.stopped()})"
+        if "execute" not in (res.get("phases") or []):
+            return False, "the execute phase did not finish"
+        if not self.n_executed:
+            return False, "this cycle carried no task through"
+        why = flow_mod.allowed(self.st, self.flow)
+        if why:
+            return False, why
+        waiting = self.work_waiting()
+        if not waiting:
+            return False, "no startable task is waiting"
+        return True, f"{len(waiting)} startable task(s) waiting ({', '.join(waiting[:5])}{'…' if len(waiting) > 5 else ''})"
 
     def finish_lanes(self) -> list[lanes_mod.LaneError]:
         """Wait for every lane in flight. A lane that raised is recorded like a phase that raised: `phase.error`, and
@@ -672,10 +821,34 @@ class Cycle:
         finally:
             if server is not None:
                 playtest.stop(server)
+            self.drop_review_dirs(t["id"])           # the verdict needs none of it: the run is over, the evidence lies elsewhere
         if rr is None:
             return
         with self.store.lock:                        # applied as the run finishes, in one piece (team/lanes.py invariant 4)
             self.apply_review(self.store.task(t["id"]) or t, rr)
+
+    def drop_review_dirs(self, task_id: str, labels: tuple[str, ...] = ("review", "playtest")) -> list[Path]:
+        """Free what one review (or load test) put on the disk, as soon as its run is over: the clones the tests ran in
+        (`tests-run`, with their node_modules), the reviewer's read-only checkout, and every node_modules of the
+        play-test checkout. What stays: `server.log`, the play-test checkout itself (the files the server wrote; it goes
+        with `sweep_work_dirs` later) and everything the run wrote beside them. The tester's screenshots and reports are
+        not here at all — they are in products/<slug>/reviews/<task>. Never raises. Returns the directories removed."""
+        gone: list[Path] = []
+        try:
+            for label in labels:
+                work = self.p.work_dir / self.cycle_id / f"{label}-{task_id}"
+                if work.is_symlink() or not work.is_dir():
+                    continue
+                for sub in ("tests-run",) + (("checkout",) if label == "review" else ()):
+                    if remove_tree(work / sub):
+                        gone.append(work / sub)
+                gone += remove_named_dirs(work)
+            if gone:
+                log.info("%s: %s: %d working director%s of the finished review removed: %s", self.p.slug, task_id, len(gone),
+                         "y" if len(gone) == 1 else "ies", ", ".join(str(g.relative_to(self.p.work_dir / self.cycle_id)) for g in gone))
+        except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the review its verdict
+            log.warning("%s: %s: review working directories not removed: %s", self.p.slug, task_id, str(exc)[:300])
+        return gone
 
     def apply_review(self, t: dict[str, Any], rr: RunResult) -> None:
         """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run)."""
@@ -1020,8 +1193,18 @@ class Cycle:
             self.sweep_worktrees()
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
             log.warning("%s: worktree sweep failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
+        try:
+            self.sweep_work_dirs()
+        except Exception as exc:  # noqa: BLE001 — the same: a full disk is worse, but the tasks come first
+            log.warning("%s: sweep of old cycle folders failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
         slots = self.execute_slots()
         used: dict[str, int] = {}
+        if self.lanes.parallel and self.flow.refill and not self.dry_run:
+            # owner 25.11 (team/flow.py): a seat that finishes takes the next task until the phase is `refill_min` old
+            self._refill_deadline = time.monotonic() + self.flow.refill_min * 60
+            self._refill_last = time.monotonic() + self.flow.refill_max_min * 60
+            log.info("%s: execute: refill is on — a freed seat takes the next task for %g min, up to %g min while reviews hold the cycle",
+                     self.p.slug, self.flow.refill_min, self.flow.refill_max_min)
         if not self.lanes.parallel:
             for t in self.execute_candidates():
                 if all(used.get(k, 0) >= v for k, v in slots.items()):
@@ -1035,14 +1218,21 @@ class Cycle:
                     continue
                 if self.execute_task(t):
                     used[key] = used.get(key, 0) + 1
+                    self.n_executed += 1
+                else:
+                    self._not_done.add(t["id"])
             return
         seen: set[str] = set()                    # tasks a lane of this cycle has dealt with: not offered again in a later pass
         for wave in range(1, EXECUTE_WAVES_MAX + 1):
+            with self._seat_lock:
+                self._taken.clear()               # no seat lane is running here: a task that waited for a dependency may be offered again
             groups: dict[str, list[dict[str, Any]]] = {}
             for t in self.execute_candidates():
                 key = self.seat_key(str(t.get("role") or "developer"), slots)
-                if key is None or t["id"] in seen or self.lanes.busy(t["id"]) or used.get(key, 0) >= slots[key]:
+                if key is None or t["id"] in seen or self.lanes.busy(t["id"]):
                     continue
+                if used.get(key, 0) >= slots[key] and not self.refill_open():
+                    continue        # the seat's places for this cycle are used (refill: «places at once», no such count)
                 groups.setdefault(key, []).append(t)
             started = 0
             for key, tasks in groups.items():
@@ -1103,28 +1293,60 @@ class Cycle:
         """One execute lane: the tasks of seat `key`, in order, one after another, until the seat's places for this cycle
         are used — the body of the sequential loop for one seat. Several lanes of one seat (`overlap_roles`) share the
         feed and the count; a task being executed holds a place, so the seat is never over-filled."""
+        healthy = True                            # refill: this lane's last task was carried through and its run went well
         while True:
             with self._seat_lock:
-                if used.get(key, 0) + self._seat_running.get(key, 0) >= slots[key]:
+                # Refill (`cycle.flow.refill`, team/flow.py): the seat's count of tasks per cycle does not end the lane
+                # while the refill window is open — the number of lanes of the seat is what bounds the work at once.
+                extra = used.get(key, 0) + self._seat_running.get(key, 0) >= slots[key]
+                if extra and not (healthy and self.refill_open()):
                     return
-                t = feed.next()
+                if healthy and self.refill_open():
+                    # the feed is the list made at the start of the pass; with refill the backlog is read again for every
+                    # pick — what was added, sent back or moved meanwhile is seen, in the usual order
+                    t = self.next_for_seat(key, slots, seen)
+                else:
+                    t = feed.next()
+                    while t is not None and t["id"] in self._taken:      # a refill pick took it before its turn in the feed
+                        t = feed.next()
                 if t is None:
                     return
+                self._taken.add(t["id"])
                 self._seat_running[key] = self._seat_running.get(key, 0) + 1
             ok, verdict = False, False            # an exception below counts as «dealt with»: the task is not offered again this cycle
+            self._tl.run_ok = None                # no run of this task yet (`role_run` sets it)
             try:
                 if not self.pending_role(t):
-                    verdict = self.startable(t)
-                    if verdict:
-                        with self.lanes.working(t["id"]):
-                            ok = bool(self.execute_task(t))
+                    # The mark first, then the task read again: whatever another process (`team task move`) or a lane wrote
+                    # since the pass listed it is seen here, and from the mark on that process leaves the task alone.
+                    with self.lanes.working(t["id"]):
+                        now = self.store.task(t["id"])
+                        if now is None or now.get("state") not in ("ready", "in_progress"):
+                            log.info("%s: %s is not started: it is %s now, not %s as when the pass listed it", self.p.slug, t["id"],
+                                     (now or {}).get("state") or "gone", t.get("state"))
+                        else:
+                            t = now
+                            verdict = self.startable(t)
+                            if verdict:
+                                ok = bool(self.execute_task(t))
             finally:
+                run_ok = getattr(self._tl, "run_ok", None)
+                if verdict:                       # a task that was not startable says nothing about the health of the runs
+                    healthy = ok and run_ok is not False
                 with self._seat_lock:
                     self._seat_running[key] -= 1
                     if ok:
                         used[key] = used.get(key, 0) + 1
+                        self.n_executed += 1
+                        self.n_refilled += 1 if extra else 0
+                    if not (ok and verdict):
+                        self._not_done.add(t["id"])
                     if verdict is not None:      # None = waits for a dependency: a later pass of this cycle may start it
                         seen.add(t["id"])
+                if verdict and not healthy:
+                    # a run that failed or did not start (budget, limits, an outage): the next task would meet the same —
+                    # nothing more is taken beyond the seat's places in this cycle, by any lane
+                    self.close_refill(f"{t['id']}: the run {'failed' if run_ok is False and ok else 'did not finish'}")
 
     # the checkouts of the repository roles: one worktree per task (owner 21.11) ---------------------------------------
 
@@ -1153,6 +1375,45 @@ class Cycle:
             self.store.event("worktree.removed", d.name, "dispatcher", {"state": state, "path": str(d)})
             removed.append(d.name)
         return removed
+
+    def sweep_work_dirs(self) -> list[str]:
+        """Free the folders of finished cycles: in every data/work/<slug>/<cycle> whose newest entry is older than
+        `cycle.parallel.workdir_keep_h` hours, remove the clones made for one run (`<label>/checkout`, `<label>/tests-run`)
+        and every node_modules. The folder itself stays with its logs (`server.log`, `deploy-*.log`) and the files the
+        runs wrote. Never touched: the folder of this cycle, `wt` (the task checkouts, `sweep_worktrees`), `deploy`,
+        `onboarding`. A swept folder gets the mark `.swept` and is skipped from then on. One sweep works for at most
+        WORKDIR_SWEEP_MAX_S; what is left waits for the next cycle. Returns the names of the folders swept."""
+        root = self.p.work_dir
+        if self.dry_run or not root.is_dir():
+            return []
+        keep_s = self.par.workdir_keep_h * 3600
+        started, now = time.monotonic(), time.time()
+        swept: list[str] = []
+        removed = 0
+        free_before = shutil.disk_usage(root).free
+        for d in sorted(x for x in root.iterdir() if x.is_dir() and not x.is_symlink()):
+            if d.name in WORKDIR_KEEP or d.name == self.cycle_id or (d / WORKDIR_SWEPT_MARK).exists():
+                continue
+            subs = [x for x in d.iterdir() if x.is_dir() and not x.is_symlink()]
+            newest = max(x.lstat().st_mtime for x in [d, *subs])
+            if now - newest < keep_s:
+                continue
+            if time.monotonic() - started > WORKDIR_SWEEP_MAX_S:
+                log.info("%s: sweep of old cycle folders stopped after %.0fs; the rest waits for the next cycle", self.p.slug, WORKDIR_SWEEP_MAX_S)
+                break
+            gone = [sub / h for sub in subs for h in WORKDIR_HEAVY_DIRS if remove_tree(sub / h)]
+            gone += remove_named_dirs(d)
+            (d / WORKDIR_SWEPT_MARK).write_text(f"{utcnow()} {len(gone)} director{'y' if len(gone) == 1 else 'ies'} removed\n", encoding="utf-8")
+            log.info("%s: cycle folder %s (%.0f h old): %d working director%s removed", self.p.slug, d.name, (now - newest) / 3600,
+                     len(gone), "y" if len(gone) == 1 else "ies")
+            swept.append(d.name)
+            removed += len(gone)
+        if swept:
+            freed_mb = max(0, shutil.disk_usage(root).free - free_before) / 1e6
+            log.info("%s: %d old cycle folder(s) swept, %d director%s removed, about %.0f MB freed", self.p.slug, len(swept), removed,
+                     "y" if removed == 1 else "ies", freed_mb)
+            self.store.event("workdir.swept", self.p.slug, "dispatcher", {"folders": len(swept), "removed": removed, "freed_mb": round(freed_mb)})
+        return swept
 
     def task_checkout(self, t: dict[str, Any], start_point: str | None = None) -> tuple[Path, str]:
         """The task's own checkout and its branch (created, reused, or taken over from the layout before 21.11, where
@@ -1622,6 +1883,7 @@ class Cycle:
                                    allowed_tools=list(TESTER_TOOLS), env_extra=env)
         finally:
             playtest.stop(server)
+            self.drop_review_dirs(t["id"], labels=("load",))
         if rr is None:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False

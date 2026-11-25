@@ -82,7 +82,26 @@ cycle:
     overlap_roles: []             # roles whose several seats (execute_slots.<role> > 1) work at once; [] = tasks of one role one after another
     max_merge_conflicts: 2        # merge conflicts in a row on one task (two tasks keep changing the same lines) → blocked, question to the PO
     worktree_keep_h: 72           # a blocked / deferred / waiting_owner task keeps its checkout this long; its branch stays for ever
+    workdir_keep_h: 24            # a finished cycle keeps the clones of its reviews and play-tests (data/work/<slug>/<cycle>/*/checkout,
+                                  # */tests-run, every node_modules) this long; the folder and its logs stay for ever
                                   # (product.yaml `cycle: {parallel: {max_runs: 2}}` overrides key by key; `parallel: false` switches it off)
+  flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
+                                  # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
+                                  # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)
+    refill: false                 # true = a seat that finished its task takes the next startable one inside the same execute phase;
+                                  # `execute_slots` then means «places working at once», not «tasks per cycle»
+    refill_min: 20                # … until the execute phase is this many minutes old; nothing new starts later, so the cycle is not held
+                                  # longer than one long run holds it anyway
+    refill_max_min: 60            # past refill_min refill stays open while reviews of the cycle still run or wait for a slot (the cycle
+                                  # is held by them anyway), but never after the phase is this old
+    chain: false                  # true = `team cycle --due` starts the next cycle right after one that carried a task through, while
+                                  # startable work waits (no 5–10 min pause until cron looks again)
+    chain_max: 6                  # cycles of one product in one process; then cron and cycle.every_min decide
+    chain_pause_s: 5              # between two chained cycles NO lock is held this long: the window of an operator script that waits
+                                  # for data/locks/product-<slug>.lock, and of a code update at the gate
+    chain_lock_wait_s: 120        # the next chained cycle waits this long for whoever took the product lock in that window
+    max_utilization: 1.0          # refill and chain are off while the subscription's weekly window is above this share (1.0 = no ceiling)
+    on_credits: false             # false = refill and chain are off while the team runs on bought credits (real money)
   execute_slots:                  # seats per role per cycle (overrides max_execute_per_cycle when present; product.yaml may override)
     developer: 1                  # 03.11: a single seat starved the daily post behind P1/P2 developer tasks
     marketer: 1

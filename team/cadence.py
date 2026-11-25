@@ -69,7 +69,9 @@ def has_cycle(p: Product, cycle_id: str) -> bool:
         s.close()
 
 
-def check(st: Settings, p: Product, now: datetime | None = None) -> Due:
+def check(st: Settings, p: Product, now: datetime | None = None, chained: bool = False) -> Due:
+    """`chained`: the look of `team cycle --due` before the next cycle of a chain (`cycle.flow.chain`, team/flow.py) —
+    the pause since the last cycle is not asked for, everything else is."""
     now = now or datetime.now(timezone.utc)
     every = p.cycle_every_min
     if not every:
@@ -77,6 +79,8 @@ def check(st: Settings, p: Product, now: datetime | None = None) -> Due:
     stop = stop_reason(st, p)
     if stop:
         return Due(p, False, f"stopped ({stop})", every)
+    if chained:
+        return Due(p, True, "chained: the previous cycle did work and startable work is waiting", every)
     last = last_finished(p)
     if last is None:
         return Due(p, True, "no finished cycle yet", every)

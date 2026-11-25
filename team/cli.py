@@ -11,6 +11,9 @@
   team task SLUG new|move|show  create / transition / print a task
   team ask SLUG --from R --to R --text Q [--task T]      · team answer SLUG Q-0001 --text A [--by owner]
   team obs SLUG --title T --text X [--class need_hypothesis]  add an observation by hand (owner's input)
+                                obs, task new|move, ask and answer do NOT need the product lock: they write under the
+                                store's own short lock (team/store.py StoreLock) and may be typed while the cycle runs;
+                                `task move` of a task a lane is working on is refused (exit 75) or waits (--wait-s N)
   team stop SLUG|all / team resume SLUG|all   STOP file
   team digest SLUG              print today's digest text
   team report [--hours 12] [--send] [--no-llm] [--style bonus|plain]   12-hour role report (ledger + reporter run) → Telegram ops chat
@@ -23,6 +26,7 @@ import logging
 import os
 import shutil
 import sys
+import time
 from contextlib import ExitStack, nullcontext
 from datetime import datetime, timezone
 from pathlib import Path
@@ -140,6 +144,7 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
         if not products:
             return 0
     full = a.product == "all" and not phases and not a.due      # the hourly pass over every product
+    again: list[str] = []                                       # products whose next cycle follows at once (`cycle.flow.chain`)
     with ExitStack() as held:
         if not held.enter_context(locks.cycles(st)):
             log.warning("cycle: nothing started — the dispatcher code is being updated (%s or %s is held)", locks.gate_path(st), locks.code_lock_path(st))
@@ -147,11 +152,72 @@ def cmd_cycle(st: C.Settings, a: argparse.Namespace) -> int:
         if full and not held.enter_context(locks.hourly_pass(st)):
             log.warning("cycle: nothing started — another hourly pass is running (%s)", locks.hourly_pass_path(st))
             return locks.EX_TEMPFAIL
-        return _run_cycles(st, a, products, phases, full)
+        rc = _run_cycles(st, a, products, phases, full, again=again if a.due and not phases and not a.cycle else None)
+    if again:
+        _chain(st, a, again)
+    return rc
 
 
-def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product], phases: list[str] | None, full: bool) -> int:
-    """The body of `team cycle`, with the code lock held shared (and the hourly-pass lock for the full pass)."""
+def _chain_sleep(seconds: float) -> None:
+    """The pause between two chained cycles (its own name: the tests put the operator's script here)."""
+    time.sleep(seconds)
+
+
+def _chain(st: C.Settings, a: argparse.Namespace, slugs: list[str]) -> None:
+    """`cycle.flow.chain` (owner 25.11, team/flow.py): the next cycle of a product right after the previous one, in this
+    process, while its cycle did work and startable work waits — instead of 5–10 minutes of nothing until cron looks
+    again. Between two cycles EVERY lock is given up for `chain_pause_s`: an operator script waiting for the product lock
+    (`flock data/locks/product-<slug>.lock …`) gets in there, a code update gets its turn at the gate. The chain ends
+    when the checkout changed (this process holds the old code), an update is waiting, the product is no longer due
+    (STOP, paused), nothing is left to chain, or after `chain_max` cycles — then cron and `cycle.every_min` decide."""
+    from . import cadence, flow, locks
+    head = flow.code_version(st.root)
+    done = {s: 1 for s in slugs}                                # cycles of the product in this process, the first included
+    while slugs:
+        products = []
+        for slug in slugs:
+            try:
+                products.append(C.load_product(st, slug))       # read again: the operator may have changed product.yaml meanwhile
+            except Exception as exc:  # noqa: BLE001 — a product.yaml broken meanwhile ends that product's chain, not the others'
+                log.warning("chain %s: ended — product.yaml cannot be loaded: %s", slug, exc)
+        products = [p for p in products if done[p.slug] < p.flow.chain_max and p.flow.chain]
+        ended = sorted(set(slugs) - {p.slug for p in products})
+        if ended:
+            log.info("chain: ended for %s (cycle.flow.chain_max reached, chain switched off, or product.yaml unreadable)", ", ".join(ended))
+        if not products:
+            return
+        pause = max(p.flow.chain_pause_s for p in products)
+        log.info("chain: %s — next cycle in %.0fs; no lock is held meanwhile", ", ".join(f"{p.slug} (cycle {done[p.slug] + 1} of up to {p.flow.chain_max})" for p in products), pause)
+        _chain_sleep(pause)
+        now_head = flow.code_version(st.root)
+        if now_head != head or not head:
+            log.info("chain: ended — the dispatcher checkout %s; the next cron entry starts on the new code",
+                     f"changed {head[:8]} → {now_head[:8]}" if head and now_head else "cannot be read")
+            return
+        if locks.update_waiting(st):
+            log.info("chain: ended — a code update is waiting at %s", locks.gate_path(st))
+            return
+        products = [p for p in products if cadence.check(st, p, chained=True).due]
+        if not products:
+            log.info("chain: ended — no product is due any more (STOP, paused)")
+            return
+        again: list[str] = []
+        with locks.cycles(st) as ok:
+            if not ok:
+                log.info("chain: ended — the dispatcher code is being updated")
+                return
+            _run_cycles(st, a, products, None, False, again=again, chained=True)
+        for p in products:
+            done[p.slug] += 1
+        slugs = again
+
+
+def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product], phases: list[str] | None, full: bool,
+                again: list[str] | None = None, chained: bool = False) -> int:
+    """The body of `team cycle`, with the code lock held shared (and the hourly-pass lock for the full pass). `again`
+    (only `--due`): filled with the products whose next cycle should follow at once (`Cycle.chain_reason`); `chained`:
+    this call is such a follow-up — the pause of `cycle.every_min` is not asked for, and the product lock is waited for
+    `chain_lock_wait_s` (an operator script may have taken it in the window between the two cycles)."""
     from . import cadence, locks
     roles = load_roles(ROLES_DIR)
     runner = Runner(st.claude, roles) if roles else None
@@ -162,11 +228,12 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
     ran: list[str] = []
     skipped: list[str] = []
     for p in products:
-        with locks.product_cycle(st, p.slug, note=f"cycle={cycle_id} entry={'due' if a.due else a.product}") as free:
+        with locks.product_cycle(st, p.slug, note=f"cycle={cycle_id} entry={'chain' if chained else 'due' if a.due else a.product}",
+                                 wait_s=p.flow.chain_lock_wait_s if chained else 0.0) as free:
             why = None
             if not free:
                 why = f"its cycle is already running (lock {locks.product_lock_path(st, p.slug)})"
-            elif a.due and not cadence.check(st, p).due:
+            elif a.due and not cadence.check(st, p, chained=chained).due:
                 why = "no longer due: another entry finished its cycle while this one was busy"     # the list was made before the locks
             elif not a.cycle and cadence.has_cycle(p, cycle_id):
                 why = f"cycle {cycle_id} of this product was already started by another entry in the same minute"
@@ -179,11 +246,20 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
             fh = logging.FileHandler(p.runs_dir / cycle_id / "cycle.log", encoding="utf-8")
             fh.setFormatter(logging.Formatter(CYCLE_LOG_FORMAT))
             logging.getLogger().addHandler(fh)
+            cyc = None
             try:
-                res = Cycle(st, p, runner, cycle_id, dry_run=a.dry_run).run(phases)
+                cyc = Cycle(st, p, runner, cycle_id, dry_run=a.dry_run)
+                res = cyc.run(phases)
                 print(f"{p.slug}: {res}")
                 ran.append(p.slug)
+                if again is not None and p.flow.chain:
+                    go, reason = cyc.chain_reason(res)
+                    log.info("cycle %s: next cycle %s — %s", p.slug, "right away" if go else "by the cadence", reason)
+                    if go:
+                        again.append(p.slug)
             finally:
+                if cyc is not None and again is not None and p.flow.chain:
+                    cyc.store.close()             # a chain makes many cycles in one process: no connection is left behind
                 logging.getLogger().removeHandler(fh)
                 fh.close()
     log.log(logging.INFO if skipped else logging.DEBUG, "cycle %s: ran %s; skipped %s", cycle_id, ", ".join(ran) or "none", ", ".join(skipped) or "none")
@@ -229,6 +305,9 @@ def cmd_status(st: C.Settings, a: argparse.Namespace) -> int:
         print(f"== {p.slug} ({p.site_base}) stop={'yes' if p.stop_file.exists() else 'no'}")
         print(f"   cadence: {_cadence_line(st, p)}")
         print(f"   lanes: {p.parallel.describe()}")      # owner 21.11: what may run at once inside this product's cycle
+        from . import flow as _flow
+        _why = _flow.allowed(st, p.flow) if (p.flow.refill or p.flow.chain) else None
+        print(f"   flow: {p.flow.describe()}" + (f" — off right now: {_why}" if _why else ""))   # owner 25.11: team/flow.py
         from . import standing
         for ln in standing.status_lines(p, s):        # owner 21.11: one line per standing direction — cadence, next due or the open task
             print(f"   {ln}")
@@ -251,16 +330,43 @@ def cmd_tasks(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+MOVE_POLL_S = 2.0                          # `team task move --wait-s N`: how often the lane mark of the task is looked at
+
+
+def _move_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) -> int:
+    """`team task move` beside a running cycle (owner 25.11): no product lock — the move is one short section under the
+    store lock. The one case that must not pass: a lane of the running cycle works on this very task (it holds its own
+    copy and writes it back — team/lanes.py invariant 2). Then: exit 75 with the lane's name, or wait with --wait-s."""
+    from . import locks
+    deadline = time.monotonic() + max(0.0, float(a.wait_s or 0.0))
+    t0 = time.monotonic()
+    while True:
+        with s.lock:                           # look and move in one piece: the lane marks the task under the same lock
+            lane = s.working_lane(a.id) if locks.product_busy(st, p.slug) else None      # no cycle running: a mark is stale
+            if lane is None:
+                t = s.transition(a.id, a.to, a.by, a.note or "", force=a.force)
+                waited = time.monotonic() - t0
+                log.info("task move %s %s → %s by %s%s", p.slug, a.id, t["state"], a.by, f" after waiting {waited:.0f}s for its lane" if waited >= MOVE_POLL_S else "")
+                print(f"{t['id']} → {t['state']}")
+                return 0
+        if time.monotonic() >= deadline:
+            from .locks import EX_TEMPFAIL
+            log.warning("task move %s %s → %s: not done — lane %s of the running cycle works on it", p.slug, a.id, a.to, lane)
+            print(f"{a.id}: not moved — lane {lane} of the running cycle is working on it; try again when it ends, or add --wait-s N", file=sys.stderr)
+            return EX_TEMPFAIL
+        time.sleep(min(MOVE_POLL_S, max(0.05, deadline - time.monotonic())))
+
+
 def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
+    rc = 0
     if a.action == "new":
         t = s.create_task(title=a.title, type_=a.type, problem=a.problem or a.title, scope=a.scope or "", acceptance=a.acceptance or [],
                           goal=a.goal or "G1", created_by=a.by, priority=a.priority, role=a.role, state="ready" if a.ready else "proposed")
         print(t["id"])
     elif a.action == "move":
-        t = s.transition(a.id, a.to, a.by, a.note or "", force=a.force)
-        print(f"{t['id']} → {t['state']}")
+        rc = _move_task(st, p, s, a)
     elif a.action == "show":
         t = s.task(a.id)
         print(yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=110) if t else "not found")
@@ -270,7 +376,7 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
             if profiles:
                 print(profiles)
     s.close()
-    return 0
+    return rc
 
 
 def cmd_ask(st: C.Settings, a: argparse.Namespace) -> int:
@@ -424,6 +530,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--title"); s.add_argument("--type", default="feature"); s.add_argument("--problem"); s.add_argument("--scope")
     s.add_argument("--acceptance", action="append"); s.add_argument("--goal"); s.add_argument("--priority", default="P2")
     s.add_argument("--role", default="developer"); s.add_argument("--ready", action="store_true"); s.add_argument("--by", default="owner")
+    s.add_argument("--wait-s", dest="wait_s", type=float, default=0.0)      # move: wait this long for a lane of the running cycle to let go of the task
     s.set_defaults(fn=cmd_task)
     s = sub.add_parser("ask"); s.add_argument("product"); s.add_argument("--from", dest="frm", default="owner"); s.add_argument("--to", default="po")
     s.add_argument("--text", required=True); s.add_argument("--task"); s.set_defaults(fn=cmd_ask)
