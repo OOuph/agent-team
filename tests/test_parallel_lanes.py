@@ -1266,3 +1266,121 @@ def test_run_caps_never_lift_a_run_above_what_is_left_of_the_day(tmp_path: Path)
     cyc.run(["execute"])
     assert r.caps == [4.0]
     cyc.store.close()
+
+
+# ------------------------------------------------------------------ the disk: what a review leaves, and old cycle folders (25.11: disk full)
+
+def _fake_tests_run(repo_dir, sha, dest, test_cmd="", lock=None) -> str:
+    (dest / "node_modules" / "left-pad").mkdir(parents=True)
+    (dest / "node_modules" / "left-pad" / "index.js").write_text("x\n", encoding="utf-8")
+    return "$ npm test\nexit code: 0\nok"
+
+
+def test_a_finished_review_leaves_no_clone_and_no_node_modules(tmp_path: Path, monkeypatch):
+    st = _settings(tmp_path)
+    p = _product(st)                                                       # no site: the reviewer reads the read-only checkout
+    rel = _released(p)
+    monkeypatch.setattr(cycle_mod, "run_tests_for_review", _fake_tests_run)
+    r = LaneRunner()
+    seen: dict[str, bool] = {}
+
+    def review(cwd: Path, n: int):
+        seen["checkout"] = (cwd / "README.md").exists() and cwd.name == "checkout"
+        seen["tests"] = (cwd.parent / "tests-run" / "node_modules").is_dir()         # still there while the run goes on
+        (cwd.parent / "notes.txt").write_text("what the run wrote beside the checkout\n", encoding="utf-8")
+        return None
+
+    r.work["reviewer"] = review
+    cyc = Cycle(st, p, r, "c1")
+    cyc.run(["review"])
+    cyc.store.close()
+    work = p.work_dir / "c1" / f"review-{rel}"
+    assert seen == {"checkout": True, "tests": True} and _state(p, rel)["state"] == "accepted"
+    assert not (work / "tests-run").exists() and not (work / "checkout").exists()       # the read-only checkout went too
+    assert (work / "notes.txt").exists()
+
+
+def test_a_finished_play_test_keeps_its_log_and_checkout_but_not_node_modules(tmp_path: Path, monkeypatch):
+    st = _settings(tmp_path)
+    p = _game(st, tmp_path)
+    rel = _released(p)
+    monkeypatch.setattr(cycle_mod, "run_tests_for_review", _fake_tests_run)
+
+    def start(product, repo, sha, work, **k):
+        dest = work / "checkout"
+        for nm in (dest / "node_modules" / "ws", dest / "client" / "node_modules" / "pixi"):
+            nm.mkdir(parents=True)
+            (nm / "index.js").write_text("x\n", encoding="utf-8")
+        (dest / "data.sqlite").write_text("what the server wrote\n", encoding="utf-8")
+        (work / "server.log").write_text("listening\n", encoding="utf-8")
+        return playtest.Server(base_url="http://127.0.0.1:1", port=None, dest=dest, log_path=work / "server.log", proc=None, local=True, notes=[])
+
+    monkeypatch.setattr(playtest, "start", start)
+    monkeypatch.setattr(playtest, "stop", lambda server: None)
+    r = LaneRunner()
+    seen: dict[str, bool] = {}
+    r.work["tester"] = lambda cwd, n: seen.update(modules=(p.work_dir / "c1" / f"playtest-{rel}" / "checkout" / "node_modules" / "ws").is_dir())
+    cyc = Cycle(st, p, r, "c1")
+    cyc.run(["review"])
+    cyc.store.close()
+    work = p.work_dir / "c1" / f"playtest-{rel}"
+    assert r.calls == ["tester"] and seen == {"modules": True} and _state(p, rel)["state"] == "accepted"
+    assert (work / "server.log").read_text(encoding="utf-8") == "listening\n" and (work / "checkout" / "data.sqlite").exists()
+    assert not (work / "checkout" / "node_modules").exists() and not (work / "checkout" / "client" / "node_modules").exists()
+    assert not list((p.work_dir / "c1").rglob("node_modules")) and not list((p.work_dir / "c1").rglob("tests-run"))
+
+
+def _cycle_folder(p: C.Product, name: str, age_h: float) -> Path:
+    d = p.work_dir / name
+    for sub in ("review-T-1/checkout/src", "review-T-1/tests-run/node_modules/a", "playtest-T-1/checkout/client/node_modules/b", "po"):
+        (d / sub).mkdir(parents=True)
+    (d / "review-T-1" / "checkout" / "src" / "a.ts").write_text("x\n", encoding="utf-8")
+    (d / "playtest-T-1" / "server.log").write_text("listening\n", encoding="utf-8")
+    (d / "deploy-T-1.log").write_text("deployed\n", encoding="utf-8")
+    (d / "po" / "notes.md").write_text("n\n", encoding="utf-8")
+    os.chmod(d / "review-T-1" / "checkout" / "src" / "a.ts", 0o444)            # as gitops.readonly_checkout leaves it
+    os.chmod(d / "review-T-1" / "checkout" / "src", 0o555)
+    os.chmod(d / "review-T-1" / "checkout", 0o555)
+    then = time.time() - age_h * 3600
+    for x in [d, *d.iterdir()]:
+        os.utime(x, (then, then))
+    return d
+
+
+def _heavy(d: Path) -> list[str]:
+    return sorted(str(x.relative_to(d)) for x in d.rglob("*") if x.is_dir() and x.name in ("checkout", "tests-run", "node_modules"))
+
+
+def test_old_cycle_folders_lose_their_clones_and_keep_their_logs(tmp_path: Path, caplog):
+    st = _settings(tmp_path)
+    p = _product(st)
+    old, fresh, own = _cycle_folder(p, "20261120T0100", 30), _cycle_folder(p, "20261125T1700", 2), _cycle_folder(p, "c1", 30)
+    kept = [_cycle_folder(p, name, 300) for name in ("wt", "deploy", "onboarding")]      # not cycle folders, however old
+    cyc = Cycle(st, p, None, "c1")
+    with caplog.at_level(logging.INFO, logger="team.cycle"):
+        assert cyc.sweep_work_dirs() == ["20261120T0100"]
+    assert _heavy(old) == [] and (old / cycle_mod.WORKDIR_SWEPT_MARK).exists()
+    assert (old / "playtest-T-1" / "server.log").exists() and (old / "deploy-T-1.log").exists() and (old / "po" / "notes.md").exists()
+    for d in (fresh, own, *kept):                                                         # young, running, or not a cycle folder
+        assert len(_heavy(d)) == 5 and not (d / cycle_mod.WORKDIR_SWEPT_MARK).exists()
+    assert "1 old cycle folder(s) swept, 3 directories removed"      # node_modules went with their clones in caplog.text
+    assert cyc.sweep_work_dirs() == []                                                    # the mark: a swept folder is not walked again
+    assert Cycle(st, p, None, "c9", dry_run=True).sweep_work_dirs() == []
+    cyc.store.close()
+    st.raw["cycle"]["parallel"] = {**st.raw["cycle"]["parallel"], "workdir_keep_h": 1}    # the key is read from team.yaml
+    cyc = Cycle(st, p, None, "c2")
+    assert cyc.par.workdir_keep_h == 1.0 and cyc.sweep_work_dirs() == ["20261125T1700", "c1"]
+    assert _heavy(fresh) == [] and _heavy(own) == [] and all(len(_heavy(d)) == 5 for d in kept)
+    cyc.store.close()
+    ev = _events(p, "workdir.swept")
+    assert [(e["detail"]["folders"], e["detail"]["removed"]) for e in ev] == [(2, 6), (1, 3)]                # newest first
+
+
+def test_the_execute_phase_sweeps_old_cycle_folders(tmp_path: Path):
+    st = _settings(tmp_path)
+    p = _product(st)
+    old = _cycle_folder(p, "20261120T0100", 30)
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    cyc.run(["execute"])
+    cyc.store.close()
+    assert _heavy(old) == [] and (old / "deploy-T-1.log").exists()

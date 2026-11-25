@@ -82,6 +82,8 @@ cycle:
     overlap_roles: []             # roles whose several seats (execute_slots.<role> > 1) work at once; [] = tasks of one role one after another
     max_merge_conflicts: 2        # merge conflicts in a row on one task (two tasks keep changing the same lines) → blocked, question to the PO
     worktree_keep_h: 72           # a blocked / deferred / waiting_owner task keeps its checkout this long; its branch stays for ever
+    workdir_keep_h: 24            # a finished cycle keeps the clones of its reviews and play-tests (data/work/<slug>/<cycle>/*/checkout,
+                                  # */tests-run, every node_modules) this long; the folder and its logs stay for ever
                                   # (product.yaml `cycle: {parallel: {max_runs: 2}}` overrides key by key; `parallel: false` switches it off)
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
