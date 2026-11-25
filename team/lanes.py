@@ -42,7 +42,11 @@ INVARIANTS (what the rest of the code relies on)
     decisions beside running reviews) does its read-modify-write under `Store.lock`.
  5. The repository. The product's clone (data/repos/<slug>) is only touched under `repo_lock`: fetch, creating and
     removing a task's worktree, merge to the base branch, push, and the deploy that follows — one critical section, so
-    the last deployed commit is always the last merged one. A review copies the clone under the same lock (the copy
+    the last deployed commit is always the last merged one. With `deploy.batch: true` (owner 25.11) the deploy does not
+    follow every merge: it is made once per cycle, still under `repo_lock`, on the head of the base branch — so AT THE
+    MOMENT OF A DEPLOY the commit that goes live is the last merged one and holds every merge since the previous
+    deploy; between two deploys the host is on an older merge, and the tasks merged since carry `deploy_pending`
+    (not reviewed, not called deployed) until the batch that takes them. A review copies the clone under the same lock (the copy
     only; tests, install and the run are outside). A role works in its own worktree and never needs the lock.
  6. The live host. `host` is a reader–writer lock: a deploy switches the host exclusively, a play-test or load test
     against the deployed host holds it shared for the tester's run. A waiting deploy holds back new play-tests.

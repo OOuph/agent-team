@@ -45,6 +45,9 @@ WORKTREE_PARKED_STATES = ("blocked", "waiting_owner", "deferred")     # kept for
 MERGE_CONFLICT = "merge_conflict"                         # task field: the last merge into the base branch conflicted (cleared by a merge that went through)
 CONFLICT_PROMPT_CHARS = 5000                              # of the conflict text kept on the task and shown to the author in the next prompt
 CONFLICT_NOTE_CHARS = 200                                 # of the file list in the transition note
+DEPLOY_PENDING = "deploy_pending"                         # task field (`deploy.batch: true`): merged at this ISO time, waits for the batch deploy
+DEPLOY_ENV_EXITS = (servicedeploy.EXIT_PUSH_FAILED, servicedeploy.EXIT_NGINX_FAILED, 124, 127, 255)   # the host or the way to it failed, not a commit: push, nginx, timeout, no script, ssh
+DEPLOY_ENV_RETRIES = 3                                    # batches that may fail that way before each waiting task is deployed (and blamed) on its own
 RUN_PORT_ENV = "TEAM_PORT"                                # environment of a repository role's run on a service repository: a port of its own for a server it starts
 
 # run continuation (owner 21.11, frictions F23/F30): a run stopped by the time limit is continued, not restarted
@@ -246,6 +249,7 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
         self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
+        self._batch_timer: threading.Timer | None = None      # `deploy.batch`: fires the batch when a merged commit has waited too long
         self.n_executed = 0                                   # tasks an execute lane carried through in this cycle
         self.n_refilled = 0                                   # of them taken beyond the seat's places, by refill
 
@@ -766,7 +770,15 @@ class Cycle:
         after = timedelta(minutes=int(self.st.cycle.get("review_after_min", 6)))
         # «review» = the developer answered «no change needed» (T-0041); it waited here for a reviewer that only read
         # «released», and 14 tasks sat unreviewed 06.11 → 18.11 (owner 18.11)
+        try:
+            self.deploy_batch("merged commits left by the previous cycle")      # a cycle that died or was stopped before its batch
+        except Exception as exc:  # noqa: BLE001 — the reviews of what is live must not wait for a host that is down
+            log.exception("%s: batch deploy at the start of the review phase failed: %s", self.p.slug, exc)
         for t in self.store.tasks(["released", "review"]):
+            if t.get(DEPLOY_PENDING):
+                # `deploy.batch`: merged, not live yet — the tester plays the live host, so the review waits for the batch
+                log.info("%s: %s is not reviewed now: its commit waits for the batch deploy", self.p.slug, t["id"])
+                continue
             rel = parse_ts(t.get("released_at"))
             if rel and _now() - rel < after:
                 continue
@@ -1181,6 +1193,19 @@ class Cycle:
         return {"*": int(self.st.cycle.get("max_execute_per_cycle", 1))}
 
     def phase_execute(self) -> None:
+        """The execute phase, then — `deploy.batch: true` — the one deploy of the cycle: every lane has merged what it
+        had, the reviews are over, the live host is switched once to the last merged commit (`deploy_batch`)."""
+        try:
+            self._phase_execute()
+        finally:
+            self._cancel_batch_timer()
+            try:
+                self.deploy_batch("end of the execute phase")
+            except Exception as exc:  # noqa: BLE001 — the merged tasks stay pending; the next cycle deploys them first
+                log.exception("%s: batch deploy at the end of the execute phase failed: %s", self.p.slug, exc)
+                self.store.event("phase.error", "execute", "dispatcher", f"batch deploy: {exc}"[:500])
+
+    def _phase_execute(self) -> None:
         """Start the tasks of this cycle — one per seat, picked exactly as before — and wait for everything in flight.
 
         Sequential cycle (`cycle.parallel.enabled: false`): the loop below visits the candidates in order and runs each
@@ -1922,27 +1947,159 @@ class Cycle:
         (deploy-service.sh on the droplet: release, health, nginx switch, rollback on failure). Success → the task stays
         `released` and the tester plays the deployed host. Failure → the live release is untouched (the script never
         switches before health), the task is `blocked` with a PO question and one environment_error observation; the
-        deploy log is kept under data/work. `pending` / `git_pull` / dry run deploy nothing. Returns True when deployed."""
+        deploy log is kept under data/work. `pending` / `git_pull` / dry run deploy nothing. Returns True when deployed.
+
+        With `deploy.batch: true` (owner 25.11) nothing is deployed here: the task is marked `deploy_pending` and the
+        batch (`deploy_batch`) takes it — at the end of the execute phase, or earlier when the oldest merged commit has
+        waited `deploy.batch_max_wait_min`. Called under `repo_lock`, right after the merge."""
         if self.dry_run or not servicedeploy.enabled(self.p):
+            return False
+        if self.p.deploy_batch:
+            now = utcnow()
+            with self.store.lock:
+                t = self.store.task(t["id"]) or t
+                t[DEPLOY_PENDING], t["deploy_failures"] = now, 0
+                self.store.save_task(t)
+            self.store.event("deploy.queued", t["id"], "dispatcher", {"sha": sha[:12], "max_wait_min": self.p.deploy_batch_max_wait_min})
+            waited = self.deploy_waiting_s()
+            if waited >= self.p.deploy_batch_max_wait_min * 60:
+                return self.deploy_batch(f"a merged commit waited {waited / 60:.0f} min (deploy.batch_max_wait_min)")
+            self._arm_batch_timer(self.p.deploy_batch_max_wait_min * 60 - waited)
             return False
         log_path = self.p.work_dir / self.cycle_id / f"deploy-{t['id']}.log"
         with self.lanes.host.exclusive():         # waits for the play-tests on the live host; none starts while it switches
             res = servicedeploy.run(self.p, sha=sha, log_path=log_path)
+        return self._deploy_outcome(t, sha, res, log_path)
+
+    def _deploy_outcome(self, t: dict[str, Any], sha: str, res: "servicedeploy.DeployResult", log_path: Path, extra: dict[str, Any] | None = None) -> bool:
+        """What one task's deploy means for the task: live (`deployed_sha`) or blocked with a PO question."""
         if res.ok or res.skipped:
             self.store.event("deploy.ok", t["id"], "dispatcher", {"sha": sha[:12], "url": res.url, "port": res.port, "colour": res.colour,
-                                                                  "skipped": res.skipped, "duration_s": round(res.duration_s, 1)})
-            t = self.store.task(t["id"]) or t
-            t["deployed_sha"], t["deployed_url"] = sha, res.url or self.p.site_base
-            self.store.save_task(t)
+                                                                  "skipped": res.skipped, "duration_s": round(res.duration_s, 1), **(extra or {})})
+            self._mark_deployed(t, sha, res.url)
             return True
-        self.store.event("deploy.failed", t["id"], "dispatcher", {"sha": sha[:12], "exit": res.exit_code, "error": res.error[:300], "log": str(log_path)})
+        self.store.event("deploy.failed", t["id"], "dispatcher", {"sha": sha[:12], "exit": res.exit_code, "error": res.error[:300], "log": str(log_path), **(extra or {})})
         self.store.add_observation({**servicedeploy.result_card(self.p, t, res), "run_id": f"{self.cycle_id}-deploy",
                                     "fingerprint": fingerprint("deploy", "failed", "", t["id"])})
-        self.store.transition(t["id"], "blocked", "dispatcher", f"deploy failed: {res.summary()[:260]}", force=True)
+        self.store.transition(t["id"], "blocked", "dispatcher", f"deploy failed: {res.summary()[:260]}", force=True, **{DEPLOY_PENDING: None})
         self.store.ask(from_="developer", to="po", question=f"Task {t['id']} merged ({sha[:10]}) but did not deploy: {res.summary()[:500]} "
                        f"The previous release stays live. Re-open the task for the developer (build or health path), or ask the owner if the host is the problem "
                        f"(log: {log_path}).", task_id=t["id"], blocks=[t["id"]])
         return False
+
+    def _mark_deployed(self, t: dict[str, Any], sha: str, url: str) -> None:
+        with self.store.lock:
+            t = self.store.task(t["id"]) or t
+            t["deployed_sha"], t["deployed_url"] = sha, url or self.p.site_base
+            if t.get(DEPLOY_PENDING):
+                t["deployed_at"] = utcnow()
+            t.pop(DEPLOY_PENDING, None)
+            t.pop("deploy_failures", None)
+            self.store.save_task(t)
+
+    # the batch deploy: one switch of the live host per cycle (owner 25.11; team/lanes.py invariant 5) --------------------
+
+    def deploy_pending_tasks(self) -> list[dict[str, Any]]:
+        """Merged tasks that wait for the batch deploy, oldest merge first — whatever their state is by now."""
+        return sorted((t for t in self.store.tasks() if t.get(DEPLOY_PENDING)), key=lambda t: (str(t.get(DEPLOY_PENDING)), t["id"]))
+
+    def deploy_waiting_s(self) -> float:
+        """How long the oldest merged, not yet deployed commit has waited (0 when nothing waits)."""
+        stamps = [parse_ts(str(t.get(DEPLOY_PENDING))) for t in self.deploy_pending_tasks()]
+        stamps = [s for s in stamps if s]
+        return max(0.0, (_now() - min(stamps)).total_seconds()) if stamps else 0.0
+
+    def _arm_batch_timer(self, in_s: float) -> None:
+        """The upper bound of the wait holds even when nothing else is merged in a long cycle: one timer per cycle, set
+        by the first merge that waits, fires `deploy_batch` in its own thread. The end of the execute phase cancels it."""
+        with self._budget_lock:
+            if self._batch_timer is not None:
+                return
+
+            def fire() -> None:
+                lanes_mod._ctx.label = "deploy-batch"
+                try:
+                    self.deploy_batch("a merged commit waited deploy.batch_max_wait_min")
+                except Exception as exc:  # noqa: BLE001 — the end of the execute phase tries again
+                    log.exception("%s: batch deploy from the timer failed: %s", self.p.slug, exc)
+                finally:
+                    self.store.close_thread()
+            self._batch_timer = threading.Timer(max(1.0, in_s), fire)
+            self._batch_timer.daemon = True
+            self._batch_timer.name = f"deploy-batch-{self.p.slug}"
+            self._batch_timer.start()
+        log.info("%s: batch deploy at the end of the execute phase, or in %.0f min at the latest", self.p.slug, in_s / 60)
+
+    def _cancel_batch_timer(self) -> None:
+        with self._budget_lock:
+            timer, self._batch_timer = self._batch_timer, None
+        if timer is not None:
+            timer.cancel()
+
+    def deploy_batch(self, why: str) -> bool:
+        """`deploy.batch: true`: deploy the last merged commit once for every task merged since the last deploy.
+
+        Under `repo_lock`, so no merge moves the branch meanwhile: at the moment of the deploy the commit that goes live
+        IS the last merged one (team/lanes.py invariant 5), and it holds the work of every waiting task. Success → all of
+        them are marked `deployed_sha`; only then are they reviewed (the tester plays the live host). Failure of the host
+        or the transport (push, ssh, nginx, timeout) → nothing is blamed: the tasks stay pending and the next batch tries
+        again, `DEPLOY_ENV_RETRIES` times. Any other failure, or the retries used up → the existing per-task path finds
+        the culprit: every waiting task's own merge commit is deployed in merge order, the ones that go live are live,
+        the first that does not is blocked with a PO question exactly as without the batch (the script never switches
+        the host before health, so the last good release stays live). Returns True when the host is on the last merge."""
+        if self.dry_run or not (servicedeploy.enabled(self.p) and self.p.deploy_batch):
+            return False
+        with self.repo_lock:
+            pending = self.deploy_pending_tasks()
+            if not pending:
+                return False
+            try:
+                sha = gitops.git(self.p.repo_dir, "rev-parse", f"refs/heads/{self.p.repo_branch}").strip()
+            except gitops.GitError as exc:
+                log.error("%s: batch deploy: the last merged commit cannot be read: %s", self.p.slug, gitops.redact(str(exc))[:300])
+                return False
+            ids = [t["id"] for t in pending]
+            waited = self.deploy_waiting_s()
+            log_path = self.p.work_dir / self.cycle_id / f"deploy-batch-{datetime.now(timezone.utc).strftime('%H%M%S')}.log"
+            log.info("%s: batch deploy of %s for %d task(s) (%s): %s; the oldest merge waited %.0f min", self.p.slug, sha[:12], len(ids),
+                     ", ".join(ids), why, waited / 60)
+            t0 = time.monotonic()
+            with self.lanes.host.exclusive():     # waits for the play-tests on the live host; none starts while it switches
+                host_wait = time.monotonic() - t0
+                res = servicedeploy.run(self.p, sha=sha, log_path=log_path)
+            extra = {"batch": len(ids), "tasks": ids, "waited_s": round(waited), "host_wait_s": round(host_wait, 1), "why": why[:120]}
+            if res.ok or res.skipped:
+                self.store.event("deploy.ok", self.cycle_id, "dispatcher", {"sha": sha[:12], "url": res.url, "port": res.port, "colour": res.colour,
+                                                                           "skipped": res.skipped, "duration_s": round(res.duration_s, 1), **extra})
+                for t in pending:
+                    self._mark_deployed(t, sha, res.url)
+                return True
+            tries = 1 + max(int(t.get("deploy_failures") or 0) for t in pending)
+            env = res.exit_code in DEPLOY_ENV_EXITS
+            self.store.event("deploy.failed", self.cycle_id, "dispatcher", {"sha": sha[:12], "exit": res.exit_code, "error": res.error[:300], "log": str(log_path),
+                                                                           "tries": tries, "blamed": not env or tries >= DEPLOY_ENV_RETRIES, **extra})
+            if env and tries < DEPLOY_ENV_RETRIES:
+                # the host or the way to it, not a commit: the release that is live stays live, the batch waits for the next try
+                with self.store.lock:
+                    for t in pending:
+                        t = self.store.task(t["id"]) or t
+                        t["deploy_failures"] = tries
+                        self.store.save_task(t)
+                self.store.add_observation({**servicedeploy.result_card(self.p, {"id": f"batch of {len(ids)} task(s)"}, res), "task": None,
+                                            "run_id": f"{self.cycle_id}-deploy", "fingerprint": fingerprint("deploy", "batch-env", "", self.p.slug),
+                                            "detail": f"Tasks waiting for the deploy: {', '.join(ids)}. Try {tries} of {DEPLOY_ENV_RETRIES}; the next cycle tries again."})
+                return False
+            ok_all = True
+            for i, t in enumerate(pending):       # which commit breaks the release: each task's own merge, in merge order
+                own = str(t.get("released_sha") or sha)
+                one_log = self.p.work_dir / self.cycle_id / f"deploy-{t['id']}.log"
+                if own == sha:
+                    one, one_log = res, log_path  # this is the commit that just failed: not deployed twice
+                else:
+                    with self.lanes.host.exclusive():
+                        one = servicedeploy.run(self.p, sha=own, log_path=one_log)
+                ok_all = self._deploy_outcome(t, own, one, one_log, {"batch": len(ids), "after_failed_batch": sha[:12]}) and ok_all
+            return ok_all
 
     def exec_game_designer(self, t: dict[str, Any], run_id: str) -> bool:
         """Game designer (owner 20.11, game profile): writes GAME-DESIGN.md and balance tables as a `design-spec`; the
