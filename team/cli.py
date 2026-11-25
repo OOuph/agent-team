@@ -473,6 +473,18 @@ def cmd_report(st: C.Settings, a: argparse.Namespace) -> int:
     return 0 if (not a.send or all(x.get("ok") for x in res["sent"])) else 1
 
 
+def cmd_cost(st: C.Settings, a: argparse.Namespace) -> int:
+    """Spend per accepted task and prompt-cache share for a window, from the run folders and the backlog (read-only)."""
+    import json
+    from . import cost
+    r = cost.collect(st, _products(st, a.product), days=a.days)
+    text = json.dumps(r, ensure_ascii=False, indent=2) if a.json else cost.render(r)
+    if a.out:
+        Path(a.out).write_text(text + "\n", encoding="utf-8")
+    print(text)
+    return 0
+
+
 def cmd_autonomy(st: C.Settings, a: argparse.Namespace) -> int:
     """Autonomy check (owner 04.11): every component that must live a week without the owner, OK / WARN / FAIL with
     evidence; protocol in docs/autonomy-check.md. --send puts the short version into the ops chat."""
@@ -534,6 +546,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("lesson"); s.add_argument("product"); s.add_argument("--text", required=True); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_lesson)
     s = sub.add_parser("gsc"); s.add_argument("--product", default="all"); s.set_defaults(fn=cmd_gsc)
     s = sub.add_parser("friction"); s.add_argument("--days", type=int, default=7); s.add_argument("--out"); s.set_defaults(fn=cmd_friction)
+    s = sub.add_parser("cost"); s.add_argument("--product", default="all"); s.add_argument("--days", type=float, default=7.0)
+    s.add_argument("--json", action="store_true"); s.add_argument("--out"); s.set_defaults(fn=cmd_cost)
     s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     s = sub.add_parser("report"); s.add_argument("--product", default="all"); s.add_argument("--hours", type=float, default=12.0)
     s.add_argument("--send", action="store_true"); s.add_argument("--no-llm", action="store_true"); s.add_argument("--dry-run", action="store_true")
