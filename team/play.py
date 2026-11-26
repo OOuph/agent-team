@@ -566,7 +566,7 @@ class local_server:
         env.update({"PORT": str(port), "HOST": playtest.HOST})
         self.shown = [f"{k}={v}" for k, v in asked.items()]
         self.log = (tmp / "server.log").open("w", encoding="utf-8")
-        self.proc = subprocess.Popen(run_cmd.replace("{port}", str(port)), shell=True, cwd=str(cwd()), stdout=self.log, stderr=subprocess.STDOUT,
+        self.proc = subprocess.Popen(playtest.command_for_port(run_cmd, port), shell=True, cwd=str(cwd()), stdout=self.log, stderr=subprocess.STDOUT,
                                      env=env, start_new_session=True)
         base = f"http://{playtest.HOST}:{port}"
         health = base + (_env("TEAM_PLAY_HEALTH_PATH") or playtest.DEFAULT_HEALTH_PATH)
