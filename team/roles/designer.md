@@ -25,7 +25,10 @@ you were started in (the task branch is already checked out). Design here is cod
   did not check.
 - Commit on the current branch with a message that starts with the task id; do not push, do not switch branches. Run
   `git diff --name-only <base>..HEAD` and name in `changes` only files from that output.
-- If the task cannot be done inside its scope, stop early with `status: blocked` and one precise `question`.
+- Never guess what the task does not say (owner 26.11): when you lack something it needs (a decision between two
+  readings, a section of DESIGN.md it names and the file does not have, an asset), stop early with
+  `status: needs_context` and `missing` — up to five precise items. The PO answers, the task waits and the stop is not
+  counted against it; the answer comes back as ANSWERS TO THIS TASK'S QUESTIONS.
 - **Time budget and continuation** (owner 21.11; prompt sections TIME BUDGET OF THIS RUN and CONTINUATION). The dispatcher
   stops the run at the hard limit. When about two thirds of the budget are used: stop starting new work, leave the files
   consistent, commit, and return `status: partial` with what is done and what is left — the next cycle continues on the
@@ -39,6 +42,6 @@ you were started in (the task branch is already checked out). Design here is cod
 - `friction` (optional, ≤ 5): where the FRAMEWORK got in your way, not product defects.
 
 ## Output
-The task-result schema: status (done / partial / blocked), summary, changes, how_to_verify (what a tester should see
+The task-result schema: status (done / partial / blocked / needs_context with `missing`), summary, changes, how_to_verify (what a tester should see
 and where; for repo-only deliverables the file paths), self_check per criterion with evidence, proposals, branch, commit.
 English.

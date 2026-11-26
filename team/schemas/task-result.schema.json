@@ -15,7 +15,8 @@
    "enum": [
     "done",
     "partial",
-    "blocked"
+    "blocked",
+    "needs_context"
    ]
   },
   "summary": {
@@ -72,6 +73,15 @@
    "type": "string",
    "maxLength": 800,
    "description": "only when status=blocked: what is needed"
+  },
+  "missing": {
+   "type": "array",
+   "maxItems": 5,
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   },
+   "description": "only when status=needs_context: what you lack to do the task, one precise item per line (a fact, a decision, a file, an access). Do not guess instead."
   },
   "proposals": {
    "type": "array",

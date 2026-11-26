@@ -368,6 +368,18 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
     return out
 
 
+ANSWERS_MAX = 5                            # answered questions of one task shown to its role (newest last)
+
+
+def answers_block(answers: list[dict[str, Any]] | None) -> str:
+    """`# ANSWERS TO THIS TASK'S QUESTIONS` (rework slice 2a): what the PO or the owner answered to the questions this task
+    was stopped on — before 26.11 the answer restarted the task and the role never saw it. Empty without answers."""
+    if not answers:
+        return ""
+    return ("\n\n# ANSWERS TO THIS TASK'S QUESTIONS (decided: act on them, do not raise the same point again)\n"
+            + _y([{k: a.get(k) for k in ("question", "answer", "answered_by") if a.get(k)} for a in answers[-ANSWERS_MAX:]]))
+
+
 CONFLICT_BLOCK_CHARS = 5000                # of the conflict text (git's CONFLICT lines and the other side's diff) in the prompt
 
 
@@ -400,7 +412,7 @@ def conflict_block(conflict: dict[str, Any] | None, base: str = "main") -> str:
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
                      review: dict[str, Any] | None, role: str = "developer", *, budget_s: int | None = None,
                      continuation: dict[str, Any] | None = None, conflict: dict[str, Any] | None = None, base: str = "main",
-                     port: int | None = None) -> str:
+                     port: int | None = None, answers: list[dict[str, Any]] | None = None) -> str:
     previous = [{k: v for k, v in r.items() if k != "profile_md"} for r in previous]     # the profile is shown once, in the continuation block
     readme = ""
     seen: set[Path] = set()
@@ -430,7 +442,7 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
                f"`PORT={port}` for the server and `BASE_URL=http://127.0.0.1:{port}` for the tests. Another role's run may be using the "
                "repository's default port at this very moment. Stop what you started before you report.\n" if port else "")
             + "\n" + tests +
-            "# TASK\n" + _y(_task_brief(task)) + prev + rev
+            "# TASK\n" + _y(_task_brief(task)) + answers_block(answers) + prev + rev
             + conflict_block(conflict, base)
             + budget_block(budget_s, continuation)
             + "\n\n# VISION\n" + product.vision()
@@ -526,7 +538,8 @@ def standing_block(product: Product, store: Store) -> str:
             + "\n".join(f"- {ln}" for ln in lines))
 
 
-def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store) -> str:
+def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store,
+                         answers: list[dict[str, Any]] | None = None) -> str:
     """The game designer's prompt: VISION, the task, the current GAME-DESIGN.md and balance tables, game metrics, what
     testers and the PO observed. No shell: everything travels here (owner 20.11)."""
     gdd_limit, table_limit = _design_limits(product)
@@ -558,7 +571,7 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
             f"e.g. `{GDD_FILE}`, `{BALANCE_DIR}/ships.json`); `balance_changes` say what changed and how the effect will be read in the "
             "metrics; `proposed_tasks` are suggestions for the PO (not tasks yet); `open_questions` only for what changes the genre, "
             "the audience or money (the owner decides those).\n\n"
-            "# TASK\n" + _y(_task_brief(task))
+            "# TASK\n" + _y(_task_brief(task)) + answers_block(answers)
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
             + ("\n\n# BALANCE TABLES" + tables if tables else "")

@@ -3,63 +3,190 @@
  "description": "Result of a game-designer run (game profile, owner 20.11): complete documents to write into the repository (GAME-DESIGN.md, balance tables), what changed in the balance and how to read the effect, suggestions for the PO, questions for the owner.",
  "type": "object",
  "additionalProperties": false,
- "required": ["summary", "files"],
+ "required": [
+  "summary",
+  "files"
+ ],
  "properties": {
-  "summary": {"type": "string", "maxLength": 1200, "description": "what this run decided and why, 2–6 sentences"},
+  "summary": {
+   "type": "string",
+   "maxLength": 1200,
+   "description": "what this run decided and why, 2–6 sentences"
+  },
   "files": {
-   "type": "array", "maxItems": 8,
+   "type": "array",
+   "maxItems": 8,
    "items": {
-    "type": "object", "additionalProperties": false,
-    "required": ["path", "content"],
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path",
+     "content"
+    ],
     "properties": {
-     "path": {"type": "string", "maxLength": 200, "description": "repository-relative: GAME-DESIGN.md, design/balance/<name>.json, docs/rules.md"},
-     "content": {"type": "string", "maxLength": 40000, "description": "the COMPLETE file, not a diff"}
+     "path": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "repository-relative: GAME-DESIGN.md, design/balance/<name>.json, docs/rules.md"
+     },
+     "content": {
+      "type": "string",
+      "maxLength": 40000,
+      "description": "the COMPLETE file, not a diff"
+     }
     }
    }
   },
   "balance_changes": {
-   "type": "array", "maxItems": 12,
+   "type": "array",
+   "maxItems": 12,
    "items": {
-    "type": "object", "additionalProperties": false,
-    "required": ["what", "why", "expected_effect", "read_in"],
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "what",
+     "why",
+     "expected_effect",
+     "read_in"
+    ],
     "properties": {
-     "what": {"type": "string", "maxLength": 300},
-     "why": {"type": "string", "maxLength": 400, "description": "the observation, metric or rule it answers"},
-     "expected_effect": {"type": "string", "maxLength": 300},
-     "read_in": {"type": "string", "maxLength": 200, "description": "which metric or tester scenario will show whether it worked, and after how many rounds"}
+     "what": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "why": {
+      "type": "string",
+      "maxLength": 400,
+      "description": "the observation, metric or rule it answers"
+     },
+     "expected_effect": {
+      "type": "string",
+      "maxLength": 300
+     },
+     "read_in": {
+      "type": "string",
+      "maxLength": 200,
+      "description": "which metric or tester scenario will show whether it worked, and after how many rounds"
+     }
     }
    }
   },
   "proposed_tasks": {
-   "type": "array", "maxItems": 6,
+   "type": "array",
+   "maxItems": 6,
    "description": "suggestions for the PO; they become observations, the PO decides",
    "items": {
-    "type": "object", "additionalProperties": false,
-    "required": ["title", "type", "role", "problem", "acceptance"],
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "title",
+     "type",
+     "role",
+     "problem",
+     "acceptance"
+    ],
     "properties": {
-     "title": {"type": "string", "maxLength": 140},
-     "type": {"type": "string", "enum": ["milestone", "design", "defect", "quality", "feature"]},
-     "role": {"type": "string", "enum": ["developer", "designer", "game-designer", "tester"]},
-     "problem": {"type": "string", "maxLength": 600},
-     "acceptance": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "maxLength": 300}}
+     "title": {
+      "type": "string",
+      "maxLength": 140
+     },
+     "type": {
+      "type": "string",
+      "enum": [
+       "milestone",
+       "design",
+       "defect",
+       "quality",
+       "feature"
+      ]
+     },
+     "role": {
+      "type": "string",
+      "enum": [
+       "developer",
+       "designer",
+       "game-designer",
+       "tester"
+      ]
+     },
+     "problem": {
+      "type": "string",
+      "maxLength": 600
+     },
+     "acceptance": {
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 5,
+      "items": {
+       "type": "string",
+       "maxLength": 300
+      }
+     }
     }
    }
   },
   "open_questions": {
-   "type": "array", "maxItems": 3,
+   "type": "array",
+   "maxItems": 3,
    "description": "only what changes the genre, the audience or money — the owner decides",
    "items": {
-    "type": "object", "additionalProperties": false,
-    "required": ["question", "why_owner"],
-    "properties": {"question": {"type": "string", "maxLength": 500}, "why_owner": {"type": "string", "maxLength": 300}}
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "question",
+     "why_owner"
+    ],
+    "properties": {
+     "question": {
+      "type": "string",
+      "maxLength": 500
+     },
+     "why_owner": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
    }
   },
   "friction": {
-   "type": "array", "maxItems": 5,
+   "type": "array",
+   "maxItems": 5,
    "description": "where the FRAMEWORK got in your way (not the game): a missing input, an unclear task, a schema that did not fit, data you could not reach",
-   "items": {"type": "object", "additionalProperties": false, "required": ["kind", "what"],
-             "properties": {"kind": {"type": "string", "enum": ["missing_tool", "denied_permission", "unclear_instruction", "schema_mismatch", "missing_data", "environment", "other"]},
-                            "what": {"type": "string", "maxLength": 300}}}
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "kind",
+     "what"
+    ],
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "missing_tool",
+       "denied_permission",
+       "unclear_instruction",
+       "schema_mismatch",
+       "missing_data",
+       "environment",
+       "other"
+      ]
+     },
+     "what": {
+      "type": "string",
+      "maxLength": 300
+     }
+    }
+   }
+  },
+  "missing": {
+   "type": "array",
+   "maxItems": 5,
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   },
+   "description": "what you lack to write the documents (a fact, a decision, a report); with it return `files: []` — the PO answers and the task runs again. Do not guess instead."
   }
  }
 }

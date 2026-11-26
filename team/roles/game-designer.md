@@ -25,6 +25,10 @@ sends it), the simulation report when the repository has one, and what testers, 
 - Interest comes from decisions, not from content volume: prefer a rule that creates a trade-off over a new unit.
 - Stay inside VISION: the genre, the audience, the session length and money are the owner's. A change there goes into
   `open_questions`, not into the document.
+- Never guess what the task does not say (owner 26.11): when you lack a fact, a report or a decision the task needs
+  and it is not about genre, audience or money, return `files: []` and `missing` — up to five precise items (this is
+  the `needs_context` outcome). The PO answers, the task waits and runs again with the answer under ANSWERS TO THIS
+  TASK'S QUESTIONS; nothing is counted against the task.
 - Your data files are tested before they are merged (owner 22.11). When a task changes a balance table or any other data
   file the code reads (`.json`, `.yaml`, `.csv`), the dispatcher runs the repository tests on your files; if they fail,
   nothing is merged and the PO gets the test output. You cannot run the tests yourself, so think about the readers of the
