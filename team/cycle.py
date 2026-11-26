@@ -73,6 +73,16 @@ NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what 
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
 RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4: a run stopped by the loop guard / the cost guard
+TASK_MARKS = ("visible", "redesign", "new_function")       # the PO's marks of a visible change (rework slice 5), kept on the task
+PRE_MERGE = "pre_merge"                    # task field: in `review` with its commit on task/<id> only — not merged, not deployed
+REVIEW_BEFORE_MERGE_EVENT, REDESIGN_HELD_EVENT = "review.before_merge", "task.redesign_held"
+PRE_MERGE_PROMPT = (
+    "\n# REVIEW BEFORE THE MERGE\nThis is a visible change and it is not on the live host: commit {sha} is on the task's branch only. It is "
+    "merged and deployed only if you pass it, so players see nothing of it yet. Judge it on what you were given here — the server "
+    "started from this commit, the checkout, the test run; the live site shows the game WITHOUT this change (useful as «before»). "
+    "The owner's principle applies: «редизайн делаем только при новом функционале» — if the change re-lays or restyles a screen that "
+    "already existed beyond what its new function needs, that is a `fail` (first_failure: «redesign without a new function»), however "
+    "well it matches a mock-up.\n")
 # Three unproven reviews (rework slice 2b, `cycle.escalation.review_return`): what the role is told per reason word of
 # team/play.py INCONCLUSIVE_REASONS when the task comes back to it …
 REVIEW_RETURN_TODO = {
@@ -868,7 +878,8 @@ class Cycle:
                 t = self.store.task(t["id"]) or t
                 t["repo_only"] = True                # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
                 self.store.save_task(t)
-        if t.get("repo_only") and sha:               # read-only checkout of the merged commit (T-0011)
+        pre_merge = bool(t.get(PRE_MERGE))            # rework slice 5: the commit is on the task branch only — nothing of it is live
+        if (t.get("repo_only") or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
             try:
                 try:
                     tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock)
@@ -885,9 +896,11 @@ class Cycle:
         role, schema_name, cap, turns = "reviewer", "review-verdict", 1.0, 30
         server = None
         if self.playtest_due(t) and sha:
-            server, prompt, tools, env = self.start_playtest(t, result, sha, prompt, tests_out)
+            server, prompt, tools, env = self.start_playtest(t, result, sha, prompt, tests_out, force_local=pre_merge)
             if server is not None:
                 role, schema_name, cap, turns = "tester", "test-report", TESTER_CAP_USD, TESTER_MAX_TURNS
+        if pre_merge:
+            prompt += PRE_MERGE_PROMPT.format(sha=sha)
         try:
             # a play-test against the DEPLOYED host shares the host with the other play-tests and excludes a deploy of this
             # product for the length of the tester's run (team/lanes.py invariant 6); a local server needs nothing
@@ -950,7 +963,11 @@ class Cycle:
             self.store.ask(from_="reviewer", to="po", question=f"Task {t['id']} ({t.get('title', '')[:80]}) has no recorded publication; "
                            "re-plan it (new slot with not_before) or close it with close_tasks.", task_id=t["id"], blocks=[t["id"]])
             return
-        if verdict == "pass":
+        if verdict == "pass" and t.get(PRE_MERGE):
+            # reviewed on its branch: the pass is what merges it; a conflict returns it to its author (nothing was live)
+            self.merge_task(t, self.p.worktree_dir(t["id"]), str(t.get("role") or "developer"), f"{self.cycle_id}-review-{t['id']}",
+                            reviewed=str(v.get("summary") or "passed"))
+        elif verdict == "pass":
             self.store.transition(t["id"], "accepted", "reviewer", v.get("summary", "")[:300], accepted_at=utcnow())
         elif verdict == "fail":
             fails = int(t.get("review_fails") or 0) + 1
@@ -1042,7 +1059,8 @@ class Cycle:
         return (self.p.profile == "game" and str(t.get("role") or "developer") in PLAYTEST_ROLES and t.get("playtest") is not False
                 and not self.dry_run and self.runner is not None)
 
-    def start_playtest(self, t: dict[str, Any], result: dict[str, Any] | None, sha: str, fallback_prompt: str, tests: str = ""):
+    def start_playtest(self, t: dict[str, Any], result: dict[str, Any] | None, sha: str, fallback_prompt: str, tests: str = "",
+                       force_local: bool = False):
         """Start the server from the merged commit for the tester. Returns (server, prompt, tools, env); on failure
         (no Node, run_cmd missing, health never answered) returns (None, reviewer prompt + the reason, …) so the reviewer
         still judges what it can, and the PO gets one environment_error observation. `tests` is the dispatcher's unit-test
@@ -1056,7 +1074,7 @@ class Cycle:
         out_dir = self.p.dir / "reviews" / t["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
         try:
-            server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock)
+            server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock, **({"force_local": True} if force_local else {}))
         except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
             reason = str(exc)[:1500]
             log.warning("%s: play-test server for %s not started: %s", self.p.slug, t["id"], reason[:200])
@@ -1231,6 +1249,20 @@ class Cycle:
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
                                    not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer",
                                    depends_on=[str(x) for x in (rt.get("depends_on") or [])])
+            marks = {k: rt[k] for k in TASK_MARKS if rt.get(k) not in (None, "", False)}
+            if marks:                                 # rework slice 5: the PO's marks of a visible change stay on the task
+                new.update(marks)
+                self.store.save_task(new)
+            if self.p.visible_cfg["redesign_gate"] and rt.get("redesign") and not str(rt.get("new_function") or "").strip():
+                # owner 26.11 «редизайн делаем только при новом функционале»: not started without his word
+                self.store.transition(new["id"], "proposed", "dispatcher", "redesign without a new function: waits for the owner's word "
+                                      f"(`team task move {new['id']} --to ready --by owner`)", force=True)
+                self.store.ask(from_="dispatcher", to="owner", task_id=None, question=(
+                    f"The PO proposed {new['id']} «{new['title'][:100]}»: it changes the layout or look of an existing screen and names no new "
+                    "function for the player. By your principle (26.11: редизайн делаем только при новом функционале) it is not started. "
+                    f"To allow it: `team task move {new['id']} --to ready --by owner`. Otherwise leave it, the PO will close it."))
+                self.store.event(REDESIGN_HELD_EVENT, new["id"], "dispatcher", {"title": new["title"][:140]})
+                held.append(f"{new['id']} → proposed: редизайн существующего экрана без новой функции, ждёт слова владельца")
             if rt.get("continues"):                   # owner 11.11: the chain of one goal, for the stuck-goal counter
                 new["continues"] = [str(x) for x in rt["continues"]][:5]
                 self.store.save_task(new)
@@ -1918,21 +1950,57 @@ class Cycle:
             return True
         if self.p.repo_mode == "pr":
             return self.release_as_pull_request(t, repo, res)
+        if self.review_first(t):
+            return self.hold_for_review(t, repo)
+        self.merge_task(t, repo, role, run_id)
+        return True
+
+    def merge_task(self, t: dict[str, Any], repo: Path | None, role: str, run_id: str, *, reviewed: str = "") -> bool:
+        """task/<id> → the base branch, push, deploy. `reviewed` (rework slice 5): the task passed its review BEFORE the
+        merge — it becomes `accepted` here (with the reviewer's words) instead of `released`. True = merged."""
+        clone = self.p.repo_dir
         # merge → push → deploy is ONE critical section of the product (team/lanes.py invariant 5): two lanes that finish
         # together merge one after the other, and the host always ends on the last merged commit
         with self.repo_lock:
             try:
-                sha = gitops.merge_and_push(clone, t["id"], self.p.repo_branch, worktree=repo)
+                sha = gitops.merge_and_push(clone, t["id"], self.p.repo_branch, worktree=repo if repo is not None and Path(repo).exists() else None)
             except gitops.MergeConflict as exc:
                 self.merge_conflict_back(t, exc, role, run_id)
-                return True
+                return False
             except gitops.GitError as exc:
                 self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
-                return True
-            self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha,
-                                  last_review=None, **({MERGE_CONFLICT: None} if t.get(MERGE_CONFLICT) else {}))
-            self.store.event("worktree.removed", t["id"], "dispatcher", {"state": "released", "path": str(repo)})
+                return False
+            clear = {MERGE_CONFLICT: None} if t.get(MERGE_CONFLICT) else {}
+            if reviewed:
+                self.store.transition(t["id"], "accepted", "reviewer", f"reviewed before the merge, merged {sha[:10]}: {reviewed}"[:300], force=True,
+                                      released_at=utcnow(), released_sha=sha, accepted_at=utcnow(), last_review=None, **{PRE_MERGE: None}, **clear)
+            else:
+                self.store.transition(t["id"], "released", "dispatcher", f"merged {sha[:10]}", force=True, released_at=utcnow(), released_sha=sha,
+                                      last_review=None, **clear)
+            self.store.event("worktree.removed", t["id"], "dispatcher", {"state": "accepted" if reviewed else "released", "path": str(repo)})
             self.deploy_after_merge(t, sha)
+        return True
+
+    # a visible change is reviewed before it is merged and deployed (owner 26.11, rework slice 5) -----------------------
+
+    def review_first(self, t: dict[str, Any]) -> bool:
+        """`cycle.visible.review_before_merge` and the task carries the PO's mark `visible`: its commit stays on the task
+        branch until a review passes it. Only where the dispatcher merges itself (`repo.mode: merge`); never a probe."""
+        return bool(self.p.visible_cfg["review_before_merge"] and t.get("visible") and self.p.repo_mode != "pr" and not replan.is_probe(t))
+
+    def hold_for_review(self, t: dict[str, Any], repo: Path) -> bool:
+        """The author reported done: nothing is merged. Leftovers are committed, the task goes to `review` with
+        `released_sha` = the head of task/<id> and the mark `pre_merge`; the review phase plays that commit on a server it
+        starts locally (`review_task`), a pass merges it (`merge_task(reviewed=…)`), a fail returns it to the author."""
+        with self.repo_lock:
+            if gitops.dirty(repo):
+                gitops.git(repo, "add", "-A")
+                gitops.git(repo, "commit", "-q", "-m", f"{t['id']}: leftover changes committed by the dispatcher")
+            sha = gitops.head(repo)
+        self.store.transition(t["id"], "review", "dispatcher", f"visible change: reviewed before the merge ({sha[:10]} on task/{t['id']})", force=True,
+                              released_at=utcnow(), released_sha=sha, last_review=None, assignee_run=None, **{PRE_MERGE: True})
+        self.store.event(REVIEW_BEFORE_MERGE_EVENT, t["id"], "dispatcher", {"sha": sha, "branch": f"task/{t['id']}"})
+        log.info("%s: %s is a visible change: not merged, waits for its review on %s", self.p.slug, t["id"], sha[:10])
         return True
 
     # run continuation: a run stopped by the time limit is continued, not restarted (owner 21.11, frictions F23/F30) ------

@@ -14,6 +14,15 @@ negative cases), the implementer's task-result (a claim, not evidence), the publ
   `--tail N` for its end (`--head N` for its start; both count characters, not lines) — the footer of a long page is there; `--grep TEXT --around N` prints N chars around each match
   (up to 40) so single-line pages work; `--grep TEXT --count` counts matches, e.g. table rows; `--offset K` prints the body from char K). Open the public pages yourself; read HTML, JSON, feeds as the
   user would. Never conclude from the implementer's notes.
+- **Redesign only with a new function** (owner 26.11, after a night in which the first screen was re-laid «by the
+  mock-up» and passed review: «редизайн делаем только при новом функционале — я не вижу новых функций, а редизайн
+  вижу»). When the change touches a screen that already existed, compare it with the live site (the «before»): what
+  moved, changed size or look must be what the task's new function needs and no more. A change that re-lays or
+  restyles an existing screen and gives the player nothing new to do is a `fail` with `first_failure` «redesign
+  without a new function: <what moved>» — matching a mock-up or DESIGN.md is not an answer to that. Not a redesign: a
+  new element put into the existing layout without moving the rest, and the repair of a plain break (an overlap,
+  content outside the screen). A task marked REVIEW BEFORE THE MERGE is not live yet: your pass is what lets players
+  see it.
 - Check every acceptance criterion and every negative case (what must still work or must not have changed). Check the
   neighbours a change can break: the home page, the feed, JSON endpoints, the disclosure line, links from the changed page.
 - `pass` only when every criterion is met by your own observation; `fail` names the first unmet criterion with evidence

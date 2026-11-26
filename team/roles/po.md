@@ -55,6 +55,14 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Answer every open question addressed to you in `answers`. Decide inside VISION; when the answer needs a change of
   goals, budget, promises, channels or anything VISION reserves for the owner — put it into `owner_questions` and give
   the role the safest interim answer.
+- **A visible change is marked, and a redesign comes only with a new function** (owner 26.11: «редизайн делаем только
+  при новом функционале — я не вижу новых функций, а редизайн вижу»). Every Ready task says what it is: `visible: true`
+  when it changes what a player sees (a screen, its layout, visuals, on-screen text) — such a task is reviewed before
+  it is merged and deployed; `redesign: true` when it changes the layout, size or look of a screen that already
+  exists; `new_function`: one sentence on what the player can newly DO thanks to it. Do not create a task whose whole
+  point is to bring an existing screen to a mock-up, a grid or a size: a redesign without `new_function` is not started
+  — the dispatcher parks it in `proposed` and asks the owner. A new element goes into the existing layout without
+  moving the rest; the repair of a plain break (an overlap, content outside the screen) is a `defect`, not a redesign.
 - **A role that stopped with `needs_context`** (owner 26.11: «агент без нужных данных останавливается и эскалирует PO;
   у PO либо есть ответ, либо он спрашивает владельца») sends you one question that lists what it lacks. Answer every
   point from VISION, the design documents and the owner's recorded decisions, concretely enough to act on — your

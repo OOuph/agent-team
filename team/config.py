@@ -22,6 +22,7 @@ ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.paren
 PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
+VISIBLE_DEFAULTS: dict[str, bool] = {"review_before_merge": False, "redesign_gate": False}   # `cycle.visible`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -71,7 +72,11 @@ DEFAULTS: dict[str, Any] = {
               # the title of finished work is skipped, one with the title of a rejected task is linked to it with `continues`
               "duplicates": dict(DUPLICATES_DEFAULTS),
               # loop and cost guards of a run (owner 26.11, rework slice 4); off by default, product.yaml `cycle: {guards: {...}}`
-              "guards": dict(GUARDS_DEFAULTS)},
+              "guards": dict(GUARDS_DEFAULTS),
+              # a visible change is judged before players see it (owner 26.11, rework slice 5): `review_before_merge` true = a task
+              # marked `visible` is reviewed on its branch, on a locally started server, and merged only by a pass;
+              # `redesign_gate` true = a task marked `redesign` without a `new_function` waits in `proposed` for the owner
+              "visible": dict(VISIBLE_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -474,6 +479,11 @@ class Product:
                 except (TypeError, ValueError):
                     log.warning("%s: cycle.guards.%s=%r is not a number in %s..%s — %s in use", where, k, v, lo, hi, out[k])
         return out
+
+    @property
+    def visible_cfg(self) -> dict[str, bool]:
+        """`cycle.visible` (rework slice 5): {review_before_merge, redesign_gate}, off by default."""
+        return self.switches("visible", VISIBLE_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 

@@ -104,6 +104,9 @@ cycle:
     cost_min_runs: 20             # and never below cost_floor_usd
     cost_days: 7
     cost_floor_usd: 1.0
+  visible:                        # owner 26.11, rework slice 5 (docs/review-before-deploy.md): a visible change is judged before players see it
+    review_before_merge: false    # true = a task marked `visible` is reviewed on its branch (local server) and merged only by a pass
+    redesign_gate: false          # true = a task marked `redesign` without `new_function` waits in `proposed` for the owner
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)
