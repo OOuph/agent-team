@@ -28,7 +28,10 @@ AGENTS_ARG_MAX = 100_000   # bytes; the kernel limit for a single argv string is
 EVENT_TS_KEY = "_ts"       # receive time (epoch seconds) the runner stamps on every stream-json event: the CLI's events carry
                            # no usable timestamp, and the run profile (team/runprofile.py) needs the time between a tool call and its result
 KILLED_TIMEOUT, KILLED_INACTIVITY = "timeout", "inactivity"     # RunResult.killed: which limit stopped the run
-_KILLED_RE = ((re.compile(r"^timeout after \d+s"), KILLED_TIMEOUT), (re.compile(r"^inactive for \d+s"), KILLED_INACTIVITY))
+KILLED_LOOP = "loop"                       # … or the loop guard (rework slice 4): the same tool call with the same output, N times in a row
+LOOP_SHOWN_CHARS = 160                     # of the repeated call in the error text and the register
+_KILLED_RE = ((re.compile(r"^timeout after \d+s"), KILLED_TIMEOUT), (re.compile(r"^inactive for \d+s"), KILLED_INACTIVITY),
+              (re.compile(r"^loop: \d+ identical"), "loop"))
 DISALLOWED_DEFAULT = ["WebFetch", "WebSearch", "Agent", "Task", "TodoWrite", "NotebookEdit", "KillShell", "BashOutput"]
 
 
@@ -83,6 +86,51 @@ def killed_kind(rr: "RunResult | None") -> str | None:
     return None
 
 
+class LoopGuard:
+    """Sees a run that goes round in a circle (owner 26.11, point 6 of the guide review: «петли лечить»): `repeats`
+    finished tool calls in a row with the same tool, the same input AND the same output. A role that waits for a
+    background command repeats the call too, but the output changes — that is not a loop. The role's own calls and
+    each subagent's are counted apart; `StructuredOutput` is never counted. `repeats` < 2 switches the guard off."""
+
+    def __init__(self, repeats: int):
+        self.repeats = int(repeats or 0)
+        self._open: dict[str, tuple[str, str, str]] = {}          # tool_use id → (stream, name, input)
+        self._last: dict[str, tuple[tuple[str, str, str], int]] = {}   # stream → (the last finished call, how many in a row)
+
+    def feed(self, e: Any) -> str | None:
+        """One stream event. Returns the description of the loop at the moment the limit is reached, else None."""
+        if self.repeats < 2 or not isinstance(e, dict):
+            return None
+        stream = str(e.get("parent_tool_use_id") or "")
+        if e.get("type") == "assistant":
+            for b in _blocks(e.get("message")):
+                if b.get("type") == "tool_use" and b.get("name") != "StructuredOutput":
+                    self._open[str(b.get("id"))] = (stream, str(b.get("name")), json.dumps(b.get("input"), sort_keys=True, ensure_ascii=False, default=str))
+            return None
+        if e.get("type") != "user":
+            return None
+        for b in _blocks(e.get("message")):
+            if b.get("type") != "tool_result":
+                continue
+            call = self._open.pop(str(b.get("tool_use_id")), None)
+            if call is None:
+                continue
+            stream, name, inp = call
+            c = b.get("content")
+            out = "\n".join(str(x.get("text", "")) if isinstance(x, dict) else str(x) for x in c) if isinstance(c, list) else str(c or "")
+            key = (name, inp, out)
+            prev, n = self._last.get(stream, (None, 0))
+            n = n + 1 if prev == key else 1
+            self._last[stream] = (key, n)
+            if n >= self.repeats:
+                try:
+                    shown = json.loads(inp).get("command") or inp
+                except (ValueError, AttributeError):
+                    shown = inp
+                return f"{n} identical tool calls in a row with the same output ({name} `{' '.join(str(shown).split())[:LOOP_SHOWN_CHARS]}`)"
+        return None
+
+
 class Runner:
     def __init__(self, claude_cfg: dict[str, Any], roles: dict[str, dict[str, Any]]):
         self.cfg, self.roles = claude_cfg, roles
@@ -91,7 +139,7 @@ class Runner:
     def run(self, role: str, prompt: str, schema: dict[str, Any] | None, *, model: str | None = None, max_usd: float,
             max_turns: int | None = None, cwd: Path, allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
             timeout_s: int | None = None, inactivity_s: int | None = None, disallowed_tools: list[str] | None = None,
-            add_dirs: list[Path] | None = None, run_dir: Path | None = None, run_id: str = "") -> RunResult:
+            add_dirs: list[Path] | None = None, run_dir: Path | None = None, run_id: str = "", loop_repeats: int = 0) -> RunResult:
         if role not in self.roles:
             return RunResult(False, None, None, 0.0, 0, f"role {role!r} is not defined")
         rdef = self.roles[role]
@@ -163,6 +211,7 @@ class Runner:
         threading.Thread(target=_feed, daemon=True).start()
         last = time.time()
         stderr_buf: list[str] = []
+        guard = LoopGuard(loop_repeats)                    # off unless the caller asks (cycle.guards.loop)
 
         def _drain_err() -> None:
             for ln in proc.stderr or []:
@@ -207,6 +256,11 @@ class Runner:
                 if lf:
                     lf.write((json.dumps(e, ensure_ascii=False) if isinstance(e, dict) else s) + "\n")
                     lf.flush()
+                loop = guard.feed(e)
+                if loop:
+                    killed_reason, killed = f"loop: {loop}", KILLED_LOOP
+                    proc.kill()
+                    break
         finally:
             if lf:
                 lf.close()

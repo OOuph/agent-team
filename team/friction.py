@@ -28,7 +28,8 @@ from .store import Store, parse_ts
 log = logging.getLogger("team.friction")
 
 KINDS = ("run_failed", "tool_denied", "phase_error", "budget_stop", "task_blocked", "lease_expired", "no_commit",
-         "review_fail", "review_inconclusive", "owner_wait", "env_error", "reported", "rollback")
+         "review_fail", "review_inconclusive", "owner_wait", "env_error", "reported", "rollback",
+         "run_loop", "run_cost")       # rework slice 4: a run stopped by the loop guard / by the cost guard
 REPORTED_KINDS = ("missing_tool", "denied_permission", "unclear_instruction", "schema_mismatch", "missing_data", "environment", "other")
 OWNER_WAIT_H = 24
 SUMMARY_MAX = 300
@@ -88,6 +89,12 @@ def collect_product(p: Product, store: Store) -> list[dict[str, Any]]:
                             fp=f"out-of-scope:{d.get('task')}"))
         elif k == "canary.empty":
             out.append(_rec(slug, "reported", f"dispatcher: [other] canary empty result: {d.get('text')}", ts=ts, fp=f"canary-empty:{ts}"))
+        elif k == "run.loop":
+            out.append(_rec(slug, "run_loop", f"{e.get('actor')}: run stopped by the loop guard: {d.get('what')}", role=str(e.get("actor")), ts=ts,
+                            run_id=e.get("subject"), fp=f"loop:{e.get('subject')}"))
+        elif k == "run.cost_guard":
+            out.append(_rec(slug, "run_cost", f"{e.get('actor')}: run stopped at ${d.get('cap')} = {d.get('factor')} × the role's median ${d.get('median')}",
+                            role=str(e.get("actor")), ts=ts, run_id=e.get("subject"), fp=f"cost:{e.get('subject')}"))
         elif k == "budget.stop":
             out.append(_rec(slug, "budget_stop", f"budget stop: {d}", ts=ts, fp=str(ts)))
     for rj in p.runs_dir.glob("*/*/run.json"):
