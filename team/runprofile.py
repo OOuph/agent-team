@@ -82,7 +82,8 @@ IGNORED_TOOLS = ("StructuredOutput",)          # the answer itself, not work
 TS_KEYS = (EVENT_TS_KEY, "timestamp", "ts")    # event keys tried for a time, in order (epoch seconds/ms or ISO 8601)
 TASK_ID_RE = re.compile(r"(?<![A-Za-z0-9])T-\d{3,}(?!\d)")      # a task id inside a run id / label (`…-dev-T-0042`)
 CYCLE_STAMP_RE = re.compile(r"^(\d{8}T\d{4})")            # a cycle directory name starts with its start time
-KILLED_TEXT = {KILLED_TIMEOUT: "killed by the time limit", KILLED_INACTIVITY: "killed by the inactivity watchdog"}
+KILLED_TEXT = {KILLED_TIMEOUT: "killed by the time limit", KILLED_INACTIVITY: "killed by the inactivity watchdog",
+               "loop": "killed by the loop guard (the same call with the same output, repeated)"}
 # what is cut from a shell command before two calls are compared: where it runs and how its output is trimmed
 NORMALISE_DROP = (r"^\s*cd\s+\S+\s*(?:&&|;)\s*", r"\s*\d?>&\d", r"\s*\d?>\s*/dev/null", r"\s*\|\s*(?:tail|head|grep|tee|cat|less)\b[^|;&]*")
 NORMALISE_CHARS = 200

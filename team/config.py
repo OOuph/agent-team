@@ -22,6 +22,18 @@ ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.paren
 PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
+# `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
+GUARDS_DEFAULTS: dict[str, Any] = {
+    "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
+    "loop_repeats": 5,            # … after this many identical calls in a row (3..50)
+    "cost": False,                # true = the cap of a run is at most cost_factor × the role's median spend per run
+    "cost_factor": 8.0,           # (2..100)
+    "cost_min_runs": 20,          # runs of the role in the window needed for a median (3..10000); fewer = no guard
+    "cost_days": 7,               # the window of the median, days (1..90)
+    "cost_floor_usd": 1.0,        # the guard never lowers a cap below this (0..100)
+}
+_GUARDS_RANGE = {"loop_repeats": (3, 50, int), "cost_factor": (2.0, 100.0, float), "cost_min_runs": (3, 10000, int),
+                 "cost_days": (1, 90, int), "cost_floor_usd": (0.0, 100.0, float)}
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
@@ -57,7 +69,9 @@ DEFAULTS: dict[str, Any] = {
               # work that is re-created under a new id (owner 26.11, rework slice 3): `closed_list` true = the PO's prompt lists
               # the tasks closed in the last days (id, title, state, one line of why); `closed_check` true = a proposed task with
               # the title of finished work is skipped, one with the title of a rejected task is linked to it with `continues`
-              "duplicates": dict(DUPLICATES_DEFAULTS)},
+              "duplicates": dict(DUPLICATES_DEFAULTS),
+              # loop and cost guards of a run (owner 26.11, rework slice 4); off by default, product.yaml `cycle: {guards: {...}}`
+              "guards": dict(GUARDS_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -430,6 +444,36 @@ class Product:
     def duplicates_cfg(self) -> dict[str, bool]:
         """`cycle.duplicates` (rework slice 3): {closed_list, closed_check}, off by default."""
         return self.switches("duplicates", DUPLICATES_DEFAULTS)
+
+    @property
+    def guards_cfg(self) -> dict[str, Any]:
+        """`cycle.guards` (rework slice 4): team.yaml first, this product's block on top, key by key; a value of the wrong
+        type or outside its range is reported and the default stays."""
+        out = dict(GUARDS_DEFAULTS)
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get("guards")), (f"{self.slug} product.yaml", own.get("guards") if isinstance(own, dict) else None)):
+            if not isinstance(src, dict):
+                if src is not None:
+                    log.warning("%s: cycle.guards=%r is not a mapping — ignored", where, src)
+                continue
+            for k, v in src.items():
+                if k not in out:
+                    continue
+                if k in ("loop", "cost"):
+                    if isinstance(v, bool):
+                        out[k] = v
+                    else:
+                        log.warning("%s: cycle.guards.%s=%r is not true/false — %s in use", where, k, v, out[k])
+                    continue
+                lo, hi, typ = _GUARDS_RANGE[k]
+                try:
+                    num = typ(v)
+                    if isinstance(v, bool) or not lo <= num <= hi:
+                        raise ValueError
+                    out[k] = num
+                except (TypeError, ValueError):
+                    log.warning("%s: cycle.guards.%s=%r is not a number in %s..%s — %s in use", where, k, v, lo, hi, out[k])
+        return out
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 

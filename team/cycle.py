@@ -16,6 +16,7 @@ import logging
 import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
 import threading
@@ -33,7 +34,7 @@ from .config import WORKTREES_DIRNAME
 from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
-from .runner import killed_kind
+from .runner import KILLED_LOOP, killed_kind
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -71,6 +72,7 @@ INCONCLUSIVE_LIMIT = 3                 # `inconclusive` verdicts of one released
 NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what the task needs and says what (rework slice 2a)
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
+RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4: a run stopped by the loop guard / the cost guard
 # Three unproven reviews (rework slice 2b, `cycle.escalation.review_return`): what the role is told per reason word of
 # team/play.py INCONCLUSIVE_REASONS when the task comes back to it …
 REVIEW_RETURN_TODO = {
@@ -281,6 +283,7 @@ class Cycle:
         self._refill_deadline: float | None = None            # monotonic; set by a parallel execute phase with `cycle.flow.refill`
         self._refill_last: float | None = None                # monotonic; the latest moment refill may stay open for running reviews
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
+        self._role_median: dict[str, float | None] = {}       # role → median spend of a run (`cost_guard_cap`), read once per cycle
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
         self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
         self._batch_timer: threading.Timer | None = None      # `deploy.batch`: fires the batch when a merged commit has waited too long
@@ -352,6 +355,12 @@ class Cycle:
             if credit_left is not None:
                 remaining = min(remaining, credit_left - reserved)
             cap = min(cap, remaining)                                   # a run may use what is left of the day
+            guards = self.p.guards_cfg                                  # rework slice 4: off by default
+            guard_cap = self.cost_guard_cap(role, guards) if guards["cost"] else None
+            guarded = guard_cap is not None and guard_cap < cap
+            if guarded:
+                log.info("%s: run %s: cost guard caps the %s run at $%.2f instead of $%.2f", self.p.slug, run_id, role, guard_cap, cap)
+                cap = guard_cap
             if cap < float(self.st.budget.get("min_usd_per_run", 0.3)) or not self.budget_ok(cap, reserved):
                 if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
                     self.store.event("budget.stop", self.p.slug, "dispatcher", {"remaining": round(remaining, 3), "cap": self.p.daily_cap,
@@ -381,7 +390,8 @@ class Cycle:
                          limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
                 rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
                                      allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
-                                     timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]))
+                                     timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]),
+                                     **({"loop_repeats": int(guards["loop_repeats"])} if guards["loop"] else {}))
         finally:
             with self._budget_lock:                                       # the spend is booked and the reservation dropped in one step
                 if rr is not None:
@@ -397,8 +407,28 @@ class Cycle:
                "lane": lanes_mod.current_lane() or "main"}
         (rd / "run.json").write_text(json.dumps(rec, ensure_ascii=False, indent=1, default=str), encoding="utf-8")
         self.store.event("run", run_id, role, {"ok": rr.ok, "cost": round(cost, 3), "turns": rr.num_turns, "error": (rr.error or "")[:200]})
+        if killed_kind(rr) == KILLED_LOOP:                                # both go to the friction register (team/friction.py)
+            self.store.event(RUN_LOOP_EVENT, run_id, role, {"what": str(rr.error or "")[:300], "duration_s": round(rr.duration_s, 1)})
+        elif guarded and not rr.ok and over_budget(rr):
+            self.store.event(RUN_COST_EVENT, run_id, role, {"cap": round(cap, 3), "median": self._role_median.get(role),
+                                                            "factor": guards["cost_factor"], "cost": round(cost, 3)})
+            log.warning("%s: run %s stopped by the cost guard at $%.2f (%s × the role's median $%s)", self.p.slug, run_id, cap,
+                        guards["cost_factor"], self._role_median.get(role))
         self._tl.run_ok = bool(rr.ok)
         return rr
+
+    def cost_guard_cap(self, role: str, guards: dict[str, Any] | None = None) -> float | None:
+        """`cycle.guards.cost`: the most one run of `role` may spend — `cost_factor` × the median of the role's runs of
+        the last `cost_days` days (the `spend` table), never below `cost_floor_usd`. None while the role has fewer than
+        `cost_min_runs` runs there: no median, no guard. The median is read once per cycle and role."""
+        g = guards or self.p.guards_cfg
+        if role not in self._role_median:
+            since = (_now() - timedelta(days=int(g["cost_days"]))).isoformat(timespec="seconds")
+            rows = [float(r[0]) for r in self.store.db.execute("SELECT usd FROM spend WHERE role = ? AND ts >= ? AND reported = 1 AND usd > 0",
+                                                                 (role, since)).fetchall()]
+            self._role_median[role] = round(statistics.median(rows), 4) if len(rows) >= int(g["cost_min_runs"]) else None
+        med = self._role_median[role]
+        return None if med is None else max(float(g["cost_floor_usd"]), float(g["cost_factor"]) * med)
 
     def profile_run(self, rr: RunResult, role: str, run_id: str, limits: dict[str, Any]) -> dict[str, Any] | None:
         """Where the run's time went (team/runprofile.py): computed from the events of every run and kept in run.json; a
@@ -2963,6 +2993,12 @@ def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
 def no_commit_count(t: dict[str, Any]) -> int:
     """Number of «developer reported done but committed nothing» records in the task's whole history (T-0043)."""
     return sum(1 for h in (t.get("history") or []) if "committed nothing" in str(h.get("note") or ""))
+
+
+def over_budget(rr: RunResult) -> bool:
+    """True when the CLI ended the run because it reached `--max-budget-usd`."""
+    text = f"{(rr.raw or {}).get('subtype') or ''} {rr.error or ''}".lower()
+    return "max_budget" in text or "budget" in text and "exceed" in text
 
 
 def previous_no_commit(t: dict[str, Any]) -> bool:

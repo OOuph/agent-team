@@ -371,6 +371,7 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
     c = continuation
     if c:
         why = {"timeout": "was stopped by the time limit", "inactivity": "was stopped by the inactivity watchdog (no output for too long)",
+               "loop": "was stopped by the loop guard: it repeated one command with the same output again and again",
                "partial": "returned a partial result"}.get(str(c.get("reason")), "did not finish")
         after = f" after {c['duration_s']} s" if c.get("duration_s") and c.get("reason") != "partial" else ""
         out += f"\n\n# CONTINUATION — DO NOT START OVER\nThe previous run of this task {why}{after}."
