@@ -55,6 +55,11 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Answer every open question addressed to you in `answers`. Decide inside VISION; when the answer needs a change of
   goals, budget, promises, channels or anything VISION reserves for the owner — put it into `owner_questions` and give
   the role the safest interim answer.
+- **READY QUEUE** (when the prompt has it; owner 26.11): the seats take the next task the moment one is finished, so an
+  empty queue is idle seats. Cut ahead: the next tasks of the current milestone and of the owner's approved plan, in
+  the order they should be done, up to the limit the prompt names. Tasks cut together must be able to run side by side
+  — different files or screens — or name `depends_on`. Never fill the queue with invented work, tests of tests or
+  «proof» tasks: fewer certain tasks are better than a full queue of doubtful ones.
 - **A visible change is marked, and a redesign comes only with a new function** (owner 26.11: «редизайн делаем только
   при новом функционале — я не вижу новых функций, а редизайн вижу»). Every Ready task says what it is: `visible: true`
   when it changes what a player sees (a screen, its layout, visuals, on-screen text) — such a task is reviewed before

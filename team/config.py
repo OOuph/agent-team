@@ -23,6 +23,14 @@ PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first"
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
 VISIBLE_DEFAULTS: dict[str, bool] = {"review_before_merge": False, "redesign_gate": False}   # `cycle.visible`, see DEFAULTS
+# `cycle.queue` (rework slice 9): the PO cuts tasks ahead
+QUEUE_DEFAULTS: dict[str, Any] = {
+    "ahead": False,               # true = the PO is woken when a seat's ready queue is low and may cut more tasks per run
+    "target_ready": 6,            # ready tasks of a role with seats below which the PO is woken (1..50)
+    "max_per_run": 6,             # Ready tasks the PO may propose in one run while `ahead` is on (1..12; off: cycle.max_ready)
+    "wake_every_min": 30,         # the PO is not woken for a low queue more often than this (5..1440)
+}
+_QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -76,7 +84,9 @@ DEFAULTS: dict[str, Any] = {
               # a visible change is judged before players see it (owner 26.11, rework slice 5): `review_before_merge` true = a task
               # marked `visible` is reviewed on its branch, on a locally started server, and merged only by a pass;
               # `redesign_gate` true = a task marked `redesign` without a `new_function` waits in `proposed` for the owner
-              "visible": dict(VISIBLE_DEFAULTS)},
+              "visible": dict(VISIBLE_DEFAULTS),
+              # the PO cuts tasks ahead (owner 26.11, rework slice 9); off by default, product.yaml `cycle: {queue: {...}}`
+              "queue": dict(QUEUE_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -484,6 +494,30 @@ class Product:
     def visible_cfg(self) -> dict[str, bool]:
         """`cycle.visible` (rework slice 5): {review_before_merge, redesign_gate}, off by default."""
         return self.switches("visible", VISIBLE_DEFAULTS)
+
+    @property
+    def queue_cfg(self) -> dict[str, Any]:
+        """`cycle.queue` (rework slice 9): team.yaml first, this product's block on top; a wrong value keeps the default."""
+        out = dict(QUEUE_DEFAULTS)
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get("queue")), (f"{self.slug} product.yaml", own.get("queue") if isinstance(own, dict) else None)):
+            if not isinstance(src, dict):
+                if src is not None:
+                    log.warning("%s: cycle.queue=%r is not a mapping — ignored", where, src)
+                continue
+            for k, v in src.items():
+                if k == "ahead":
+                    if isinstance(v, bool):
+                        out[k] = v
+                    else:
+                        log.warning("%s: cycle.queue.ahead=%r is not true/false — %s in use", where, v, out[k])
+                elif k in _QUEUE_RANGE:
+                    lo, hi = _QUEUE_RANGE[k]
+                    if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
+                        out[k] = v
+                    else:
+                        log.warning("%s: cycle.queue.%s=%r is not a whole number in %s..%s — %s in use", where, k, v, lo, hi, out[k])
+        return out
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
