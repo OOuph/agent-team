@@ -278,6 +278,13 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
         except Exception as exc:  # noqa: BLE001 — the framework's own loop must never break the products' one
             log.exception("friction/retro failed: %s", exc)
         if not a.dry_run:
+            try:                                  # rework slice 8: the owner's weekly list of pending instruction proposals
+                from . import billing, instructions
+                if instructions.send_digest(st, billing.owner_notify()):
+                    log.info("instructions: the owner's list of pending proposals was sent")
+            except Exception as exc:  # noqa: BLE001
+                log.exception("instructions digest failed: %s", exc)
+        if not a.dry_run:
             try:
                 from . import critic
                 critic.write_responses(st, _products(st, "all"))     # what we did with the external critic's findings
@@ -473,6 +480,29 @@ def cmd_report(st: C.Settings, a: argparse.Namespace) -> int:
     return 0 if (not a.send or all(x.get("ok") for x in res["sent"])) else 1
 
 
+def cmd_instructions(st: C.Settings, a: argparse.Namespace) -> int:
+    """Proposals to change the roles' instructions (rework slice 8): list the pending ones, send the owner's list now
+    (`--send`), or record the owner's word (`--done P-0003 --as accepted|rejected`)."""
+    from . import billing, instructions
+    if a.done:
+        try:
+            m = instructions.decide(st, a.done, a.as_ or "")
+        except (KeyError, ValueError) as exc:
+            print(f"team instructions: {a.done}: {exc if isinstance(exc, ValueError) else 'no such proposal'}")
+            return 1
+        print(f"{m['id']} {m['status']}: {m.get('file')}")
+        return 0
+    if a.send:
+        text = instructions.send_digest(st, billing.owner_notify(), force=True)
+        print(text or "nothing pending: nothing sent")
+        return 0
+    cfg = instructions.settings(st)
+    items = instructions.pending(st)
+    print(f"owner_only: {cfg['owner_only']} · paths: {', '.join(cfg['paths'])} · list every {cfg['digest_every_days']} days · pending: {len(items)}")
+    print(instructions.digest(st) or "(no pending proposals)")
+    return 0
+
+
 def cmd_cost(st: C.Settings, a: argparse.Namespace) -> int:
     """Spend per accepted task and prompt-cache share for a window, from the run folders and the backlog (read-only)."""
     import json
@@ -548,6 +578,8 @@ def main(argv: list[str] | None = None) -> int:
     s = sub.add_parser("friction"); s.add_argument("--days", type=int, default=7); s.add_argument("--out"); s.set_defaults(fn=cmd_friction)
     s = sub.add_parser("cost"); s.add_argument("--product", default="all"); s.add_argument("--days", type=float, default=7.0)
     s.add_argument("--json", action="store_true"); s.add_argument("--out"); s.set_defaults(fn=cmd_cost)
+    s = sub.add_parser("instructions"); s.add_argument("--send", action="store_true"); s.add_argument("--done"); s.add_argument("--as", dest="as_", choices=["accepted", "rejected"])
+    s.set_defaults(fn=cmd_instructions)
     s = sub.add_parser("retro"); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_retro)
     s = sub.add_parser("report"); s.add_argument("--product", default="all"); s.add_argument("--hours", type=float, default=12.0)
     s.add_argument("--send", action="store_true"); s.add_argument("--no-llm", action="store_true"); s.add_argument("--dry-run", action="store_true")

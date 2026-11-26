@@ -341,6 +341,24 @@ def duplicate_of(p: dict[str, Any], tasks: list[dict[str, Any]]) -> str | None:
     return None
 
 
+def to_instruction_proposal(st: Settings, p: dict[str, Any]) -> bool:
+    """Rework slice 8 (owner 26.11: instructions change only through the owner). With `framework.instructions.owner_only`
+    a proposal that changes an instruction — kind `role_card`, or a file under an instruction path — is kept as a
+    «было → стало» file for the owner's weekly list (team/instructions.py) and does NOT become a task. True = kept."""
+    from . import instructions
+    cfg = instructions.settings(st)
+    if not cfg["owner_only"]:
+        return False
+    files = [str(f) for f in p.get("files") or []]
+    inst = instructions.protected(files, cfg["paths"])
+    if p.get("kind") != "role_card" and not inst:
+        return False
+    for f in inst or files or ["team/roles/"]:
+        instructions.propose(st, source="framework-retro", file=f, was=str(p.get("was") or ""), becomes=str(p.get("becomes") or p.get("change") or ""),
+                             why=f"{p.get('title')}: {p.get('change')}", evidence=[str(e) for e in p.get("evidence") or []])
+    return True
+
+
 def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any] | None:
     cfg = _cfg(st)
     reg = friction.Register(friction.register_dir(st))
@@ -412,6 +430,9 @@ def run_retro(st: Settings, runner: Any, dry_run: bool = False) -> dict[str, Any
             if url:
                 filed.append(url)
         slug = str(cfg.get("product") or "")
+        if to_instruction_proposal(st, p):
+            log.info("retro: proposal %r changes an instruction: kept for the owner's list, no task", p.get("title"))
+            continue
         if slug and (p.get("risk") in (cfg.get("task_risks") or ["low"])):
             pdir = st.products_dir / slug
             if (pdir / "product.yaml").exists():
