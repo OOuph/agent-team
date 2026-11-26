@@ -134,6 +134,27 @@ def health_ok(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+PORT_ASSIGN_RE = __import__("re").compile(r"(?<![\w])PORT=\d+\b")
+
+
+def command_for_port(run_cmd: str, port: int) -> str:
+    """The run command for a server on `port`: `{port}` is filled in, and a port the command assigns itself is replaced
+    (`PORT=3101 node dist/server/index.js`, ai-battles: with it the server came up on 3101 whatever PORT the environment
+    held, so a locally started server never answered on the port the dispatcher had picked)."""
+    return PORT_ASSIGN_RE.sub(f"PORT={port}", str(run_cmd).replace("{port}", str(port)))
+
+
+def test_env(product: Product, port: int, tmp: Path) -> dict[str, str]:
+    """product.yaml `playtest.test_env` for a locally started server (rework slices 5 and 6): `{port}` and `{tmp}` are
+    filled in. Empty when the product has none."""
+    cfg = product.raw.get("playtest")
+    te = cfg.get("test_env") if isinstance(cfg, dict) else None
+    if not isinstance(te, dict):
+        return {}
+    return {str(k): str(v).replace("{port}", str(port)).replace("{tmp}", str(tmp)) for k, v in te.items()
+            if str(k).replace("_", "").isalnum() and str(k).upper() == str(k)}
+
+
 def live_base_url(product: Product) -> str | None:
     """The deployed host when there is one: `deploy.mode` not pending and a site_base."""
     if product.deploy_mode != "pending" and product.site_base:
@@ -179,8 +200,13 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
         # the port is picked right before the server starts, not before install and build: with cycles of several
         # products running side by side (F17) a port chosen minutes earlier may have been taken by another play-test
         port = free_port()
-        cmd = product.run_cmd.replace("{port}", str(port))
+        cmd = command_for_port(product.run_cmd, port)
         env = clean_env()
+        if force_local:
+            # a server the review plays INSTEAD of the deployed host gets the product's test settings: without them it
+            # would call the real text provider without a key and write into the default data folder
+            (work / "server-data").mkdir(parents=True, exist_ok=True)
+            env.update(test_env(product, port, work / "server-data"))
         env.update({"PORT": str(port), "HOST": HOST, "BASE_URL": f"http://{HOST}:{port}"})
         log_fh.write(f"\n$ PORT={port} {cmd}\n")
         log_fh.flush()

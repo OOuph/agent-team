@@ -134,3 +134,28 @@ def test_dispatcher_keeps_the_full_test_output_and_passes_the_settings(tmp_path:
     p.raw["playtest"] = {}
     assert c.test_server_env() == {}                                    # not configured: nothing is passed, the tools say so
     c.store.close()
+
+
+def test_a_port_written_into_the_run_command_is_replaced(tmp_path: Path, monkeypatch):
+    from team import playtest
+    assert playtest.command_for_port("PORT=3101 node dist/server/index.js", 40123) == "PORT=40123 node dist/server/index.js"
+    assert playtest.command_for_port("node server.js --port {port}", 40123) == "node server.js --port 40123"
+    assert playtest.command_for_port("E2E_PORT=1 SUPPORT=2 node x.js", 5) == "E2E_PORT=1 SUPPORT=2 node x.js"     # only the PORT variable itself
+    co = _checkout(tmp_path, monkeypatch, {"TEXTGEN_PROVIDER": "dictionary"})
+    monkeypatch.setenv("TEAM_PLAY_RUN_CMD", f"PORT=3101 {sys.executable} server.py")
+    with play.local_server([]) as base:
+        port = int(base.rsplit(":", 1)[1])
+        assert port != 3101 and json.loads((co / "env.json").read_text())["PORT"] == str(port)
+
+
+def test_forced_local_review_server_gets_the_test_settings(tmp_path: Path):
+    from team import gitops, playtest
+    st = _settings(tmp_path)
+    p = _game(st, run_cmd="PORT=3101 python3 -m http.server {port} --bind 127.0.0.1" .replace("{port}", "$PORT"), deploy="service", site_base="https://game.example")
+    p.raw["playtest"] = {"test_env": {"TEXTGEN_PROVIDER": "dictionary", "DATA_DIR": "{tmp}/data-{port}", "bad-name": "x"}}
+    assert playtest.test_env(p, 7, tmp_path) == {"TEXTGEN_PROVIDER": "dictionary", "DATA_DIR": f"{tmp_path}/data-7"}
+    srv = playtest.start(p, p.repo_dir, gitops.head(p.repo_dir), tmp_path / "work", start_timeout_s=20, force_local=True)
+    try:
+        assert srv.local and srv.port != 3101 and playtest.health_ok(srv.base_url + "/healthz")
+    finally:
+        playtest.stop(srv)
