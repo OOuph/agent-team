@@ -114,6 +114,9 @@ cycle:
     wake_every_min: 30            # not woken for a low queue more often than this
   analyst_prompt:                 # 26.11, rework slice 10: recently accepted tasks in the analyst's prompt
     compact_tasks: false          # true = a card per task (id, title, type, goal, accepted_at, one line of the last result)
+  measure:                        # owner 26.11, rework slice 11: the day is measured, not every task
+    by_day: false                 # true = accepted tasks close by themselves (no-metric ones at once, the rest after measure_after_h);
+                                  # the analyst judges releases and themes; its failed run is not repeated in the same window
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

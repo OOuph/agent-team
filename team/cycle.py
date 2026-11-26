@@ -74,6 +74,10 @@ NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what 
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
 RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4: a run stopped by the loop guard / the cost guard
+ANALYST_FAILED_EVENT, UNMEASURED_CLOSED_EVENT = "analyst.failed", "measure.closed"     # rework slice 11 (`cycle.measure.by_day`)
+NO_METRIC_TYPES = ("quality", "defect", "design")          # task types with no user metric of their own: never wait for a measurement
+NO_METRIC_ROLES = ("game-designer", "designer", "tester", "analyst")
+NO_METRIC_TITLE_RE = re.compile(r"\b(e2e|tests?|specs?|proofs?|unit|vitest|playwright)\b|\.md\b|\bdesign/|\bDESIGN\b|\bGAME-DESIGN\b", re.IGNORECASE)
 QUEUE_ROLES = ("developer",)                # `cycle.queue.ahead`: the roles whose ready queue the PO keeps at `target_ready`
 TASK_MARKS = ("visible", "redesign", "new_function")       # the PO's marks of a visible change (rework slice 5), kept on the task
 PRE_MERGE = "pre_merge"                    # task field: in `review` with its commit on task/<id> only — not merged, not deployed
@@ -3065,30 +3069,95 @@ class Cycle:
             self.balance_check()                  # every cycle, no model run: an overpowered option does not wait for the analyst's slot
         except Exception as exc:  # noqa: BLE001 — a malformed balance block must not cost the product its measure phase
             log.exception("%s: balance check failed: %s", self.p.slug, exc)
+        by_day = self.p.measure_cfg["by_day"]           # rework slice 11: off by default
+        try:
+            self.measure_with_analyst(by_day)
+        finally:
+            if by_day:
+                self.close_unmeasured()               # whatever happened to the analyst above; after it, so its effects are kept
+
+    def measure_with_analyst(self, by_day: bool) -> None:
+        """The analyst's run of this window and what it says about the accepted tasks."""
         day = _now().strftime("%Y-%m-%d")
-        every = int(self.st.cycle.get("measure_every_h", 24))
+        every = self.cycle_hours("measure_every_h", 24)
         slot = _now().hour // max(1, every)
         marker = self.p.dir / "digests" / (f"analyst-{day}.md" if every >= 24 else f"analyst-{day}-{slot:02d}.md")
         if marker.exists():
             return
         if not list((self.p.dir / "metrics").glob("*.json")):
             return
+        if by_day and not self.analyst_due():
+            return                                    # this window's run already failed: the next window tries once more
         rr = self.analyst_run(label="analyst")
         if rr is None or not (rr.ok and rr.structured):
+            if by_day and rr is not None:
+                self.analyst_failed_marker().write_text(utcnow(), encoding="utf-8")
+                self.store.event(ANALYST_FAILED_EVENT, self.cycle_id, "dispatcher", {"error": str(rr.error or "")[:200], "cost": rr.cost_usd})
+                log.warning("%s: the analyst's run failed (%s): not repeated in this window (every %d h)", self.p.slug, rr.error, every)
             return
         res = rr.structured
-        marker.write_text(f"# Analyst {day}\n\n{res.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump({k: res.get(k) for k in ('task_effects', 'goal_status')}, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
+        marker.write_text(f"# Analyst {day}\n\n{res.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump({k: res.get(k) for k in ('theme_effects', 'task_effects', 'goal_status') if res.get(k)}, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
         for o in res.get("observations") or []:
             self.store.add_observation({**o, "source": "analyst", "run_id": f"{self.cycle_id}-analyst",
                                         "fingerprint": fingerprint("analyst", o.get("classification", ""), o.get("url", ""), o.get("title", ""))})
-        effects = {e.get("task_id"): e for e in res.get("task_effects") or []}
-        after = timedelta(hours=int(self.st.cycle.get("measure_after_h", 24)))
+        effects: dict[str, dict[str, Any]] = {}
+        for th in res.get("theme_effects") or []:     # a release or a theme: every task of the group gets the group's effect
+            for tid in th.get("task_ids") or []:
+                effects[str(tid)] = {"effect": th.get("effect"), "evidence": f"{th.get('theme')}: {th.get('evidence') or ''}"}
+        effects.update({e.get("task_id"): e for e in res.get("task_effects") or []})      # a task's own before/after wins
+        after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
         for t in self.store.tasks(["accepted"]):
             acc = accepted_moment(t)
-            if acc and _now() - acc >= after:
+            if (acc and _now() - acc >= after) or (by_day and t["id"] in effects):
                 e = effects.get(t["id"], {})
-                self.store.transition(t["id"], "measured", "analyst", f"effect: {e.get('effect', 'insufficient_data')} — {e.get('evidence', '')[:200]}", effect=e.get("effect", "insufficient_data"))
+                self.store.transition(t["id"], "measured", "analyst", f"effect: {e.get('effect', 'insufficient_data')} — {str(e.get('evidence') or '')[:200]}", effect=e.get("effect", "insufficient_data"))
                 self.store.transition(t["id"], "done", "dispatcher", "measured")
+
+    def cycle_hours(self, key: str, default: int) -> int:
+        """A whole number of hours from `cycle.<key>`: this product's product.yaml first, then team.yaml (before 26.11 only
+        team.yaml was read, so a product could not have its own measure cadence)."""
+        own = self.p.raw.get("cycle")
+        for src in (own if isinstance(own, dict) else {}, self.st.cycle):
+            v = src.get(key)
+            if isinstance(v, (int, float)) and not isinstance(v, bool) and v > 0:
+                return int(v)
+        return int(default)
+
+    def analyst_failed_marker(self) -> Path:
+        every = self.cycle_hours("measure_every_h", 24)
+        return self.p.dir / "digests" / f".analyst-failed-{_now().strftime('%Y-%m-%d')}-{_now().hour // max(1, every):02d}"
+
+    def analyst_due(self, now: datetime | None = None) -> bool:
+        """`cycle.measure.by_day`: False when the analyst's run of this window (`measure_every_h`) already failed — a run
+        that ends at its cap would otherwise burn the cap in every cycle (ai-battles 26.11: four times in a row)."""
+        if now is None:
+            return not self.analyst_failed_marker().exists()
+        every = self.cycle_hours("measure_every_h", 24)
+        return not (self.p.dir / "digests" / f".analyst-failed-{now.strftime('%Y-%m-%d')}-{now.hour // max(1, every):02d}").exists()
+
+    def close_unmeasured(self) -> list[str]:
+        """`cycle.measure.by_day`: closing a task does not depend on the analyst. A task with no user metric of its own
+        (`needs_measure`) goes `accepted → done` at once, effect `not_applicable`; any other task accepted more than
+        `measure_after_h` ago goes to `done` with `not_measured` (it runs after the analyst of the cycle, which gives a
+        task its theme's effect first). A task that waits for its deploy is left alone. Returns the ids closed."""
+        after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
+        closed: list[str] = []
+        for t in self.store.tasks(["accepted"]):
+            if t.get(DEPLOY_PENDING) or self.lanes.busy(t["id"]):
+                continue
+            acc = accepted_moment(t)
+            if not needs_measure(t):
+                effect, note = "not_applicable", "no user metric of its own: closed without a measurement"
+            elif acc and _now() - acc >= after:
+                effect, note = "not_measured", f"accepted more than {int(after.total_seconds() // 3600)} h ago and no measurement named it"
+            else:
+                continue
+            self.store.transition(t["id"], "done", "dispatcher", note, force=True, effect=effect)
+            closed.append(t["id"])
+        if closed:
+            self.store.event(UNMEASURED_CLOSED_EVENT, self.cycle_id, "dispatcher", {"n": len(closed), "ids": closed[:40]})
+            log.info("%s: %d accepted task(s) closed without waiting for the analyst", self.p.slug, len(closed))
+        return closed
 
     # geo: weekly control questions to AI search -------------------------------------------------
 
@@ -3267,6 +3336,14 @@ def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
 def no_commit_count(t: dict[str, Any]) -> int:
     """Number of «developer reported done but committed nothing» records in the task's whole history (T-0043)."""
     return sum(1 for h in (t.get("history") or []) if "committed nothing" in str(h.get("note") or ""))
+
+
+def needs_measure(t: dict[str, Any]) -> bool:
+    """Does the task have a user metric of its own to wait for? Not: quality, defect and design tasks, documents, tests
+    and «proof» tasks (by type, by role, by what the title names). Everything else — a feature a player meets — does."""
+    if str(t.get("type") or "") in NO_METRIC_TYPES or str(t.get("role") or "developer") in NO_METRIC_ROLES:
+        return False
+    return not NO_METRIC_TITLE_RE.search(str(t.get("title") or ""))
 
 
 def accepted_moment(t: dict[str, Any]) -> datetime | None:
