@@ -369,6 +369,13 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
     s = Store(p.dir)
     rc = 0
     if a.action == "new":
+        from .cycle import EXEC_ROLES, canonical_role
+        role = canonical_role(a.role)                  # `artist` is the designer's seat; an unknown role would never start
+        if role not in EXEC_ROLES:
+            print(f"team task new: no role `{a.role}`; roles that can take a task: {', '.join(EXEC_ROLES)} (artist = designer)")
+            s.close()
+            return 2
+        a.role = role
         t = s.create_task(title=a.title, type_=a.type, problem=a.problem or a.title, scope=a.scope or "", acceptance=a.acceptance or [],
                           goal=a.goal or "G1", created_by=a.by, priority=a.priority, role=a.role, state="ready" if a.ready else "proposed")
         print(t["id"])
