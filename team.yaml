@@ -107,6 +107,11 @@ cycle:
   visible:                        # owner 26.11, rework slice 5 (docs/review-before-deploy.md): a visible change is judged before players see it
     review_before_merge: false    # true = a task marked `visible` is reviewed on its branch (local server) and merged only by a pass
     redesign_gate: false          # true = a task marked `redesign` without `new_function` waits in `proposed` for the owner
+  queue:                          # owner 26.11, rework slice 9: the PO cuts tasks ahead
+    ahead: false                  # true = the PO is also woken when the developer's ready queue is below target_ready …
+    target_ready: 6
+    max_per_run: 6                # … and may propose this many Ready tasks in one run (off: max_ready, three)
+    wake_every_min: 30            # not woken for a low queue more often than this
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

@@ -74,6 +74,7 @@ NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what 
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
 RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4: a run stopped by the loop guard / the cost guard
+QUEUE_ROLES = ("developer",)                # `cycle.queue.ahead`: the roles whose ready queue the PO keeps at `target_ready`
 TASK_MARKS = ("visible", "redesign", "new_function")       # the PO's marks of a visible change (rework slice 5), kept on the task
 PRE_MERGE = "pre_merge"                    # task field: in `review` with its commit on task/<id> only — not merged, not deployed
 REVIEW_BEFORE_MERGE_EVENT, REDESIGN_HELD_EVENT = "review.before_merge", "task.redesign_held"
@@ -350,7 +351,7 @@ class Cycle:
 
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
-                 max_turns: int | None = None, model: str | None = None) -> RunResult | None:
+                 max_turns: int | None = None, model: str | None = None, schema_obj: dict[str, Any] | None = None) -> RunResult | None:
         self._tl.run_ok = False                                     # until a run really finished well (read by `seat_lane` for refill)
         if self.runner is None:
             log.error("no runner: %s skipped", label)
@@ -409,7 +410,7 @@ class Cycle:
             with self.lanes.run_slot(label):                              # a lane holds its slot already; the main thread takes one here
                 log.info("%s: run %s time budget: timeout %ds (%s), inactivity %ds (%s)", self.p.slug, run_id, limits["timeout_s"],
                          limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
-                rr = self.runner.run(role, prompt, schema(schema_name) if schema_name else None, max_usd=cap, cwd=cwd, model=str(model) if model else None,
+                rr = self.runner.run(role, prompt, schema_obj or (schema(schema_name) if schema_name else None), max_usd=cap, cwd=cwd, model=str(model) if model else None,
                                      allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
                                      timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]),
                                      **({"loop_repeats": int(guards["loop_repeats"])} if guards["loop"] else {}))
@@ -1153,6 +1154,32 @@ class Cycle:
         (self.p.dir / self.DEV_IDLE_FILE).write_text((now or datetime.now(timezone.utc)).isoformat(timespec="seconds"), encoding="utf-8")
         log.info("%s: developer idle, PO woken for defect/quality work", self.p.slug)
 
+    QUEUE_WAKE_FILE = "queue-wake-po"     # products/<slug>/queue-wake-po: ISO time the PO was last woken for a low ready queue
+
+    def ready_queue(self) -> dict[str, tuple[int, int]]:
+        """role → (ready tasks, seats) for the roles whose queue the PO keeps filled (`QUEUE_ROLES`: the developer — the
+        other roles' work is cut from what the developer's tasks need, not kept in stock) and that have a seat
+        (rework slice 9)."""
+        slots = self.execute_slots()
+        ready = self.store.tasks(["ready"])
+        out = {}
+        for r in QUEUE_ROLES:
+            seats = int(slots.get(r) or slots.get("*") or 0)
+            if seats > 0:
+                out[r] = (sum(1 for t in ready if str(t.get("role") or "developer") == r), seats)
+        return out
+
+    def queue_wake_due(self, now: datetime | None = None) -> bool:
+        """The PO was not woken for a low queue within `cycle.queue.wake_every_min`."""
+        try:
+            prev = datetime.fromisoformat((self.p.dir / self.QUEUE_WAKE_FILE).read_text(encoding="utf-8").strip())
+        except (OSError, ValueError):
+            return True
+        return (now or datetime.now(timezone.utc)) - prev >= timedelta(minutes=int(self.p.queue_cfg["wake_every_min"]))
+
+    def mark_queue_wake(self, now: datetime | None = None) -> None:
+        (self.p.dir / self.QUEUE_WAKE_FILE).write_text((now or datetime.now(timezone.utc)).isoformat(timespec="seconds"), encoding="utf-8")
+
     def create_standing_tasks(self) -> list[str]:
         """Standing directions (owner 21.11, team/standing.py): the dispatcher itself creates the next task of every
         direction that is due — none of its tasks open and `every_h` passed since the last one was created. No PO run is
@@ -1191,9 +1218,27 @@ class Cycle:
         idle = not active
         dev_idle = not any(str(t.get("role") or "") == "developer" for t in active)
         dev_wake = dev_idle and self.dev_idle_due()
-        if not new_obs and not qs and not idle and not dev_wake and not stuck_md:
+        qcfg = self.p.queue_cfg                          # rework slice 9: the PO cuts tasks ahead (off by default)
+        queue = self.ready_queue() if qcfg["ahead"] else {}
+        low = {r: n for r, (n, seats) in queue.items() if n < int(qcfg["target_ready"])}
+        queue_wake = bool(low) and not idle and self.queue_wake_due()
+        if not new_obs and not qs and not idle and not dev_wake and not stuck_md and not queue_wake:
             log.info("%s: triage skipped (nothing new, team busy)", self.p.slug)
             return
+        max_ready = int(qcfg["max_per_run"]) if qcfg["ahead"] else int(self.st.cycle.get("max_ready", 3))
+        queue_md = ""
+        if qcfg["ahead"] and queue:
+            queue_md = ("# READY QUEUE (the seats take the next task the moment one is finished)\n"
+                        + "\n".join(f"- {r}: {n} ready, {seats} seat(s)" for r, (n, seats) in sorted(queue.items()))
+                        + f"\nKeep at least {qcfg['target_ready']} ready tasks for every role above: cut the next tasks of the current milestone and "
+                          f"of the owner's approved plan now, in the order they should be done — up to {max_ready} in this run. Each must be able to "
+                          "run beside the others (different files or screens; name `depends_on` where the order matters). Do not invent work to "
+                          "fill the queue: when nothing more is certainly needed, propose fewer and say so in the digest.")
+        if queue_wake:
+            self.mark_queue_wake()
+            self.store.event("queue.low", self.cycle_id, "dispatcher", {"low": low, "target": qcfg["target_ready"]})
+            log.info("%s: the ready queue is low (%s; target %s): the PO is woken to cut ahead", self.p.slug,
+                     ", ".join(f"{r} {n}" for r, n in low.items()), qcfg["target_ready"])
         latest = self.p.dir / "metrics" / "latest.md"
         gsc_md = self.p.dir / "metrics" / "gsc.md"               # owner 10.11: Search Console next to the log metrics
         seen_upto = runprofile.last_event_id(self.store)         # what this prompt can include; reviews go on writing beside it
@@ -1201,12 +1246,15 @@ class Cycle:
                                    metrics_md=(latest.read_text(encoding="utf-8") if latest.exists() else "")
                                    + ("\n\n" + gsc_md.read_text(encoding="utf-8")[:3000] if gsc_md.exists() else ""),
                                    spent_today=self.store.spent_today(), cap=self.p.daily_cap,
-                                   max_ready=int(self.st.cycle.get("max_ready", 3)), idle=idle, dev_idle=dev_idle,
-                                   channel_caps=self.channel_caps(), stuck_md=stuck_md)
+                                   max_ready=max_ready, idle=idle, dev_idle=dev_idle,
+                                   channel_caps=self.channel_caps(), stuck_md=stuck_md, queue_md=queue_md)
         if dev_wake:
             self.mark_dev_idle()
         work = self.p.work_dir / self.cycle_id / "po"
-        rr = self.role_run("po", prompt, "po-decision", cwd=work, label="po", cap=2.0, allowed_tools=[], max_turns=8)
+        po_schema = schema("po-decision")
+        if max_ready > int(po_schema["properties"]["ready_tasks"].get("maxItems") or 0):
+            po_schema["properties"]["ready_tasks"]["maxItems"] = max_ready      # the schema's own limit is the default of three
+        rr = self.role_run("po", prompt, "po-decision", cwd=work, label="po", cap=2.0, allowed_tools=[], max_turns=8, schema_obj=po_schema)
         if rr is not None:                                       # a run profile written while the PO ran is shown to it next time
             self.store.event(runprofile.PO_SEEN_EVENT, self.cycle_id, "dispatcher", {"upto": seen_upto})
         if rr is None or not (rr.ok and rr.structured):

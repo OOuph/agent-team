@@ -110,7 +110,7 @@ def closed_block(store: Store) -> str:
 
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
               metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
-              channel_caps: dict[str, Any] | None = None, stuck_md: str = "") -> str:
+              channel_caps: dict[str, Any] | None = None, stuck_md: str = "", queue_md: str = "") -> str:
     cfg = product.po_prompt_cfg
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
@@ -126,7 +126,8 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
                   + (" The developer has no ready work: queue 1–2 tasks of type `defect` or `quality` (see the quality rule) from failing "
                      "SEO/GEO checks, review fails, persona `ux_friction`, critic findings or facts on the live site, each naming its source "
                      "in `problem`; if nothing is broken or measurably improvable, say so in the digest and invent no feature."
-                     if dev_idle and not idle else ""))
+                     if dev_idle and not idle else "")
+                  + (("\n\n" + queue_md) if queue_md else ""))
     body = ("# VISION\n" + product.vision()
             + (("\n\n" + stuck_md) if stuck_md else "")
             + run_time_block(product, store)
