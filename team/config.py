@@ -84,7 +84,7 @@ DEFAULTS: dict[str, Any] = {
               "guards": dict(GUARDS_DEFAULTS),
               # a visible change is judged before players see it (owner 26.11, rework slice 5): `review_before_merge` true = a task
               # marked `visible` is reviewed on its branch, on a locally started server, and merged only by a pass;
-              # `redesign_gate` true = a task marked `redesign` without a `new_function` waits in `proposed` for the owner
+              # `redesign_gate` true = a task marked `redesign` without a `new_function` is not created (the owner is not asked)
               "visible": dict(VISIBLE_DEFAULTS),
               # the PO cuts tasks ahead (owner 26.11, rework slice 9); off by default, product.yaml `cycle: {queue: {...}}`
               "queue": dict(QUEUE_DEFAULTS),
