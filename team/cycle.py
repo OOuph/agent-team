@@ -320,6 +320,7 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._not_started: list[dict[str, str]] = []           # tasks a lane of this cycle looked at and quietly did not start, with the reason
         self._role_median: dict[str, float | None] = {}       # role → median spend of a run (`cost_guard_cap`), read once per cycle
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
         self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
@@ -1467,6 +1468,13 @@ class Cycle:
             self._phase_execute()
         finally:
             self._cancel_batch_timer()
+            if not self.n_executed and self._not_started and not self.dry_run:
+                # one record per cycle that started nothing although tasks were ready: what each seat's task waited for
+                try:
+                    self.store.event("execute.idle", self.cycle_id, "dispatcher", {"not_started": self._not_started[:20]})
+                    log.info("%s: execute started nothing: %s", self.p.slug, "; ".join(f"{x['task']} ({x['role']}): {x['why']}" for x in self._not_started[:10]))
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("%s: execute.idle not recorded: %s", self.p.slug, str(exc)[:200])
             try:
                 self.deploy_batch("end of the execute phase")
             except Exception as exc:  # noqa: BLE001 — the merged tasks stay pending; the next cycle deploys them first
@@ -1490,6 +1498,10 @@ class Cycle:
             self.sweep_work_dirs()
         except Exception as exc:  # noqa: BLE001 — the same: a full disk is worse, but the tasks come first
             log.warning("%s: sweep of old cycle folders failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
+        try:
+            self.normalize_roles()                    # `artist` → `designer`; a role without a seat is said aloud
+        except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the cycle its execute phase
+            log.warning("%s: roles of the ready tasks not checked: %s", self.p.slug, str(exc)[:200])
         slots = self.execute_slots()
         used: dict[str, int] = {}
         if self.lanes.parallel and self.flow.refill and not self.dry_run:
@@ -1552,6 +1564,43 @@ class Cycle:
     def seat_key(role: str, slots: dict[str, int]) -> str | None:
         """The seat a role's task takes: its own entry of `execute_slots`, else the shared `*`, else none."""
         return role if role in slots else ("*" if "*" in slots else None)
+
+    def why_not_startable(self, t: dict[str, Any]) -> str:
+        """One line for the log: why `startable` refused this task without recording anything itself ("" when it is not
+        one of those quiet cases — the other refusals write a transition, an observation or a question)."""
+        if t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review") and not (t.get("results") or [{}])[-1].get("status") == "partial":
+            return f"a run holds it ({t.get('assignee_run')})"
+        if t.get("state") == "ready" and self.open_question_blocks(t):
+            return f"its question {t.get('blocked_by')} is still open"
+        nb = parse_ts(t.get("not_before"))
+        if nb and _now() < nb:
+            return f"scheduled for {nb.isoformat(timespec='minutes')} (`not_before`)"
+        if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+            return f"waits for {', '.join(str(d) for d in unmet_dependencies(self.store, t))[:120]} (`depends_on`)"
+        return ""
+
+    def normalize_roles(self) -> None:
+        """Before the seats are filled: a ready task whose role is a product's word for a role (`artist`) gets the role's
+        name, and a task for a role nobody can run is said aloud — a warning and one observation for the PO. Until 26.11
+        such a task simply never got a seat (ai-battles T-0531, set by the owner, waited in silence)."""
+        slots = self.execute_slots()
+        for t in self.store.tasks(["ready", "in_progress"]):
+            role = str(t.get("role") or "developer")
+            canon = canonical_role(role)
+            if canon != role:
+                t["role"] = canon
+                t.setdefault("history", []).append({"ts": utcnow(), "actor": "dispatcher", "from": t.get("state"), "to": t.get("state"),
+                                                    "note": f"role `{role}` is the `{canon}` role: renamed so the task gets its seat"})
+                self.store.save_task(t)
+                log.info("%s: %s: role `%s` → `%s`", self.p.slug, t["id"], role, canon)
+                role = canon
+            if role not in EXEC_ROLES or self.seat_key(role, slots) is None:
+                log.warning("%s: %s is ready for the role `%s`, which has no seat in execute_slots or cannot be run: it will not start", self.p.slug, t["id"], role)
+                if not self.dry_run:
+                    self.store.add_observation({"title": f"{t['id']} is ready for the role `{role}`, which has no seat: it will never start"[:140],
+                                                "classification": "environment_error", "source": "dispatcher", "task": t["id"], "url": self.p.site_base,
+                                                "actual": f"Roles that can run: {', '.join(EXEC_ROLES)}; seats: {', '.join(sorted(slots))}. Set the task's role to one of them or close it.",
+                                                "fingerprint": f"no-seat-{t['id']}-{role}", "run_id": f"{self.cycle_id}-execute"})
 
     def startable(self, t: dict[str, Any]) -> bool | None:
         """May the execute phase start this task now? False = no (some of the checks record why: a transition, an
@@ -1622,6 +1671,11 @@ class Cycle:
                             verdict = self.startable(t)
                             if verdict:
                                 ok = bool(self.execute_task(t))
+                            else:
+                                why = self.why_not_startable(t)
+                                if why:           # the quiet refusals: until 26.11 the lane ended here without a word
+                                    log.info("%s: %s not started: %s", self.p.slug, t["id"], why)
+                                    self._not_started.append({"task": t["id"], "role": str(t.get("role") or "developer"), "why": why})
             finally:
                 run_ok = getattr(self._tl, "run_ok", None)
                 if verdict:                       # a task that was not startable says nothing about the health of the runs
@@ -3472,6 +3526,17 @@ def closed_twin(closed: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, A
     return None
 
 
+SLOT_ROLES = ("marketer",)                 # roles whose task with a start moment is a slot (one post per channel and moment)
+ROLE_ALIASES = {"artist": "designer"}      # words products use for a role → the role's name (owner 26.11: a task for the «artist»)
+EXEC_ROLES = ("developer", "designer", "game-designer", "tester", "marketer", "analyst")   # roles `execute_task` can run
+
+
+def canonical_role(role: Any) -> str:
+    """The role's name for a word a product uses for it (`artist` → `designer`); any other word is returned as it is."""
+    r = str(role or "developer").strip().lower()
+    return ROLE_ALIASES.get(r, r)
+
+
 def duplicate_task(open_tasks: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, Any] | None:
     """The open task a proposed ready task duplicates, or None.
 
@@ -3485,7 +3550,9 @@ def duplicate_task(open_tasks: list[dict[str, Any]], rt: dict[str, Any]) -> dict
     for t in open_tasks:
         if title and _norm_title(t.get("title")) == title:
             return t
-        if nb and t.get("role") == rt.get("role") and _norm_ts(t.get("not_before")) == nb:
+        # the slot rule is for scheduled posts only: on 26.11 the PO of ai-battles scheduled three developer tasks for
+        # 00:05 UTC (spend above 80 % of the cap) and two of them were dropped here as «the same slot» as the first
+        if nb and str(rt.get("role") or "") in SLOT_ROLES and t.get("role") == rt.get("role") and _norm_ts(t.get("not_before")) == nb:
             tch = _channels_in(t.get("title", ""))
             if not ch or not tch or ch & tch:
                 return t
