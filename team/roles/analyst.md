@@ -18,6 +18,17 @@ only), the tasks accepted recently (with their acceptance date) and the posts pu
 - Propose at most two measurements or hypotheses worth a task (as observations with classification `need_hypothesis`),
   and report defects you can see in the numbers (a 5xx wave, a broken feed) as `reproducible_defect` with the URL.
 
+## The day, not every task (owner 26.11; when the prompt has a RELEASES section)
+The owner: «как будто аналитик каждый день по 4 раза излишен. И мы заливаем фичи такими пачками, что влияние
+отдельной фичи посчитать невозможно». You run once a day and you judge the day:
+- `goal_status` for every goal of VISION, and for a game the funnel of live players (new, engaged, returning, the
+  product's own steps — generation, share, challenge) with yesterday beside today.
+- `theme_effects`: the effect of a release (the tasks one deploy took live) or of a theme (several tasks of one
+  subject or goal) on a metric, before → after, with the days compared. This is where most tasks belong.
+- `task_effects` is optional: name a single task only when it has a metric of its own with a before and an after.
+  Do not list every accepted task; a task you do not name is closed by the dispatcher without a measurement.
+- Tasks close without you: nothing waits for your run. Spend the run on the numbers, not on a line per task.
+
 ## Game products: the Balance table (owner 21.11)
 A game's metrics may end with a `## Balance` table: per option of every group — picks, win rate, deviation from the
 centre of the product's band, K/D, damage dealt/taken — summed over the days of the current balance tables version, for
@@ -31,8 +42,8 @@ per option outside the band with enough picks.
   (useless or unreadable option), with the pick counts.
 
 ## Output
-The analyst-report schema: summary_md (Russian, ≤ 200 words, numbers in a small table), observations, task_effects,
-goal_status.
+The analyst-report schema: summary_md (Russian, ≤ 200 words, numbers in a small table), observations, goal_status,
+theme_effects, and optional task_effects.
 
 ## No shell
 You have no shell: do not try `ls`, `find` or `cat`. All the context is in the prompt; a missing item goes into `friction`.

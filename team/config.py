@@ -32,6 +32,7 @@ QUEUE_DEFAULTS: dict[str, Any] = {
 }
 _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
+MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -90,7 +91,11 @@ DEFAULTS: dict[str, Any] = {
               "queue": dict(QUEUE_DEFAULTS),
               # the analyst's prompt (26.11, rework slice 10): `compact_tasks` true = recently accepted tasks as a card (id, title,
               # type, goal, accepted_at, one line of the last result) instead of their full text; off by default
-              "analyst_prompt": dict(ANALYST_PROMPT_DEFAULTS)},
+              "analyst_prompt": dict(ANALYST_PROMPT_DEFAULTS),
+              # the day is measured, not every task (owner 26.11, rework slice 11): `by_day` true = accepted tasks close by
+              # themselves after measure_after_h (no-metric tasks at once), the analyst judges releases and themes, a failed
+              # analyst run is not repeated in the same window; off by default
+              "measure": dict(MEASURE_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -527,6 +532,11 @@ class Product:
     def analyst_prompt_cfg(self) -> dict[str, bool]:
         """`cycle.analyst_prompt` (rework slice 10): {compact_tasks}, off by default."""
         return self.switches("analyst_prompt", ANALYST_PROMPT_DEFAULTS)
+
+    @property
+    def measure_cfg(self) -> dict[str, bool]:
+        """`cycle.measure` (rework slice 11): {by_day}, off by default."""
+        return self.switches("measure", MEASURE_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
