@@ -85,6 +85,9 @@ cycle:
     workdir_keep_h: 24            # a finished cycle keeps the clones of its reviews and play-tests (data/work/<slug>/<cycle>/*/checkout,
                                   # */tests-run, every node_modules) this long; the folder and its logs stay for ever
                                   # (product.yaml `cycle: {parallel: {max_runs: 2}}` overrides key by key; `parallel: false` switches it off)
+  po_prompt:                      # owner 26.11, rework slice 1: what the PO's prompt carries (team/prompts.py); a product switches it on
+    compact_finished: false       # in product.yaml `cycle: {po_prompt: {...}}`. true = accepted / released / measured tasks as a card
+    stable_first: false           # (id, title, state, …, one line of the last result); true = VISION first, cycle number and spend last
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)
