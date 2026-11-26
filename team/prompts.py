@@ -746,12 +746,25 @@ def metrics_digest(files: list[Path], max_days: int = 7, balance_cfg: Any = None
     return "\n\n".join(out)
 
 
+ANALYST_KEYS = ("id", "title", "type", "goal", "accepted_at")   # what the effect of an accepted task is judged by (+ `outcome`)
+
+
+def analyst_brief(t: dict[str, Any]) -> dict[str, Any]:
+    """The card of a recently accepted task for the analyst (`cycle.analyst_prompt.compact_tasks`, rework slice 10): which
+    goal it was for, when it went live and one line of what came out — enough to look for its effect in the metrics."""
+    card = finished_brief(t)
+    return {**{k: t.get(k) for k in ANALYST_KEYS if t.get(k) not in (None, [], "")}, **({"outcome": card["outcome"]} if card.get("outcome") else {})}
+
+
 def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, str]], accepted: list[dict[str, Any]],
                    posts: list[dict[str, Any]]) -> str:
     m = "\n\n".join(txt if day == "digest" else f"--- {day} ---\n{_tail(txt, 5000)}" for day, txt in metrics) or "(no metrics files yet)"
     return (f"# ANALYST — product `{product.slug}` ({product.site_base})\n\n# VISION (goals table)\n" + product.vision()
             + "\n\n# METRICS (latest first)\n" + m
-            + "\n\n# TASKS ACCEPTED RECENTLY\n" + (_y([{**_task_brief(t), "accepted_at": t.get("accepted_at"), "released_sha": t.get("released_sha")} for t in accepted]) if accepted else "(none)")
+            + "\n\n# TASKS ACCEPTED RECENTLY\n"
+            + ((_y([analyst_brief(t) for t in accepted]) if product.analyst_prompt_cfg["compact_tasks"] else
+                _y([{**_task_brief(t), "accepted_at": t.get("accepted_at"), "released_sha": t.get("released_sha")} for t in accepted]))
+               if accepted else "(none)")
             + "\n\n# POSTS PUBLISHED\n" + (_y(posts) if posts else "(none)") + "\n")
 
 

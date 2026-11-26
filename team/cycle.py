@@ -3079,7 +3079,7 @@ class Cycle:
         effects = {e.get("task_id"): e for e in res.get("task_effects") or []}
         after = timedelta(hours=int(self.st.cycle.get("measure_after_h", 24)))
         for t in self.store.tasks(["accepted"]):
-            acc = parse_ts(t.get("accepted_at"))
+            acc = accepted_moment(t)
             if acc and _now() - acc >= after:
                 e = effects.get(t["id"], {})
                 self.store.transition(t["id"], "measured", "analyst", f"effect: {e.get('effect', 'insufficient_data')} — {e.get('evidence', '')[:200]}", effect=e.get("effect", "insufficient_data"))
@@ -3254,6 +3254,19 @@ def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
 def no_commit_count(t: dict[str, Any]) -> int:
     """Number of «developer reported done but committed nothing» records in the task's whole history (T-0043)."""
     return sum(1 for h in (t.get("history") or []) if "committed nothing" in str(h.get("note") or ""))
+
+
+def accepted_moment(t: dict[str, Any]) -> datetime | None:
+    """When the task was accepted: `accepted_at`, else the time of its last transition to `accepted` in the history —
+    a task moved there by hand (`team task move --force`) has no `accepted_at`, and the measure phase skipped such a
+    task for ever (ai-battles: five tasks of 21.11 still in `accepted` on 26.11)."""
+    acc = parse_ts(t.get("accepted_at"))
+    if acc:
+        return acc
+    for h in reversed(t.get("history") or []):
+        if isinstance(h, dict) and h.get("to") == "accepted":
+            return parse_ts(h.get("ts"))
+    return None
 
 
 def over_budget(rr: RunResult) -> bool:
