@@ -93,7 +93,7 @@ DEFAULTS: dict[str, Any] = {
               # type, goal, accepted_at, one line of the last result) instead of their full text; off by default
               "analyst_prompt": dict(ANALYST_PROMPT_DEFAULTS),
               # the day is measured, not every task (owner 26.11, rework slice 11): `by_day` true = accepted tasks close by
-              # themselves after measure_after_h (no-metric tasks at once), the analyst judges releases and themes, a failed
+              # themselves after measure_after_h (no-metric tasks at once), the analyst gives a day-to-day summary only, a failed
               # analyst run is not repeated in the same window; off by default
               "measure": dict(MEASURE_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,

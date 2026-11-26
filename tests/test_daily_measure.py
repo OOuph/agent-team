@@ -7,8 +7,9 @@ successful analyst run, 149 tasks stood there. `cycle.measure.by_day` (off by de
   * a task accepted more than `measure_after_h` ago goes to `done` by itself (effect `not_measured`) whether the analyst
     ran, failed or was not due; a task with no user metric of its own (quality, defect, design, documents, tests,
     proofs) does not wait at all;
-  * the analyst reads the day — goals, the funnel, and the effect of a release or a theme (`theme_effects`); a single
-    task is named only when it has its own before/after; `task_effects` is optional;
+  * the analyst gives the day beside the day before — the metric lines, the goals, balance, defects seen in the numbers —
+    and judges no task and no cause (owner, later the same day: «пока просто будем день ко дню мониторить, невозможно
+    особо посчитать причины роста или падения. Да их и нет»); `task_effects` is optional and not asked for;
   * a failed analyst run is not repeated in the same window."""
 from __future__ import annotations
 
@@ -56,11 +57,10 @@ class Analyst:
         return RunResult(True, self.out or {"summary_md": "day", "observations": []}, {}, 0.3, 2, None, session_id="s", duration_s=1.0)
 
 
-def test_schema_task_effects_optional_theme_effects_added():
+def test_schema_task_effects_optional_and_no_theme_effects():
     d = json.loads((SCHEMAS / "analyst-report.schema.json").read_text())
     assert "task_effects" not in d["required"] and "summary_md" in d["required"]
-    te = d["properties"]["theme_effects"]["items"]["properties"]
-    assert {"theme", "task_ids", "effect", "evidence"} <= set(te)
+    assert "theme_effects" not in d["properties"] and "release_effects" not in d["properties"]
     assert C.DEFAULTS["cycle"]["measure"] == {"by_day": False}
 
 
@@ -107,32 +107,33 @@ def test_a_failed_analyst_is_not_run_again_in_the_same_window(tmp_path: Path):
     c.store.close(); s.close()
 
 
-def test_theme_effects_reach_the_tasks_and_task_effects_still_work(tmp_path: Path):
+def test_by_day_the_analyst_is_asked_for_the_day_only(tmp_path: Path):
+    """Owner 26.11: «пока просто будем день ко дню мониторить, невозможно особо посчитать причины роста или падения.
+    Да их и нет». No task list, no effects, no causes: the numbers day to day, the goals, balance, visible defects."""
     st, p, s = _setup(tmp_path, True)
-    a, b, c_ = _acc(s, "Link slice 1", OLD), _acc(s, "Link slice 2", OLD), _acc(s, "Other", OLD)
-    out = {"summary_md": "day", "observations": [],
-           "theme_effects": [{"theme": "Challenge link", "task_ids": [a, b], "effect": "positive", "evidence": "share 0 → 14 a day"}],
-           "task_effects": [{"task_id": c_, "effect": "none", "evidence": "returns 21 → 21"}]}
-    cy = Cycle(st, p, Analyst(out=out), "c1"); cy.phase_measure(); cy.store.close()
-    assert s.task(a)["effect"] == "positive" and "Challenge link" in s.task(a)["history"][-2]["note"] and s.task(b)["state"] == "done"
-    assert s.task(c_)["effect"] == "none"
-    s.close()
-
-
-def test_prompt_groups_the_day_by_release_and_goal_when_on(tmp_path: Path):
-    st, p, s = _setup(tmp_path, True)
-    a = _acc(s, "Link slice 1", NEW, deployed_sha="aaaaaaaaaaaa1111", deployed_at=NEW)
-    b = _acc(s, "Link slice 2", NEW, deployed_sha="aaaaaaaaaaaa1111", deployed_at=NEW)
+    a = _acc(s, "Link slice 1", OLD)
     r = Analyst()
     cy = Cycle(st, p, r, "c1"); cy.phase_measure(); cy.store.close()
     pr = r.prompts[0]
-    assert "# RELEASES" in pr and "aaaaaaaaaaaa" in pr and a in pr and b in pr and "theme_effects" in pr
+    assert "# DAY TO DAY" in pr and "# TASKS ACCEPTED RECENTLY" not in pr and a not in pr and "task_effects" in pr
+    assert "# RELEASES" not in pr and "theme_effects" not in pr
+    t = s.task(a)
+    assert t["state"] == "done" and t["effect"] == "not_measured"       # closed by the dispatcher, nobody judged its effect
     st2, p2, s2 = _setup(tmp_path / "off", False)
-    _acc(s2, "x", NEW)
+    b = _acc(s2, "x", NEW)
     r2 = Analyst()
     cy = Cycle(st2, p2, r2, "c1"); cy.phase_measure(); cy.store.close()
-    assert "# RELEASES" not in r2.prompts[0]
+    assert "# DAY TO DAY" not in r2.prompts[0] and "# TASKS ACCEPTED RECENTLY" in r2.prompts[0] and b in r2.prompts[0]
     s.close(); s2.close()
+
+
+def test_by_day_an_effect_the_analyst_still_names_is_kept(tmp_path: Path):
+    st, p, s = _setup(tmp_path, True)
+    a = _acc(s, "Link slice 1", OLD)
+    out = {"summary_md": "day", "observations": [], "task_effects": [{"task_id": a, "effect": "none", "evidence": "returns 21 → 21"}]}
+    cy = Cycle(st, p, Analyst(out=out), "c1"); cy.phase_measure(); cy.store.close()
+    assert s.task(a)["effect"] == "none" and s.task(a)["state"] == "done"
+    s.close()
 
 
 def test_measure_hours_follow_the_product(tmp_path: Path):
@@ -147,4 +148,4 @@ def test_measure_hours_follow_the_product(tmp_path: Path):
 
 def test_card_says_day_and_themes():
     text = " ".join((Path(C.__file__).parent / "roles" / "analyst.md").read_text(encoding="utf-8").split())
-    assert "theme_effects" in text and "влияние отдельной фичи посчитать невозможно" in text
+    assert "DAY TO DAY" in text and "невозможно особо посчитать причины роста или падения" in text and "theme_effects" not in text

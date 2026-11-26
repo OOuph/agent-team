@@ -3096,19 +3096,16 @@ class Cycle:
                 log.warning("%s: the analyst's run failed (%s): not repeated in this window (every %d h)", self.p.slug, rr.error, every)
             return
         res = rr.structured
-        marker.write_text(f"# Analyst {day}\n\n{res.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump({k: res.get(k) for k in ('theme_effects', 'task_effects', 'goal_status') if res.get(k)}, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
+        marker.write_text(f"# Analyst {day}\n\n{res.get('summary_md', '')}\n\n```yaml\n{yaml.safe_dump({k: res.get(k) for k in ('task_effects', 'goal_status') if res.get(k)}, allow_unicode=True, sort_keys=False)}```\n", encoding="utf-8")
         for o in res.get("observations") or []:
             self.store.add_observation({**o, "source": "analyst", "run_id": f"{self.cycle_id}-analyst",
                                         "fingerprint": fingerprint("analyst", o.get("classification", ""), o.get("url", ""), o.get("title", ""))})
-        effects: dict[str, dict[str, Any]] = {}
-        for th in res.get("theme_effects") or []:     # a release or a theme: every task of the group gets the group's effect
-            for tid in th.get("task_ids") or []:
-                effects[str(tid)] = {"effect": th.get("effect"), "evidence": f"{th.get('theme')}: {th.get('evidence') or ''}"}
-        effects.update({e.get("task_id"): e for e in res.get("task_effects") or []})      # a task's own before/after wins
+        effects = {e.get("task_id"): e for e in res.get("task_effects") or []}      # optional; not asked for with `by_day`
         after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
         for t in self.store.tasks(["accepted"]):
             acc = accepted_moment(t)
-            if (acc and _now() - acc >= after) or (by_day and t["id"] in effects):
+            # by day: only a task the analyst did name is closed here with its effect; the rest is `close_unmeasured`'s
+            if (t["id"] in effects) if by_day else (acc and _now() - acc >= after):
                 e = effects.get(t["id"], {})
                 self.store.transition(t["id"], "measured", "analyst", f"effect: {e.get('effect', 'insufficient_data')} — {str(e.get('evidence') or '')[:200]}", effect=e.get("effect", "insufficient_data"))
                 self.store.transition(t["id"], "done", "dispatcher", "measured")
@@ -3138,8 +3135,8 @@ class Cycle:
     def close_unmeasured(self) -> list[str]:
         """`cycle.measure.by_day`: closing a task does not depend on the analyst. A task with no user metric of its own
         (`needs_measure`) goes `accepted → done` at once, effect `not_applicable`; any other task accepted more than
-        `measure_after_h` ago goes to `done` with `not_measured` (it runs after the analyst of the cycle, which gives a
-        task its theme's effect first). A task that waits for its deploy is left alone. Returns the ids closed."""
+        `measure_after_h` ago goes to `done` with `not_measured` (it runs after the analyst of the cycle, so an
+        effect the analyst did name is kept). A task that waits for its deploy is left alone. Returns the ids closed."""
         after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
         closed: list[str] = []
         for t in self.store.tasks(["accepted"]):

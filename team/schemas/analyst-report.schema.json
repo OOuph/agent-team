@@ -79,7 +79,7 @@
      }
     }
    },
-   "description": "optional: only a task that has its OWN metric with a before and an after; everything else is judged by theme"
+   "description": "optional. Not asked for when the prompt has a DAY TO DAY section; otherwise the effect of an accepted task that has its own before/after"
   },
   "goal_status": {
    "type": "array",
@@ -104,49 +104,6 @@
      },
      "on_track": {
       "type": "boolean"
-     }
-    }
-   }
-  },
-  "theme_effects": {
-   "type": "array",
-   "maxItems": 12,
-   "description": "the effect of a release or a theme of the day: the tasks of one deploy or of one goal judged together",
-   "items": {
-    "type": "object",
-    "additionalProperties": false,
-    "required": [
-     "theme",
-     "task_ids",
-     "effect",
-     "evidence"
-    ],
-    "properties": {
-     "theme": {
-      "type": "string",
-      "maxLength": 120,
-      "description": "what the group is: a release (its commit) or a subject, e.g. «Challenge link»"
-     },
-     "task_ids": {
-      "type": "array",
-      "maxItems": 40,
-      "items": {
-       "type": "string"
-      }
-     },
-     "effect": {
-      "type": "string",
-      "enum": [
-       "positive",
-       "none",
-       "negative",
-       "insufficient_data"
-      ]
-     },
-     "evidence": {
-      "type": "string",
-      "maxLength": 400,
-      "description": "the metric, before → after, over which days"
      }
     }
    }

@@ -756,28 +756,13 @@ def analyst_brief(t: dict[str, Any]) -> dict[str, Any]:
     return {**{k: t.get(k) for k in ANALYST_KEYS if t.get(k) not in (None, [], "")}, **({"outcome": card["outcome"]} if card.get("outcome") else {})}
 
 
-RELEASES_MAX = 20                          # deploys listed for the analyst (`cycle.measure.by_day`), newest last
-
-
-def releases_block(accepted: list[dict[str, Any]]) -> str:
-    """`# RELEASES`: the accepted tasks grouped by the deploy that took them live (`deployed_sha`), oldest first, and
-    then by goal — the groups the analyst judges instead of single tasks (rework slice 11)."""
-    by_sha: dict[str, list[dict[str, Any]]] = {}
-    for t in accepted:
-        if t.get("deployed_sha"):
-            by_sha.setdefault(str(t["deployed_sha"])[:12], []).append(t)
-    rel = sorted(by_sha.items(), key=lambda kv: min(str(x.get("deployed_at") or x.get("accepted_at") or "") for x in kv[1]))[-RELEASES_MAX:]
-    by_goal: dict[str, list[str]] = {}
-    for t in accepted:
-        by_goal.setdefault(str(t.get("goal") or "—"), []).append(t["id"])
-    lines = [f"- {sha} · live {min(str(x.get('deployed_at') or '?') for x in ts)[:16]} · {len(ts)} task(s): {', '.join(x['id'] for x in ts)}" for sha, ts in rel]
-    goals = [f"- {g}: {len(ids)} task(s): {', '.join(ids[:40])}" for g, ids in sorted(by_goal.items())]
-    return ("\n\n# RELEASES (what went live together) AND GOALS — judge these groups in `theme_effects`\n"
-            "Features go live in batches, so the effect of one task cannot be told apart from its neighbours'. Give the effect of a release "
-            "or of a theme (several tasks of one subject or goal) on a metric, before → after. Name a single task in `task_effects` only when "
-            "it has a metric of its own. No before/after → `insufficient_data`, never a guess.\n"
-            + ("By release:\n" + "\n".join(lines) if lines else "By release: (no deploy recorded on these tasks)")
-            + "\nBy goal:\n" + ("\n".join(goals) if goals else "(none)"))
+DAY_TO_DAY = (
+    "\n\n# DAY TO DAY (this run is the product's one measurement of the day)\n"
+    "Give the day beside the day before, nothing more: the metric lines you already write (for a game: battles started and finished, "
+    "players, returns, latency, errors, search; live players as their own line once the metrics carry it), the state of every goal of "
+    "VISION in one line each, one line on balance, and the defects the numbers show. Do not judge the effect of tasks or releases and do "
+    "not return `task_effects`: features go live in batches and the cause of a rise or a fall cannot be told from these numbers. Name a "
+    "cause only when the numbers show it directly (an error wave at the hour of a deploy, a broken counter).\n")
 
 
 def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, str]], accepted: list[dict[str, Any]],
@@ -785,11 +770,11 @@ def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, s
     m = "\n\n".join(txt if day == "digest" else f"--- {day} ---\n{_tail(txt, 5000)}" for day, txt in metrics) or "(no metrics files yet)"
     return (f"# ANALYST — product `{product.slug}` ({product.site_base})\n\n# VISION (goals table)\n" + product.vision()
             + "\n\n# METRICS (latest first)\n" + m
-            + "\n\n# TASKS ACCEPTED RECENTLY\n"
-            + ((_y([analyst_brief(t) for t in accepted]) if product.analyst_prompt_cfg["compact_tasks"] else
-                _y([{**_task_brief(t), "accepted_at": t.get("accepted_at"), "released_sha": t.get("released_sha")} for t in accepted]))
-               if accepted else "(none)")
-            + (releases_block(accepted) if accepted and product.measure_cfg["by_day"] else "")
+            + (DAY_TO_DAY if product.measure_cfg["by_day"] else
+               "\n\n# TASKS ACCEPTED RECENTLY\n"
+               + ((_y([analyst_brief(t) for t in accepted]) if product.analyst_prompt_cfg["compact_tasks"] else
+                   _y([{**_task_brief(t), "accepted_at": t.get("accepted_at"), "released_sha": t.get("released_sha")} for t in accepted]))
+                  if accepted else "(none)"))
             + "\n\n# POSTS PUBLISHED\n" + (_y(posts) if posts else "(none)") + "\n")
 
 
