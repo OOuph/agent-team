@@ -71,6 +71,27 @@ INCONCLUSIVE_LIMIT = 3                 # `inconclusive` verdicts of one released
 NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what the task needs and says what (rework slice 2a)
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
+# Three unproven reviews (rework slice 2b, `cycle.escalation.review_return`): what the role is told per reason word of
+# team/play.py INCONCLUSIVE_REASONS when the task comes back to it …
+REVIEW_RETURN_TODO = {
+    "no_tests_live": "No test of this task runs against the deployed host. Give every acceptance criterion a scenario the tester can run: "
+                     "tag it for the live host, or make sure the spec runs on the local test server (`team-play test <spec> --local`).",
+    "no_tests": "The spec the task names holds no test the runner finds. Add the spec (or fix its name and tags) so that "
+                "`team-play test <spec>` runs at least one test per acceptance criterion.",
+    "no_test_for_criterion": "At least one acceptance criterion has no scenario. Add a spec scenario for each criterion the review lists as "
+                             "not met, with `data-testid` hooks on what it reads.",
+    "not_observable": "The result cannot be seen from outside. Make it observable: a `data-testid`, a line in the server log or the metrics, "
+                      "a screenshot the tester can take — and say in `how_to_verify` exactly where to look.",
+    "run_timeout": "The check does not finish inside the tester's time limit. Make the scenario shorter or split it (one spec per "
+                   "criterion, no loops over random starts) so one spec runs in well under ten minutes.",
+    "other": "The review could not prove the result for the reason it gives below. Remove that obstacle in the repository (a test, a hook, "
+             "a report the acceptance asks for) and say in `how_to_verify` how the proof is obtained.",
+}
+# … and the reasons that are the environment's, not the role's: the review gets another try instead
+REVIEW_RETRY_REASONS = ("lock_timeout", "server_not_started", "test_tooling")
+REVIEW_RETURN_MAX = 2                      # returns to work per task; the next third unproven review is the old rule (blocked + PO)
+REVIEW_ENV_RETRIES = 2                     # extra reviews per task after an environment reason; then the old rule
+REVIEW_RETURN_EVENT, REVIEW_RETRY_EVENT = "review.returned", "review.retry"
 INCONCLUSIVE_ACCEPT, INCONCLUSIVE_ASK = "accept", "ask"   # product.yaml review.inconclusive; default by profile (Cycle.inconclusive_policy)
 DESIGN_TEST_SUFFIXES = (".json", ".yaml", ".yml", ".csv")   # game-designer files the code reads: the repository tests run before their merge
 DESIGN_TESTS_EVENT = "design.tests_failed"
@@ -880,7 +901,7 @@ class Cycle:
         if not (rr.ok and rr.structured):
             t["review_inconclusive"] = int(t.get("review_inconclusive") or 0) + 1
             self.store.save_task(t)
-            if t["review_inconclusive"] >= 3:
+            if t["review_inconclusive"] >= 3 and not self.retry_review(t, "test_tooling", f"the review run failed: {rr.error}"):
                 self.store.transition(t["id"], "blocked", "reviewer", f"review failed to run 3×: {rr.error}", force=True)
             return
         v = rr.structured
@@ -919,6 +940,11 @@ class Cycle:
                     # owner 22.11 (ai-battles day review): on 22.11 ten tasks were accepted by this rule with nobody having
                     # seen the result, the description field among them. No proof → no acceptance: the PO decides.
                     why = _short_text(v.get("first_failure") or v.get("limits") or v.get("summary"), 300)
+                    if self.return_from_review(t, v, why):
+                        return
+                    returned = int(t.get("review_returns") or 0)
+                    if returned:
+                        why = f"{why} (already returned to work {returned} time(s) for this, and still unproven)"
                     self.store.transition(t["id"], "blocked", "reviewer",
                                           f"inconclusive {INCONCLUSIVE_LIMIT}× [{v['inconclusive_reason']}]: not accepted without proof: {why}"[:400],
                                           force=True, blocked_by="review")
@@ -928,6 +954,48 @@ class Cycle:
                                             "or close the task with close_tasks; do not treat it as accepted.")
                 else:
                     self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    # three unproven reviews: back to work with a named reason (owner 26.11, rework slice 2b) ---------------------------
+
+    def retry_review(self, t: dict[str, Any], reason: str, why: str) -> bool:
+        """An unproven review whose reason is the environment's (the e2e lock, a server that did not start, the tooling):
+        the task stays `released` and is reviewed again — `REVIEW_ENV_RETRIES` times per task. True = handled."""
+        if not self.p.escalation_cfg["review_return"]:
+            return False
+        used = int(t.get("review_env_retries") or 0)
+        if used >= REVIEW_ENV_RETRIES:
+            return False
+        t = self.store.task(t["id"]) or t
+        t["review_env_retries"], t["review_inconclusive"] = used + 1, INCONCLUSIVE_LIMIT - 1
+        t.setdefault("history", []).append({"ts": utcnow(), "actor": "dispatcher", "from": t.get("state"), "to": t.get("state"),
+                                            "note": f"review retried ({used + 1} of {REVIEW_ENV_RETRIES}): unproven 3× [{reason}], the environment's: {why}"[:500]})
+        self.store.save_task(t)
+        self.store.event(REVIEW_RETRY_EVENT, t["id"], "dispatcher", {"reason": reason, "n": used + 1, "why": why[:200]})
+        log.info("%s: %s: unproven 3× [%s] is the environment's — review retried (%d of %d)", self.p.slug, t["id"], reason, used + 1, REVIEW_ENV_RETRIES)
+        return True
+
+    def return_from_review(self, t: dict[str, Any], v: dict[str, Any], why: str) -> bool:
+        """The third `inconclusive` of a released task, `cycle.escalation.review_return` on. The SAME task goes back to
+        its role (`in_progress`, like a failed review) with the reason word and what to do about it — no block, no PO
+        question, no new «proof» task. True = handled; False = the old rule applies (switch off, or the task was already
+        returned `REVIEW_RETURN_MAX` times)."""
+        if not self.p.escalation_cfg["review_return"]:
+            return False
+        reason = str(v.get("inconclusive_reason") or "other")
+        if reason in REVIEW_RETRY_REASONS:
+            return self.retry_review(t, reason, why)
+        used = int(t.get("review_returns") or 0)
+        if used >= REVIEW_RETURN_MAX:
+            return False
+        todo = REVIEW_RETURN_TODO.get(reason) or REVIEW_RETURN_TODO["other"]
+        last = {**{k: v.get(k) for k in ("criteria", "summary")}, "verdict": "unproven", "return_reason": reason,
+                "first_failure": f"NOT PROVEN, reason `{reason}`: three reviews could not confirm this task, so it is back with you. {todo} "
+                                 f"The reviewer's words: {why}"}
+        self.store.transition(t["id"], "in_progress", "reviewer", f"returned from review: unproven {INCONCLUSIVE_LIMIT}× [{reason}]: {why}"[:400],
+                              force=True, review_returns=used + 1, review_inconclusive=0, last_review=last, assignee_run=None)
+        self.store.event(REVIEW_RETURN_EVENT, t["id"], "reviewer", {"reason": reason, "n": used + 1, "why": why[:200]})
+        log.info("%s: %s: unproven 3× [%s] → back to work (%d of %d)", self.p.slug, t["id"], reason, used + 1, REVIEW_RETURN_MAX)
+        return True
 
     def inconclusive_policy(self) -> str:
         """What the third `inconclusive` verdict of a released task does. product.yaml `review: {inconclusive: accept | ask}`;

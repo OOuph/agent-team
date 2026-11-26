@@ -42,6 +42,10 @@ repository checkout you were started in (the task branch is already checked out)
 - Commit on the current branch with a clear message that starts with the task id. Do not switch branches, do not push,
   do not touch `.git` configuration, do not run anything with network side effects besides `git` on the local checkout
   and the package registries the README allows.
+- A task that comes back with `verdict: unproven` under REVIEW THAT FAILED was not rejected: three reviews could not
+  confirm it. The block names the reason word (`no_test_for_criterion`, `not_observable`, `run_timeout` …) and what to
+  do; do exactly that — usually a scenario or a hook, not a rewrite of the feature — and say in `how_to_verify` how the
+  proof is obtained now.
 - **Never guess what the task does not say** (owner 26.11). When you lack something the task needs — a data source, the
   meaning of an acceptance criterion, a decision between two readings, a permission, a file the task names and the
   repository does not have — stop early with `status: needs_context` and `missing`: up to five precise items, each one
