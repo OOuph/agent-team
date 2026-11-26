@@ -154,6 +154,11 @@ framework:                        # self-improvement: friction register → retr
     - run-cycle.sh
     - watchdog.sh
     - DEPUTY.md                   # the owner's mandate for the deputy role: his words, not the loop's
+  guard:                          # owner 26.11, rework slice 7 (team/canary.py); both off = the merge rule of before
+    canary_report: false          # true = the merge reads the canary's report back: none, unparsable, another revision, older than
+                                  # this run, failed or empty → no merge, the PR waits for the owner
+    tests_strict: false           # true = a PR that changes or deletes EXISTING test lines, or the canary / merge-gate code, waits for
+                                  # the owner (one line to the ops chat); new files and new lines under tests/ merge by themselves
   max_usd_per_run: 2.0
 
 gsc:                              # owner 10.11: Google Search Console via a service account (restricted user), `team gsc` daily

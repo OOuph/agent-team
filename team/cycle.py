@@ -35,6 +35,7 @@ from .runner import Runner, RunResult, front_matter
 from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
 from .runner import KILLED_LOOP, killed_kind
+from . import canary as canary_mod
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -301,6 +302,8 @@ class Cycle:
         self._refill_deadline: float | None = None            # monotonic; set by a parallel execute phase with `cycle.flow.refill`
         self._refill_last: float | None = None                # monotonic; the latest moment refill may stay open for running reviews
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
+        self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
+        self.canary_started: str | None = None                # ISO time the release that ran it began
         self._role_median: dict[str, float | None] = {}       # role → median spend of a run (`cost_guard_cap`), read once per cycle
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
         self._not_done: set[str] = set()                      # tasks this cycle looked at and did not carry through: not «waiting work» for a chain
@@ -2543,12 +2546,25 @@ class Cycle:
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
         no_reason = bool(tests_changed) and not gitops.has_tests_change_reason(body)
-        if not fw.get("auto_merge") or protected or no_reason:
-            why = (f"protected files {', '.join(protected[:5])}" if protected else
+        guard = canary_mod.guard_settings(fw)                          # rework slice 7: off by default
+        strict = self.tests_guard(repo, tests_changed) if guard["tests_strict"] and fw.get("auto_merge") and not protected else ""
+        if not fw.get("auto_merge") or protected or no_reason or strict:
+            why = (f"protected files {', '.join(protected[:5])}" if protected else strict if strict else
                    f"tests edited/deleted without a 'tests-change-reason: F-xxxx' line: {', '.join(tests_changed[:5])}" if no_reason else "auto_merge off")
             self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url} ({why})", force=True, pr_url=url, assignee_run=None)
+            if strict:
+                self.tell_owner(f"agent-team {t['id']}: PR {url} ждёт вас, само не сольётся — {strict}")
             return True
+        self.canary_report, self.canary_started = None, utcnow()
         ok, note = self.canary(repo, str(fw.get("canary_product") or ""))
+        if ok and guard["canary_report"] and str(fw.get("canary_product") or ""):
+            # the verdict is read back from the report the dispatcher wrote: none, unparsable, another revision, older than
+            # this run, failed or empty → no merge (an empty report is not «all is well»)
+            ok, why_rep = canary_mod.check_report(self.canary_report, gitops.head(repo), self.canary_started)
+            note = why_rep if not ok else f"{note}; {why_rep}"
+            if not ok:
+                self.store.event("canary.report_refused", t["id"], "dispatcher", {"text": why_rep[:300], "pr": url})
+                self.tell_owner(f"agent-team {t['id']}: PR {url} не слит — {why_rep}")
         try:
             gitops.update_pull_request_body(url, prfacts.with_canary(body, ("passed" if ok else "FAILED") + f": {note[:200]}"))
         except gitops.GitError as exc:
@@ -2593,12 +2609,26 @@ class Cycle:
         the candidate's phases run end to end on real data without doing anything to the world."""
         if not product:
             return True, "no canary product configured"
+        ok, note, facts = self._canary_run(repo, product)
+        try:                                        # the report the merge gate reads back (team/canary.py); written by THIS code, not the candidate
+            self.canary_report = canary_mod.report_path(self.st.data_dir, f"{self.cycle_id}-canary")
+            canary_mod.write_report(self.canary_report, cycle=f"{self.cycle_id}-canary", product=product, sha=gitops.head(repo),
+                                    started=getattr(self, "canary_started", None) or facts["started"], ok=ok, note=note,
+                                    artefacts=facts.get("artefacts") or [], phases=facts.get("phases") or [], rc=facts.get("rc"))
+        except Exception as exc:  # noqa: BLE001 — without a report the gate (when on) refuses the merge; the verdict itself stands
+            log.warning("canary report not written: %s", exc)
+            self.canary_report = None
+        return ok, note
+
+    def _canary_run(self, repo: Path, product: str) -> tuple[bool, str, dict[str, Any]]:
+        """The canary cycle itself: (passed, note, facts for the report: started, rc, phases, artefacts)."""
+        facts: dict[str, Any] = {"started": utcnow(), "rc": None, "phases": [], "artefacts": []}
         cyc = f"{self.cycle_id}-canary"
         root = self.st.data_dir / "canary" / cyc
         try:
             src = next(p for p in self.st.product_dirs() if p.name == product)
         except StopIteration:
-            return False, f"canary product {product!r} not found"
+            return False, f"canary product {product!r} not found", facts
         if root.exists():
             shutil.rmtree(root)
         (root / "products").mkdir(parents=True)
@@ -2621,23 +2651,25 @@ class Cycle:
                                 env=env, capture_output=True, text=True, timeout=600)
         except subprocess.TimeoutExpired:
             shutil.rmtree(root, ignore_errors=True)
-            return False, "canary timed out"
+            return False, "canary timed out", facts
         try:
             artefacts = self._canary_artefacts(root / "products" / product, before)
         finally:
             shutil.rmtree(root, ignore_errors=True)
         out = (cp.stdout + cp.stderr)
+        facts.update(rc=cp.returncode, artefacts=artefacts)
         if cp.returncode != 0 or "Traceback" in out:
-            return False, f"rc={cp.returncode} " + out[-800:]
+            return False, f"rc={cp.returncode} " + out[-800:], facts
         m = re.search(r"phases \[([^\]]*)\]", out)
         phases = [x.strip(" '") for x in m.group(1).split(",")] if m else []
+        facts["phases"] = phases
         missing = [ph for ph in PHASES if ph not in phases]
         if missing:
-            return False, f"phases missing: {missing}; " + out[-500:]
+            return False, f"phases missing: {missing}; " + out[-500:], facts
         # only a real phase failure counts: the event the cycle writes, or the log line of a phase that raised.
         # (12:07: a dry-run warning "deputy run failed: no run" matched the old substring check and failed PR #32 falsely)
         if "phase.error" in out or re.search(r"phase \w+ failed", out):
-            return False, "phase error: " + out[-800:]
+            return False, "phase error: " + out[-800:], facts
         # T-0165 (voice:2026-11-18:P1): a cycle that merely ended is not enough; it must have produced a real result
         if not artefacts:
             note = f"{CANARY_EMPTY_REASON}: cycle {cyc} of {product} ended, but wrote no non-empty report or task result"
@@ -2645,8 +2677,45 @@ class Cycle:
                 self.store.event("canary.empty", product, "dispatcher", {"text": note})
             except Exception as exc:  # recording must never mask the verdict
                 log.warning("could not record canary.empty: %s", exc)
-            return False, note
-        return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases, {len(artefacts)} result artefact(s)"
+            return False, note, facts
+        return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases, {len(artefacts)} result artefact(s)", facts
+
+    def protected_functions_touched(self, repo: Path) -> list[str]:
+        """`path:function` of the protected functions (the canary, the merge gate: team/canary.py PROTECTED_FUNCTIONS,
+        team.yaml `framework.protected_functions`) whose text the candidate branch changes against the base branch."""
+        fw = dict(self.st.raw.get("framework") or {})
+        prot = fw.get("protected_functions") if isinstance(fw.get("protected_functions"), dict) else canary_mod.PROTECTED_FUNCTIONS
+        ref = f"origin/{self.p.repo_branch}" if gitops.has_remote(repo) else self.p.repo_branch
+        base_ref = gitops.git(repo, "merge-base", ref, "HEAD", check=False).strip() or ref
+
+        def text(rev: str, path: str) -> str | None:
+            try:
+                return gitops.git(repo, "show", f"{rev}:{path}")
+            except gitops.GitError:
+                return None
+        return canary_mod.protected_functions_changed({p: text(base_ref, p) for p in prot}, {p: text("HEAD", p) for p in prot}, prot)
+
+    def tests_guard(self, repo: Path, tests_changed: list[str]) -> str:
+        """`framework.guard.tests_strict` (owner 26.11: «новые тесты сливаются сами; изменение и удаление существующих тестов
+        и кода пробного прогона ждёт владельца»): "" when the change only adds — new files, new lines under tests/ — else
+        one line saying what waits for the owner. A `tests-change-reason` line does not replace him here."""
+        if tests_changed:
+            return f"existing tests changed or deleted: {', '.join(tests_changed[:5])}"
+        funcs = self.protected_functions_touched(repo)
+        if funcs:
+            return f"canary code changed: {', '.join(funcs[:5])}"
+        return ""
+
+    def tell_owner(self, text: str) -> None:
+        """One line to the owner's ops chat (the bot of the 12-hour report); never raises, silent without its settings."""
+        line = " ".join(str(text).split())[:600]
+        try:
+            from . import billing
+            if not self.dry_run:
+                billing.owner_notify()(line)
+            self.store.event("owner.told", self.p.slug, "dispatcher", {"text": line[:300]})
+        except Exception as exc:  # noqa: BLE001
+            log.warning("%s: could not tell the owner: %s", self.p.slug, str(exc)[:200])
 
     @staticmethod
     def _canary_artefacts(pdir: Path, before: dict[str, str]) -> list[str]:
