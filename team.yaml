@@ -88,6 +88,9 @@ cycle:
   po_prompt:                      # owner 26.11, rework slice 1: what the PO's prompt carries (team/prompts.py); a product switches it on
     compact_finished: false       # in product.yaml `cycle: {po_prompt: {...}}`. true = accepted / released / measured tasks as a card
     stable_first: false           # (id, title, state, …, one line of the last result); true = VISION first, cycle number and spend last
+  escalation:                     # owner 26.11, rework slice 2: a role that lacks what its task needs asks instead of guessing
+    needs_context: false          # true = its `needs_context` result is one question to the PO, the task waits, the stop is not a
+                                  # failure, and the answer travels to the role; false = the old `blocked` + `question` path
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

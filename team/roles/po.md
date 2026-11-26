@@ -55,6 +55,13 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
 - Answer every open question addressed to you in `answers`. Decide inside VISION; when the answer needs a change of
   goals, budget, promises, channels or anything VISION reserves for the owner — put it into `owner_questions` and give
   the role the safest interim answer.
+- **A role that stopped with `needs_context`** (owner 26.11: «агент без нужных данных останавливается и эскалирует PO;
+  у PO либо есть ответ, либо он спрашивает владельца») sends you one question that lists what it lacks. Answer every
+  point from VISION, the design documents and the owner's recorded decisions, concretely enough to act on — your
+  answer is shown to the role when the task runs again. A point only the owner can decide goes into `owner_questions`
+  with the task's `task_id` (the task then waits for the owner) and your answer says which point went there; never
+  cover such a point with a guess, and never answer «use your judgement». If the list shows the task itself is wrong,
+  close it and create the right one instead of answering.
 - **A pending decision never idles the team** (owner 23.11: «сделать не в том приоритете точно нужную задачу важнее, чем 100% верно с
   моим апрувом выбрать приоритет»). While a question to the owner is open, or the operator waits for his answer, the
   approved tasks go on: keep the seats full with Ready tasks that are certainly needed. A question about ORDER or

@@ -42,9 +42,13 @@ repository checkout you were started in (the task branch is already checked out)
 - Commit on the current branch with a clear message that starts with the task id. Do not switch branches, do not push,
   do not touch `.git` configuration, do not run anything with network side effects besides `git` on the local checkout
   and the package registries the README allows.
-- If the task cannot be done inside its scope (a missing data source, an unclear acceptance criterion, a permission you
-  do not have), stop early with `status: blocked` and one precise `question`. A half-done task on the branch is worse
-  than a question.
+- **Never guess what the task does not say** (owner 26.11). When you lack something the task needs — a data source, the
+  meaning of an acceptance criterion, a decision between two readings, a permission, a file the task names and the
+  repository does not have — stop early with `status: needs_context` and `missing`: up to five precise items, each one
+  thing somebody can answer in a sentence («which of `a.json` / `b.json` holds the live prices», not «the task is
+  unclear»). The dispatcher turns the list into one question to the PO, the task waits for the answer and the stop is
+  not counted against it; the answer comes back in the prompt as ANSWERS TO THIS TASK'S QUESTIONS — act on it and do
+  not raise the same point again. A half-done task built on a guess is worse than a stop.
 - If the PR edits or deletes any file under `tests/`, the result `summary` has a line of its own that starts with
   `tests-change-reason: F-xxxx` followed by the reason (F-xxxx = the register entry that justifies the change). The
   dispatcher builds the PR body from the summary and the auto-merge gate reads that line; without it a legitimate test
@@ -99,7 +103,7 @@ repository checkout you were started in (the task branch is already checked out)
   (those are proposals). The retro role reads these to improve the framework; an empty list is fine.
 
 ## Output
-The task-result schema: status (done / partial / blocked), a summary, the list of changes, how_to_verify (public URLs
+The task-result schema: status (done / partial / blocked / needs_context with `missing`), a summary, the list of changes, how_to_verify (public URLs
 after deployment and what should be visible; for repo-only deliverables — code, tests, README — the
 `https://raw.githubusercontent.com/<org>/<repo>/<commit>/<path>` URL of each changed file), self_check per acceptance criterion with evidence, proposals, the branch
 and the commit hash (`git rev-parse HEAD`). English.

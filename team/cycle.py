@@ -68,6 +68,9 @@ QUESTION_PROFILE_CHARS = 230                              # characters per run i
 QUESTION_MAX_CHARS = 1480                                 # the store keeps 1500 characters of a question: the profile lines are cut to fit
 
 INCONCLUSIVE_LIMIT = 3                 # `inconclusive` verdicts of one released task before the rule below applies
+NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what the task needs and says what (rework slice 2a)
+NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
+NEEDS_CONTEXT_EVENT = "task.needs_context"
 INCONCLUSIVE_ACCEPT, INCONCLUSIVE_ASK = "accept", "ask"   # product.yaml review.inconclusive; default by profile (Cycle.inconclusive_policy)
 DESIGN_TEST_SUFFIXES = (".json", ".yaml", ".yml", ".csv")   # game-designer files the code reads: the repository tests run before their merge
 DESIGN_TESTS_EVENT = "design.tests_failed"
@@ -1668,6 +1671,44 @@ class Cycle:
         finally:
             self.store.release(t["id"])
 
+    # a role without what the task needs: a question to the PO instead of a guess (owner 26.11, rework slice 2a) -------
+
+    def context_result(self, res: dict[str, Any]) -> dict[str, Any]:
+        """One meaning for «I cannot go on without …», whichever way the role said it. With `cycle.escalation.needs_context`
+        on: `needs_context`, and the old `blocked` + `question`, both become `needs_context` with the list `missing`. Off:
+        `needs_context` becomes the old `blocked` + `question`, so the result is handled exactly as before."""
+        status = str(res.get("status") or "")
+        missing = [" ".join(str(m).split())[:300] for m in (res.get("missing") or []) if str(m).strip()][:NEEDS_CONTEXT_ITEMS]
+        if self.p.escalation_cfg["needs_context"]:
+            if status == NEEDS_CONTEXT or (status == "blocked" and (missing or str(res.get("question") or "").strip())):
+                return {**res, "status": NEEDS_CONTEXT,
+                        "missing": missing or [" ".join(str(res.get("question") or res.get("summary") or "").split())[:300]]}
+            return res
+        if status == NEEDS_CONTEXT:
+            return {**res, "status": "blocked", "question": str(res.get("question") or "; ".join(missing) or res.get("summary") or "")[:800]}
+        return res
+
+    def ask_for_context(self, t: dict[str, Any], role: str, res: dict[str, Any]) -> dict[str, Any]:
+        """The role's `missing` list → ONE question to the PO that blocks the task until it is answered. The attempt is
+        not a failure: nothing is added to `attempts`, and `needs_context` is not among `replan.FAILED_STATUSES`."""
+        missing = [str(m) for m in (res.get("missing") or [])][:NEEDS_CONTEXT_ITEMS]
+        question = (f"Task {t['id']} ({_short_text(t.get('title'), 100)}): the {role} stopped without guessing. It lacks:\n"
+                    + "\n".join(f"- {m}" for m in missing)
+                    + "\nAnswer every point from VISION, the design documents and the owner's recorded decisions: your answer is "
+                      f"shown to the {role} when the task runs again. A point only the owner can decide goes into `owner_questions` "
+                      f"with `task_id: {t['id']}` (the task then waits for the owner); never answer such a point with a guess.")
+        q = self.store.ask(from_=role, to="po", question=question[:1500], task_id=t["id"], blocks=[t["id"]])
+        self.store.event(NEEDS_CONTEXT_EVENT, t["id"], role, {"question": q["id"], "missing": missing})
+        log.info("%s: %s: %s needs context (%d point(s)) → %s to the PO, the task waits", self.p.slug, t["id"], role, len(missing), q["id"])
+        return q
+
+    def task_answers(self, t: dict[str, Any]) -> list[dict[str, Any]]:
+        """Answered questions this task was stopped on, oldest first — for the role's prompt. Empty while the switch is off."""
+        if not self.p.escalation_cfg["needs_context"]:
+            return []
+        qs = [q for q in self.store.questions(["answered"]) if t["id"] in (q.get("blocks") or []) or q.get("task") == t["id"]]
+        return sorted(qs, key=lambda q: str(q.get("answered") or ""))
+
     def exec_developer(self, t: dict[str, Any], run_id: str, role: str = "developer") -> bool:
         clone = self.p.repo_dir
         with self.repo_lock:
@@ -1687,7 +1728,7 @@ class Cycle:
         port = playtest.free_port() if (self.p.repo_kind == "service" or self.p.profile == "game") else None
         prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
                                           budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo),
-                                          conflict=conflict, base=self.p.repo_branch, port=port)
+                                          conflict=conflict, base=self.p.repo_branch, port=port, answers=self.task_answers(t))
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
@@ -1706,7 +1747,7 @@ class Cycle:
             else:
                 self.store.transition(t["id"], "ready", "dispatcher", note[:300], force=True, attempts=attempts, assignee_run=None)
             return True
-        res = rr.structured
+        res = self.context_result(rr.structured)
         res["run_id"] = run_id
         if res.get("status") == "partial" and not replan.is_probe(t):
             try:                                        # uncommitted work of a partial result survives the next attempt's reset
@@ -1723,6 +1764,9 @@ class Cycle:
         for pr in res.get("proposals") or []:
             self.store.add_observation({"title": str(pr)[:140], "classification": "need_hypothesis", "source": "developer", "task": t["id"],
                                         "actual": str(pr)[:400], "url": self.p.site_base, "fingerprint": fingerprint("dev", "proposal", "", str(pr))})
+        if res.get("status") == NEEDS_CONTEXT:
+            self.ask_for_context(t, role, res)
+            return True
         if res.get("status") == "blocked":
             self.store.ask(from_="developer", to="po", question=str(res.get("question") or res.get("summary"))[:1200], task_id=t["id"])
             return True
@@ -2129,7 +2173,7 @@ class Cycle:
                 gitops.park_on_base(repo, self.p.repo_branch)
             gdd_dir = repo if has_repo else self.p.dir
             read_sha = gitops.head(repo) if has_repo else None     # the base commit whose documents the role is shown
-            prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store)
+            prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store, answers=self.task_answers(t))
             partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         work = self.p.work_dir / self.cycle_id / f"gd-{t['id']}"
@@ -2159,6 +2203,11 @@ class Cycle:
         result = {"run_id": run_id, "status": "done" if files else "blocked", "summary": str(res.get("summary") or "")[:1200],
                   "changes": [f["path"] for f in files], "how_to_verify": [], "self_check": [],
                   "balance_changes": res.get("balance_changes") or [], "friction": res.get("friction") or []}
+        if not files and self.p.escalation_cfg["needs_context"] and [m for m in (res.get("missing") or []) if str(m).strip()]:
+            result = self.context_result({**result, "status": NEEDS_CONTEXT, "missing": res.get("missing")})
+            self.store.add_result(t["id"], result)
+            self.ask_for_context(t, "game-designer", result)
+            return True
         if not files:
             self.store.add_result(t["id"], result)
             self.store.ask(from_="game-designer", to="po", question=f"Task {t['id']}: the game designer returned no files "
@@ -2457,7 +2506,7 @@ class Cycle:
         if editor_summary:
             res["editor"] = editor_summary[:600]
         self.store.add_result(t["id"], res)
-        if res.get("status") == "blocked" or posted == 0:
+        if res.get("status") in ("blocked", NEEDS_CONTEXT) or posted == 0:
             why = str(res.get("question") or f"nothing was posted: {res.get('summary', '')}")
             if editor_summary:
                 why = f"editor: {editor_summary} / marketer: {res.get('summary', '')}"
@@ -2491,7 +2540,7 @@ class Cycle:
         res["posted"] = 0
         src = work / prompts.MARKETING_PLAN
         body = src.read_text(encoding="utf-8").strip() if src.exists() else ""
-        if res.get("status") == "blocked" or len(body) < MIN_PLAN_CHARS:
+        if res.get("status") in ("blocked", NEEDS_CONTEXT) or len(body) < MIN_PLAN_CHARS:
             self.store.add_result(t["id"], res)
             why = str(res.get("question") or f"no usable {prompts.MARKETING_PLAN} written ({len(body)} chars): {res.get('summary', '')}")
             self.store.ask(from_="marketer", to="po", question=why[:1200], task_id=t["id"])

@@ -20,6 +20,7 @@ log = logging.getLogger("team.config")
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
 
 PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
+ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False}   # `cycle.escalation`, see DEFAULTS
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
@@ -45,7 +46,11 @@ DEFAULTS: dict[str, Any] = {
               # the PO's prompt (owner 26.11, rework slice 1): `compact_finished` gives accepted / released / measured tasks as a
               # short card instead of their full text, `stable_first` puts VISION first and the cycle number and the spend last;
               # both off by default, product.yaml `cycle: {po_prompt: {...}}` overrides key by key
-              "po_prompt": dict(PO_PROMPT_DEFAULTS)},
+              "po_prompt": dict(PO_PROMPT_DEFAULTS),
+              # a role that lacks what its task needs (owner 26.11, rework slice 2): `needs_context` true = its `needs_context`
+              # result becomes a question to the PO, the task waits and the attempt is not a failure; the answer travels to the
+              # role with the task. Off = the old `blocked` + `question` path. product.yaml `cycle: {escalation: {...}}` overrides
+              "escalation": dict(ESCALATION_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -408,6 +413,11 @@ class Product:
     def po_prompt_cfg(self) -> dict[str, bool]:
         """`cycle.po_prompt` (rework slice 1): {compact_finished, stable_first}, both off by default."""
         return self.switches("po_prompt", PO_PROMPT_DEFAULTS)
+
+    @property
+    def escalation_cfg(self) -> dict[str, bool]:
+        """`cycle.escalation` (rework slice 2): {needs_context}, off by default."""
+        return self.switches("escalation", ESCALATION_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
