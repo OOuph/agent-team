@@ -46,10 +46,10 @@ def test_queries_for_product_yaml_or_default():
 
 def test_product_yaml_geo_queries_present():
     for slug in ("release-radar", "agentsmd-tracker", "luz-amanha"):
-        raw = yaml.safe_load((ROOT / "products" / slug / "product.yaml").read_text(encoding="utf-8"))
+        raw = yaml.safe_load((ROOT / "products-retired" / slug / "product.yaml").read_text(encoding="utf-8"))
         qs = geo.queries_for(raw)
         assert len(qs) == 5 and qs == raw["geo_queries"]
-    luz = geo.queries_for(yaml.safe_load((ROOT / "products" / "luz-amanha" / "product.yaml").read_text(encoding="utf-8")))
+    luz = geo.queries_for(yaml.safe_load((ROOT / "products-retired" / "luz-amanha" / "product.yaml").read_text(encoding="utf-8")))
     assert sum("portugal" in q.lower() and ("amanhã" in q.lower() or "omie" in q.lower()) for q in luz) == 3
 
 

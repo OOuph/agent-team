@@ -600,7 +600,7 @@ def test_pr_4xx_is_not_retried(tmp_path: Path, monkeypatch):
 def test_diary_product_extra_hosts(tmp_path: Path):
     root = Path(__file__).resolve().parent.parent
     st = _settings(tmp_path)
-    p = C.load_product(st, root / "products" / "agent-team-diary")
+    p = C.load_product(st, root / "products-retired" / "agent-team-diary")
     hosts = Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
     for h in ("bymachines.ai", "releases.formachines.ai", "agentsmd.formachines.ai", "luz.bymachines.ai"):
         assert h in hosts
@@ -609,7 +609,7 @@ def test_diary_product_extra_hosts(tmp_path: Path):
 def test_luz_marketer_can_open_threads(tmp_path: Path):
     root = Path(__file__).resolve().parent.parent
     st = _settings(tmp_path)
-    p = C.load_product(st, root / "products" / "luz-amanha")
+    p = C.load_product(st, root / "products-retired" / "luz-amanha")
     assert "threads.com" in Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer").split(",")
 
 
@@ -631,7 +631,7 @@ def test_marketer_fetch_apex_and_www(tmp_path: Path, monkeypatch):
     monkeypatch.delenv("TEAM_TRACE_FILE", raising=False)
 
     def rc(slug, url):
-        p = C.load_product(st, root / "products" / slug)
+        p = C.load_product(st, root / "products-retired" / slug)
         monkeypatch.setenv("TEAM_ALLOWED_HOSTS", Cycle(st, p, FakeRunner(), "c1")._allowed_hosts("marketer"))
         return fetch.main([url])
 
