@@ -926,7 +926,14 @@ class Cycle:
         if rr is None:
             return
         with self.store.lock:                        # applied as the run finishes, in one piece (team/lanes.py invariant 4)
-            self.apply_review(self.store.task(t["id"]) or t, rr)
+            now = self.store.task(t["id"]) or t
+            reviewed = self.apply_review(now, rr)
+        if reviewed:
+            # A pass of a task reviewed BEFORE its merge (rework slice 5) merges it — outside the store lock: the merge takes
+            # the repository lock first and the store lock inside it, the order every execute lane uses. Taken the other way
+            # round here, a review that passes while a developer's lane is merging would wait for it for ever, and it for us.
+            self.merge_task(now, self.p.worktree_dir(now["id"]), str(now.get("role") or "developer"), f"{self.cycle_id}-review-{now['id']}",
+                            reviewed=reviewed)
 
     def drop_review_dirs(self, task_id: str, labels: tuple[str, ...] = ("review", "playtest")) -> list[Path]:
         """Free what one review (or load test) put on the disk, as soon as its run is over: the clones the tests ran in
@@ -951,8 +958,10 @@ class Cycle:
             log.warning("%s: %s: review working directories not removed: %s", self.p.slug, task_id, str(exc)[:300])
         return gone
 
-    def apply_review(self, t: dict[str, Any], rr: RunResult) -> None:
-        """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run)."""
+    def apply_review(self, t: dict[str, Any], rr: RunResult) -> str | None:
+        """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run).
+        Returns the reviewer's summary when the verdict is a pass of a task that is not merged yet (`pre_merge`): the
+        caller merges it after it has left the store lock (`review_task`); else None."""
         if not (rr.ok and rr.structured):
             t["review_inconclusive"] = int(t.get("review_inconclusive") or 0) + 1
             self.store.save_task(t)
@@ -976,9 +985,9 @@ class Cycle:
                            "re-plan it (new slot with not_before) or close it with close_tasks.", task_id=t["id"], blocks=[t["id"]])
             return
         if verdict == "pass" and t.get(PRE_MERGE):
-            # reviewed on its branch: the pass is what merges it; a conflict returns it to its author (nothing was live)
-            self.merge_task(t, self.p.worktree_dir(t["id"]), str(t.get("role") or "developer"), f"{self.cycle_id}-review-{t['id']}",
-                            reviewed=str(v.get("summary") or "passed"))
+            # reviewed on its branch: the pass is what merges it (by the caller, outside the store lock); a conflict returns it
+            # to its author — nothing was live
+            return str(v.get("summary") or "passed")
         elif verdict == "pass":
             self.store.transition(t["id"], "accepted", "reviewer", v.get("summary", "")[:300], accepted_at=utcnow())
         elif verdict == "fail":

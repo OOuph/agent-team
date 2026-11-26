@@ -207,3 +207,27 @@ def test_review_before_merge_uses_a_local_server_even_when_a_host_is_deployed(tm
     cyc = Cycle(st, p, Runner(), "c1"); cyc.review_task(Store(p.dir).task(tid)); cyc.store.close()
     assert seen.get("force_local") is True
     assert playtest.live_base_url(_game(_settings(tmp_path / "b"), deploy="service", site_base="https://g.example")) == "https://g.example"
+
+
+def test_the_merge_after_a_pass_happens_outside_the_store_lock(tmp_path: Path, monkeypatch):
+    """Lock order (found 26.11 before the first live review): every execute lane takes the repository lock and, inside
+    it, the store lock. `apply_review` runs under the store lock, so it must not merge itself — it hands the merge to
+    its caller, which has left the store lock by then."""
+    st = _settings(tmp_path, review_before_merge=True)
+    p = _game(st)
+    tid = _task(p, visible=True)
+    r = Runner("pass")
+    cyc = Cycle(st, p, r, "c1"); cyc.run(["execute"]); cyc.store.close()
+    cyc = Cycle(st, p, r, "c2")
+    merges = []
+    monkeypatch.setattr(cyc, "merge_task", lambda *a, **k: merges.append(k.get("reviewed")) or True)
+    out = {"verdict": "pass", "steps": [], "criteria": [], "scenarios": [], "summary": "all criteria seen"}
+    got = cyc.apply_review(cyc.store.task(tid), RunResult(True, out, {}, 0.1, 2, None, session_id="s", duration_s=1.0))
+    assert got == "all criteria seen" and merges == []                  # the verdict is recorded, the merge is the caller's
+    assert cyc.store.task(tid)["state"] == "review" and not _on_base(p, "src/screen.ts")
+    held = []
+    real_lock = cyc.store.lock
+    monkeypatch.setattr(cyc, "merge_task", lambda *a, **k: held.append(real_lock._depth) or True)
+    cyc.review_task(cyc.store.task(tid))
+    assert held == [0]                                                  # the store lock was not held when the merge began
+    cyc.store.close()
