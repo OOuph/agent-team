@@ -77,13 +77,17 @@ RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4
 QUEUE_ROLES = ("developer",)                # `cycle.queue.ahead`: the roles whose ready queue the PO keeps at `target_ready`
 TASK_MARKS = ("visible", "redesign", "new_function")       # the PO's marks of a visible change (rework slice 5), kept on the task
 PRE_MERGE = "pre_merge"                    # task field: in `review` with its commit on task/<id> only — not merged, not deployed
-REVIEW_BEFORE_MERGE_EVENT, REDESIGN_HELD_EVENT = "review.before_merge", "task.redesign_held"
+REVIEW_BEFORE_MERGE_EVENT, REDESIGN_REFUSED_EVENT = "review.before_merge", "task.redesign_refused"
+FAIL_REDESIGN = "redesign_without_function"   # `fail_reason` of a verdict: the change re-lays an existing screen and adds nothing to do
+FAIL_REDESIGN_TODO = ("Put the screen back as it was and keep only what the task's new function needs: a new element goes into the existing "
+                      "layout without moving the rest. Not a redesign: the repair of a plain break (an overlap, content outside the screen, "
+                      "unreadable text).")
 PRE_MERGE_PROMPT = (
     "\n# REVIEW BEFORE THE MERGE\nThis is a visible change and it is not on the live host: commit {sha} is on the task's branch only. It is "
     "merged and deployed only if you pass it, so players see nothing of it yet. Judge it on what you were given here — the server "
     "started from this commit, the checkout, the test run; the live site shows the game WITHOUT this change (useful as «before»). "
     "The owner's principle applies: «редизайн делаем только при новом функционале» — if the change re-lays or restyles a screen that "
-    "already existed beyond what its new function needs, that is a `fail` (first_failure: «redesign without a new function»), however "
+    "already existed beyond what its new function needs, that is a `fail` with `fail_reason: redesign_without_function`, however "
     "well it matches a mock-up.\n")
 # Three unproven reviews (rework slice 2b, `cycle.escalation.review_return`): what the role is told per reason word of
 # team/play.py INCONCLUSIVE_REASONS when the task comes back to it …
@@ -974,6 +978,8 @@ class Cycle:
         v = rr.structured
         if v.get("verdict") == "inconclusive":
             v = {**v, "inconclusive_reason": inconclusive_reason(v)}
+        elif v.get("verdict") == "fail" and fail_reason(v):
+            v = {**v, "fail_reason": fail_reason(v), "first_failure": f"{v.get('first_failure') or ''} {FAIL_REDESIGN_TODO}".strip()}
         self.store.add_review(t["id"], v, f"{self.cycle_id}-review-{t['id']}")
         for o in v.get("observations") or []:
             self.store.add_observation({**o, "source": "reviewer", "task": t["id"], "run_id": f"{self.cycle_id}-review-{t['id']}",
@@ -1001,7 +1007,8 @@ class Cycle:
                 self.store.ask(from_="reviewer", to="po", question=f"Task {t['id']} failed review {fails} times: {v.get('first_failure', '')}. "
                                f"Narrow the task, drop it, or re-specify?", task_id=None)
             else:
-                self.store.transition(t["id"], "in_progress", "reviewer", f"failed: {v.get('first_failure', '')[:200]}",
+                self.store.transition(t["id"], "in_progress", "reviewer",
+                                      f"failed{' [' + v['fail_reason'] + ']' if v.get('fail_reason') else ''}: {v.get('first_failure', '')[:200]}",
                                       review_fails=fails, last_review=v)
         else:
             t["review_inconclusive"] = int(t.get("review_inconclusive") or 0) + 1
@@ -1323,6 +1330,14 @@ class Cycle:
                 skipped.append(f"{str(rt.get('title'))[:80]} → уже сделана: {twin['id']} ({twin.get('state')})")
                 log.info("%s: PO task %r not created: the work is done as %s (%s)", self.p.slug, str(rt.get("title"))[:60], twin["id"], twin.get("state"))
                 continue
+            if self.p.visible_cfg["redesign_gate"] and rt.get("redesign") and not str(rt.get("new_function") or "").strip():
+                # owner 26.11 «редизайн делаем только при новом функционале», and on asking him each time: «я не могу каждое
+                # изменение смотреть, давай пока опираться на правило "не перерисовывать без необходимости"» — the task is
+                # not created, nobody is asked, nothing waits
+                self.store.event(REDESIGN_REFUSED_EVENT, self.cycle_id, "dispatcher", {"title": str(rt.get("title"))[:140]})
+                held.append(f"«{str(rt.get('title'))[:80]}» не заведена: перекладка без новой функции (правило владельца 26.11)")
+                log.info("%s: PO task %r not created: a redesign of an existing screen without a new function", self.p.slug, str(rt.get("title"))[:60])
+                continue
             dup = duplicate_task(self.store.tasks(OPEN_TASK_STATES), rt)
             sid = str(rt.get("standing") or "")
             if sid and not standing.known_id(self.p, sid):
@@ -1345,16 +1360,6 @@ class Cycle:
             if marks:                                 # rework slice 5: the PO's marks of a visible change stay on the task
                 new.update(marks)
                 self.store.save_task(new)
-            if self.p.visible_cfg["redesign_gate"] and rt.get("redesign") and not str(rt.get("new_function") or "").strip():
-                # owner 26.11 «редизайн делаем только при новом функционале»: not started without his word
-                self.store.transition(new["id"], "proposed", "dispatcher", "redesign without a new function: waits for the owner's word "
-                                      f"(`team task move {new['id']} --to ready --by owner`)", force=True)
-                self.store.ask(from_="dispatcher", to="owner", task_id=None, question=(
-                    f"The PO proposed {new['id']} «{new['title'][:100]}»: it changes the layout or look of an existing screen and names no new "
-                    "function for the player. By your principle (26.11: редизайн делаем только при новом функционале) it is not started. "
-                    f"To allow it: `team task move {new['id']} --to ready --by owner`. Otherwise leave it, the PO will close it."))
-                self.store.event(REDESIGN_HELD_EVENT, new["id"], "dispatcher", {"title": new["title"][:140]})
-                held.append(f"{new['id']} → proposed: редизайн существующего экрана без новой функции, ждёт слова владельца")
             if rt.get("continues"):                   # owner 11.11: the chain of one goal, for the stuck-goal counter
                 new["continues"] = [str(x) for x in rt["continues"]][:5]
                 self.store.save_task(new)
@@ -3215,6 +3220,14 @@ INCONCLUSIVE_PATTERNS = (
     ("no_test_for_criterion", r"no (e2e )?(test|spec|scenario) (covers|for)|no_test_for_criterion"),
     ("not_observable", r"not observable|not_observable|cannot be seen|could not observe"),
 )
+
+
+def fail_reason(v: dict[str, Any]) -> str:
+    """The reason word of a `fail` verdict when it is the owner's rule «no redesign without a new function»: the
+    reviewer's own `fail_reason`, else read from its `first_failure`; "" for every other failure."""
+    if str(v.get("fail_reason") or "") == FAIL_REDESIGN:
+        return FAIL_REDESIGN
+    return FAIL_REDESIGN if re.search(r"redesign without a new function|redesign_without_function", str(v.get("first_failure") or "").lower()) else ""
 
 
 def inconclusive_reason(v: dict[str, Any]) -> str:

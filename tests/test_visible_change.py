@@ -100,20 +100,47 @@ def test_the_marks_are_kept_on_the_task_whatever_the_switches(tmp_path: Path):
 
 # ------------------------------------------------------------------ redesign only with a new function
 
-def test_redesign_without_a_new_function_waits_for_the_owner(tmp_path: Path):
+def test_redesign_without_a_new_function_is_not_created_and_the_owner_is_not_asked(tmp_path: Path):
+    """Owner 26.11, on the preview question: «я не могу каждое изменение смотреть, давай пока опираться на правило
+    "не перерисовывать без необходимости"». Nothing waits for him: the task is simply not made."""
     st = _settings(tmp_path, redesign_gate=True)
     p = _game(st)
     _po(st, p, [_rt(visible=True, redesign=True), _rt(title="Cups button", visible=True, redesign=True, new_function="the player opens the cups table"),
                 _rt(title="Server metric")])
     s = Store(p.dir)
-    held, ok, plain = s.tasks()
-    assert held["state"] == "proposed" and "redesign without a new function" in held["history"][-1]["note"]
+    ok, plain = s.tasks()                                               # the bare redesign is not in the backlog at all
     assert ok["state"] == "ready" and ok["new_function"] == "the player opens the cups table" and plain["state"] == "ready"
-    q = [q for q in s.questions(["open"]) if q["to"] == "owner"]
-    assert len(q) == 1 and held["id"] in q[0]["question"] and "team task move" in q[0]["question"] and not q[0]["blocks"]
-    assert any(e["kind"] == "task.redesign_held" and e["subject"] == held["id"] for e in s.events())
-    assert held["id"] in (p.dir / "digests" / "c1.md").read_text(encoding="utf-8")
+    assert not s.questions()                                            # nobody is asked, nothing waits
+    ev = [e for e in s.events() if e["kind"] == "task.redesign_refused"]
+    assert len(ev) == 1 and ev[0]["detail"]["title"] == "First screen by the mock-up"
+    assert "перекладка без новой функции" in (p.dir / "digests" / "c1.md").read_text(encoding="utf-8")
     s.close()
+
+
+def test_a_fail_for_redesign_carries_the_reason_word(tmp_path: Path):
+    st = _settings(tmp_path, review_before_merge=True)
+    p = _game(st)
+    tid = _task(p, visible=True)
+    s = Store(p.dir)
+    s.transition(tid, "released", "dispatcher", force=True, released_at="2020-01-01T00:00:00+00:00", released_sha="abc")
+    c = Cycle(st, p, None, "c1")
+    out = {"verdict": "fail", "fail_reason": "redesign_without_function", "steps": [], "criteria": [], "summary": "re-laid",
+           "first_failure": "the garage moved under the blocks; nothing new to do"}
+    c.apply_review(s.task(tid), RunResult(True, out, {}, 0.1, 2, None, session_id="s", duration_s=1.0))
+    t = s.task(tid)
+    assert t["state"] == "in_progress" and t["history"][-1]["note"].startswith("failed [redesign_without_function]:")
+    assert t["last_review"]["fail_reason"] == "redesign_without_function" and "Put the screen back" in t["last_review"]["first_failure"]
+    assert [e["detail"].get("reason") for e in s.events() if e["kind"] == "review"] == ["redesign_without_function"]
+    out2 = {"verdict": "fail", "steps": [], "criteria": [], "summary": "s", "first_failure": "Redesign without a new function: the Play row moved"}
+    from team.cycle import fail_reason
+    assert fail_reason(out2) == "redesign_without_function" and fail_reason({"first_failure": "button missing"}) == ""
+    c.store.close(); s.close()
+
+
+def test_verdict_schemas_have_the_fail_reason_list():
+    for name in ("review-verdict", "test-report"):
+        prop = json.loads((SCHEMAS / f"{name}.schema.json").read_text())["properties"]["fail_reason"]
+        assert "redesign_without_function" in prop["enum"], name
 
 
 def test_cards_carry_the_owners_principle():
@@ -122,7 +149,10 @@ def test_cards_carry_the_owners_principle():
         assert "редизайн делаем только при новом функционале" in text, name
     po = (ROLES / "po.md").read_text(encoding="utf-8")
     assert "`visible: true`" in po and "`redesign: true`" in po and "`new_function`" in po
-    assert "redesign without a new function" in " ".join((ROLES / "reviewer.md").read_text(encoding="utf-8").split())
+    for name in ("reviewer", "tester"):
+        text = " ".join((ROLES / f"{name}.md").read_text(encoding="utf-8").split())
+        assert "redesign_without_function" in text and "unreadable" in text, name
+    assert "ask the owner" not in po.lower().split("a visible change is marked")[1].split("- **")[0]
 
 
 # ------------------------------------------------------------------ review before the merge

@@ -106,7 +106,7 @@ cycle:
     cost_floor_usd: 1.0
   visible:                        # owner 26.11, rework slice 5 (docs/review-before-deploy.md): a visible change is judged before players see it
     review_before_merge: false    # true = a task marked `visible` is reviewed on its branch (local server) and merged only by a pass
-    redesign_gate: false          # true = a task marked `redesign` without `new_function` waits in `proposed` for the owner
+    redesign_gate: false          # true = a task marked `redesign` without `new_function` is not created (nobody is asked)
   queue:                          # owner 26.11, rework slice 9: the PO cuts tasks ahead
     ahead: false                  # true = the PO is also woken when the developer's ready queue is below target_ready …
     target_ready: 6

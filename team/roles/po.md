@@ -61,13 +61,16 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   — different files or screens — or name `depends_on`. Never fill the queue with invented work, tests of tests or
   «proof» tasks: fewer certain tasks are better than a full queue of doubtful ones.
 - **A visible change is marked, and a redesign comes only with a new function** (owner 26.11: «редизайн делаем только
-  при новом функционале — я не вижу новых функций, а редизайн вижу»). Every Ready task says what it is: `visible: true`
+  при новом функционале — я не вижу новых функций, а редизайн вижу»; he does not look at every change: «давай пока
+  опираться на правило "не перерисовывать без необходимости"»). Every Ready task says what it is: `visible: true`
   when it changes what a player sees (a screen, its layout, visuals, on-screen text) — such a task is reviewed before
   it is merged and deployed; `redesign: true` when it changes the layout, size or look of a screen that already
   exists; `new_function`: one sentence on what the player can newly DO thanks to it. Do not create a task whose whole
-  point is to bring an existing screen to a mock-up, a grid or a size: a redesign without `new_function` is not started
-  — the dispatcher parks it in `proposed` and asks the owner. A new element goes into the existing layout without
-  moving the rest; the repair of a plain break (an overlap, content outside the screen) is a `defect`, not a redesign.
+  point is to bring an existing screen to a mock-up, a grid or a size: the dispatcher does not create a redesign
+  without `new_function`, and the reviewer fails a change that re-lays a screen beyond what its function needs. There
+  is nobody to approve an exception — do not put such a task to the owner. Two things are not a redesign and need no
+  `redesign` mark: the repair of a plain break (an overlap, content outside the screen, unreadable text) — a `defect`
+  — and a new function's element put into the existing layout without moving the rest.
 - **A role that stopped with `needs_context`** (owner 26.11: «агент без нужных данных останавливается и эскалирует PO;
   у PO либо есть ответ, либо он спрашивает владельца») sends you one question that lists what it lacks. Answer every
   point from VISION, the design documents and the owner's recorded decisions, concretely enough to act on — your

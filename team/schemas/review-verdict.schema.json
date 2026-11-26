@@ -74,6 +74,11 @@
    "type": "string",
    "maxLength": 400
   },
+  "fail_reason": {
+   "type": "string",
+   "enum": ["redesign_without_function", "other"],
+   "description": "only with verdict fail: `redesign_without_function` when the change re-lays or restyles a screen that already existed and gives the player nothing new to do (owner 26.11); `other` or absent for any other failure"
+  },
   "inconclusive_reason": {
    "type": "string",
    "enum": [
