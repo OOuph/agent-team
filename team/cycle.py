@@ -99,6 +99,16 @@ SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_
                        "ANTHROPIC_API_KEY", "GSC_")
 REVIEW_TEST_TIMEOUT_S = 900
 REVIEW_TEST_OUTPUT_CHARS = 6000
+TESTER_BASH_SLACK_S = 120   # over team-play's lock wait + run limits, for its own start and the teardown
+
+
+def tester_bash_timeouts() -> dict[str, str]:
+    """The tester's Bash tool: the agent CLI moves a command to the background after 2 minutes and stops it after 10
+    (24-26.11: 4 team-play runs stopped there, and the agent polled the rest). A `team-play test` may wait for the host
+    lock and then run (team/play.py LOCK_WAIT_S + TEST_TIMEOUT_S), so the default and the maximum cover both."""
+    from .play import LOCK_WAIT_S, TEST_TIMEOUT_S
+    ms = str((LOCK_WAIT_S + TEST_TIMEOUT_S + TESTER_BASH_SLACK_S) * 1000)
+    return {"BASH_DEFAULT_TIMEOUT_MS": ms, "BASH_MAX_TIMEOUT_MS": ms}
 
 REPO_ONLY_PROMPT = (
     "\n# READ-ONLY CHECKOUT\nThe working directory is a read-only checkout of commit {sha}. You have Read, Glob, Grep and "
@@ -871,6 +881,8 @@ class Cycle:
                 self.store.transition(t["id"], "blocked", "reviewer", f"review failed to run 3×: {rr.error}", force=True)
             return
         v = rr.structured
+        if v.get("verdict") == "inconclusive":
+            v = {**v, "inconclusive_reason": inconclusive_reason(v)}
         self.store.add_review(t["id"], v, f"{self.cycle_id}-review-{t['id']}")
         for o in v.get("observations") or []:
             self.store.add_observation({**o, "source": "reviewer", "task": t["id"], "run_id": f"{self.cycle_id}-review-{t['id']}",
@@ -904,7 +916,8 @@ class Cycle:
                     # owner 22.11 (ai-battles day review): on 22.11 ten tasks were accepted by this rule with nobody having
                     # seen the result, the description field among them. No proof → no acceptance: the PO decides.
                     why = _short_text(v.get("first_failure") or v.get("limits") or v.get("summary"), 300)
-                    self.store.transition(t["id"], "blocked", "reviewer", f"inconclusive {INCONCLUSIVE_LIMIT}×: not accepted without proof: {why}"[:400],
+                    self.store.transition(t["id"], "blocked", "reviewer",
+                                          f"inconclusive {INCONCLUSIVE_LIMIT}× [{v['inconclusive_reason']}]: not accepted without proof: {why}"[:400],
                                           force=True, blocked_by="review")
                     self.store.ask(from_="reviewer", to="po", task_id=None,
                                    question=f"Task {t['id']} ({str(t.get('title') or '')[:80]}) could not be checked {INCONCLUSIVE_LIMIT} times: {why}. "
@@ -955,7 +968,8 @@ class Cycle:
             return None, prompt, None, None
         hosts = self._allowed_hosts("tester").split(",") + [playtest.HOST]
         env = {"TEAM_PLAY_CWD": str(server.dest), "TEAM_PLAY_BASE_URL": server.base_url, "TEAM_PLAY_OUT": str(out_dir),
-               "TEAM_PLAY_SERVER_LOG": str(server.log_path or ""), "TEAM_ALLOWED_HOSTS": ",".join(dict.fromkeys(h for h in hosts if h))}
+               "TEAM_PLAY_SERVER_LOG": str(server.log_path or ""), "TEAM_ALLOWED_HOSTS": ",".join(dict.fromkeys(h for h in hosts if h)),
+               **tester_bash_timeouts()}
         prompt = prompts.tester_prompt(self.p, t, result, sha, base_url=server.base_url, local=server.local, checkout=server.dest,
                                        out_dir=out_dir, tests=tests, server_notes=server.notes)
         self.store.event("playtest.started", t["id"], "dispatcher", {"base_url": server.base_url, "local": server.local})
@@ -2766,6 +2780,34 @@ def _friction_text(f: Any) -> str:
 def _short_text(s: Any, n: int) -> str:
     s = " ".join(str(s or "").split())
     return s if len(s) <= n else s[: n - 1] + "…"
+
+
+# Words for an inconclusive review whose reviewer gave no `inconclusive_reason` (older prompts, a model that skipped the
+# field): the first pattern found in first_failure / limits / summary wins. Order matters: a lock wait before a timeout.
+INCONCLUSIVE_PATTERNS = (
+    ("lock_timeout", r"no e2e host lock within|lock_timeout|waited for the (e2e host )?lock \d{3,}"),
+    ("run_timeout", r"timed out after|run_timeout|ran \d+s after the lock|limit \d+ ?s|time limit"),
+    ("no_tests_live", r"no_tests_live|no test for the deployed host|no @live|not @live|live host.*(no tests|0 tests)"),
+    ("no_tests", r"no tests found|no_tests|0 tests in 0 files"),
+    ("server_not_started", r"server not started|server_not_started|could not start|did not answer"),
+    ("test_tooling", r"no json report|test_tooling|not installed|unknown --project|cannot find module"),
+    ("no_test_for_criterion", r"no (e2e )?(test|spec|scenario) (covers|for)|no_test_for_criterion"),
+    ("not_observable", r"not observable|not_observable|cannot be seen|could not observe"),
+)
+
+
+def inconclusive_reason(v: dict[str, Any]) -> str:
+    """The fixed word for an inconclusive verdict (team/play.py INCONCLUSIVE_REASONS): the reviewer's own if it is one of
+    the words, else read from its text, else `other`."""
+    from .play import INCONCLUSIVE_REASONS
+    own = str(v.get("inconclusive_reason") or "").strip()
+    if own in INCONCLUSIVE_REASONS:
+        return own
+    text = " ".join(str(v.get(k) or "") for k in ("first_failure", "limits", "summary")).lower()
+    for word, pat in INCONCLUSIVE_PATTERNS:
+        if re.search(pat, text):
+            return word
+    return "other"
 
 
 def is_stub_result(summary: str) -> bool:

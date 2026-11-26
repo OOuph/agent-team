@@ -74,6 +74,21 @@
    "type": "string",
    "maxLength": 400
   },
+  "inconclusive_reason": {
+   "type": "string",
+   "enum": [
+    "lock_timeout",
+    "run_timeout",
+    "no_tests_live",
+    "no_tests",
+    "server_not_started",
+    "test_tooling",
+    "no_test_for_criterion",
+    "not_observable",
+    "other"
+   ],
+   "description": "only with verdict inconclusive: why the check could not be made, one word from this list (team-play prints the word after `result`): lock_timeout = waited too long for the e2e host lock; run_timeout = the tests ran past the limit; no_tests_live = no test of the selection runs on the deployed host; no_tests = the selection is empty; server_not_started = the play-test or local server did not come up; test_tooling = no report, missing tool, bad arguments; no_test_for_criterion = no scenario covers the criterion; not_observable = the result cannot be seen in a test or a screenshot; other"
+  },
   "observations": {
    "type": "array",
    "maxItems": 5,

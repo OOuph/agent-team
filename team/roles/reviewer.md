@@ -67,4 +67,7 @@ The tool allowlist matches only a bare `team-fetch <url> [flags]` call (plus `te
 
 ## Game products: running the scenarios
 For a game product the play-test command is `team-play test --spec tests/e2e/<file>.spec.ts --project desktop|mobile|mobile-webkit`:
-the three project names are `desktop`, `mobile` and `mobile-webkit`, and `--spec <path>` goes before `--project`.
+the three project names are `desktop`, `mobile` and `mobile-webkit`. It runs only that spec; a spec with no test for the
+deployed host goes once more to a local server of the same checkout by itself (`--local` asks for it directly). Run it in
+the foreground and wait: it may first wait for the e2e host lock, and its time limit starts only when the lock is held.
+With `inconclusive`, set `inconclusive_reason` to one word of the schema's list (`team-play` prints it after `result`).

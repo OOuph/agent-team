@@ -157,9 +157,9 @@ def test_team_play_test_runs_fake_playwright_and_copies_artifacts(tmp_path: Path
     out = tmp_path / "out"
     npx = _fake_npx(tmp_path, f"""
         a = sys.argv[1:]
-        assert a[:3] == ["playwright", "test", "--reporter=json"], a
+        assert a[:3] == ["playwright", "test", "--reporter=line,json"], a
         assert os.environ["BASE_URL"] == "http://127.0.0.1:4321", os.environ.get("BASE_URL")
-        assert "--grep" in a and a[a.index("--grep") + 1] == "rooms"
+        assert "--grep=rooms" in a
         print("Running 3 tests")
         print(json.dumps({json.dumps(SAMPLE_REPORT)}))
         sys.exit(1)
@@ -182,7 +182,7 @@ def test_team_play_test_sets_e2e_mobile_only_for_mobile_projects(tmp_path: Path,
     co = tmp_path / "checkout"; co.mkdir()
     npx = _fake_npx(tmp_path, f"""
         a = sys.argv[1:]
-        proj = a[a.index("--project") + 1] if "--project" in a else ""
+        proj = next((x.split("=", 1)[1] for x in a if x.startswith("--project=")), "")
         if proj == "nope":
             print('Error: Project(s) "nope" not found. Available projects: "phone", "mobile-360"')
             sys.exit(1)
@@ -193,10 +193,10 @@ def test_team_play_test_sets_e2e_mobile_only_for_mobile_projects(tmp_path: Path,
     monkeypatch.setenv("TEAM_PLAY_OUT", str(tmp_path / "out")); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
     monkeypatch.delenv("E2E_MOBILE", raising=False)
     seen = []
-    real = play.subprocess.run
+    real = play.subprocess.Popen
     def spy(argv, **kw):
         seen.append(kw["env"].get("E2E_MOBILE")); return real(argv, **kw)
-    monkeypatch.setattr(play.subprocess, "run", spy)
+    monkeypatch.setattr(play.subprocess, "Popen", spy)
     play.main(["test", "--project", "mobile-360"]); play.main(["test", "--project", "phone"]); play.main(["test"])
     assert seen == ["1", None, None]
     capsys.readouterr()
@@ -381,6 +381,7 @@ def test_game_task_is_not_accepted_after_three_inconclusive_reviews(tmp_path: Pa
     t = s.task(tid)
     assert t["state"] == "blocked" and t["blocked_by"] == "review" and t["review_inconclusive"] == 3
     assert "not accepted without proof" in t["history"][-1]["note"] and "balance.data.js" in t["history"][-1]["note"]
+    assert t["history"][-1]["note"].startswith("inconclusive 3× [no_tests]")
     qs = [q for q in s.questions(["open"]) if q["to"] == "po" and tid in q["question"]]
     assert len(qs) == 1 and "could not be checked 3 times" in qs[0]["question"] and "do not treat it as accepted" in qs[0]["question"]
     s.close()
@@ -420,17 +421,134 @@ def test_inconclusive_rule_follows_the_product_setting_and_the_profile(tmp_path:
     cyc.p.raw["profile"] = "site"
     assert cyc.inconclusive_policy() == "accept"
     cyc.store.close()
-def test_team_play_test_argv_project_before_spec_and_grep_joined(monkeypatch):
+def test_team_play_test_argv_spec_first_no_double_dash(monkeypatch):
+    """26.11: the spec after `--` was dropped by Playwright 1.65 and every «single spec» run was the whole @live suite."""
     monkeypatch.setenv("TEAM_PLAY_NPX", "npx")
     ap = play.argparse.ArgumentParser(); sub = ap.add_subparsers()
     s = sub.add_parser("test"); s.add_argument("--grep", action="append"); s.add_argument("--spec"); s.add_argument("--project")
     a = ap.parse_args(["test", "--spec", "tests/e2e/x.spec.ts", "--project", "desktop"])
     argv = play.build_test_argv(a)
-    assert argv.index("--project") + 1 == argv.index("desktop") < argv.index("--") < argv.index("tests/e2e/x.spec.ts")
-    assert argv[-2:] == ["--", "tests/e2e/x.spec.ts"]
+    assert "--" not in argv and argv[:4] == ["npx", "playwright", "test", "tests/e2e/x.spec.ts"]
+    assert "--project=desktop" in argv and "--project" not in argv and "--reporter=line,json" in argv
     a = ap.parse_args(["test", "--grep", "one", "--grep", "two"])
     argv = play.build_test_argv(a)
-    assert argv[argv.index("--grep") + 1] == "one|two" and argv.count("--grep") == 1
+    assert "--grep=one|two" in argv and sum(x.startswith("--grep") for x in argv) == 1
+
+
+def _play_env(tmp_path: Path, monkeypatch, npx: Path, base: str = "http://127.0.0.1:4321") -> Path:
+    co = tmp_path / "checkout"; co.mkdir(exist_ok=True)
+    out = tmp_path / "out"
+    monkeypatch.setenv("TEAM_PLAY_CWD", str(co)); monkeypatch.setenv("TEAM_PLAY_BASE_URL", base)
+    monkeypatch.setenv("TEAM_PLAY_OUT", str(out)); monkeypatch.setenv("TEAM_PLAY_NPX", str(npx))
+    monkeypatch.setattr(play, "POLL_S", 0.05); monkeypatch.setattr(play, "PROGRESS_EVERY_S", 0.3); monkeypatch.setattr(play, "KILL_GRACE_S", 2)
+    return out
+
+
+ONE_PASS = {"suites": [{"title": "a.spec.ts", "specs": [{"title": "works", "tests": [{"status": "expected", "projectName": "desktop",
+            "results": [{"status": "passed", "duration": 5}]}]}]}]}
+
+
+def test_team_play_lock_wait_is_not_counted_in_the_test_limit(tmp_path: Path, monkeypatch, capsys):
+    npx = _fake_npx(tmp_path, f"""
+        import time
+        print("x INFO [e2e-host-lock] waiting for the e2e host lock: 0 s; another Playwright run on this host holds the lock (pid 7, /w/T-1). This is normal", file=sys.stderr, flush=True)
+        time.sleep(3)
+        print("x INFO [e2e-host-lock] e2e host lock acquired after 3 s (pid 8, /tmp/l)", file=sys.stderr, flush=True)
+        print("[1/1] [desktop] › a.spec.ts:1:1 › works", flush=True)
+        time.sleep(0.5)
+        pathlib.Path(os.environ["PLAYWRIGHT_JSON_OUTPUT_NAME"]).write_text(json.dumps({json.dumps(ONE_PASS)}))
+        """)
+    out = _play_env(tmp_path, monkeypatch, npx)
+    monkeypatch.setattr(play, "TEST_TIMEOUT_S", 2); monkeypatch.setattr(play, "LOCK_WAIT_S", 10)
+    rc = play.main(["test", "--spec", "a.spec.ts", "--project", "desktop"])   # 3 s of lock wait + 0.5 s of tests, limit 2 s
+    cap = capsys.readouterr()
+    assert rc == 0, cap.out
+    import re as _re
+    m = _re.search(r"passed 1 · waited for the lock (\d+)s, ran (\d+)s", cap.out)
+    assert m and int(m.group(1)) >= 3 and int(m.group(2)) <= 1, cap.out
+    assert "team-play: result passed" in cap.out
+    assert "waiting for the e2e host lock" in cap.err and "pid 7, /w/T-1" in cap.err
+    rec = [json.loads(l) for l in (out / "team-play.jsonl").read_text().splitlines()]
+    assert rec[-1]["reason"] == "passed" and rec[-1]["waited_s"] >= 3 and rec[-1]["ran_s"] <= 1 and rec[-1]["spec"] == "a.spec.ts"
+
+
+def test_team_play_run_timeout_stops_the_whole_group_and_shows_the_started_tests(tmp_path: Path, monkeypatch, capsys):
+    pidfile = tmp_path / "child.pid"
+    npx = _fake_npx(tmp_path, f"""
+        import subprocess, time
+        c = subprocess.Popen(["sleep", "60"]); pathlib.Path({str(pidfile)!r}).write_text(str(c.pid))
+        print("x INFO [e2e-host-lock] e2e host lock acquired after 0 s (pid 8, /tmp/l)", file=sys.stderr, flush=True)
+        print("[1/80] [desktop] › a.spec.ts:1:1 › first", flush=True)
+        print("[2/80] [desktop] › b.spec.ts:1:1 › second", flush=True)
+        time.sleep(60)
+        """)
+    _play_env(tmp_path, monkeypatch, npx)
+    monkeypatch.setattr(play, "TEST_TIMEOUT_S", 1)
+    rc = play.main(["test", "--spec", "a.spec.ts"])
+    cap = capsys.readouterr()
+    assert rc == 124 and "ran 1s after the lock, limit 1s" in cap.out and "2 of 80 tests had started" in cap.out
+    assert "b.spec.ts:1:1 › second" in cap.out and "team-play: result run_timeout" in cap.out and "inconclusive_reason: run_timeout" in cap.out
+    child = int(pidfile.read_text())
+    import time as _t
+    for _ in range(40):
+        try:
+            os.kill(child, 0)
+        except ProcessLookupError:
+            break
+        _t.sleep(0.05)
+    else:
+        pytest.fail("the child of the stopped run is still alive (the process group was not stopped)")
+
+
+def test_team_play_lock_timeout(tmp_path: Path, monkeypatch, capsys):
+    npx = _fake_npx(tmp_path, """
+        import time
+        for i in range(100):
+            print(f"x INFO [e2e-host-lock] waiting for the e2e host lock: {i} s; another Playwright run on this host holds the lock (pid 7, /w/T-2).", file=sys.stderr, flush=True)
+            time.sleep(0.2)
+        """)
+    _play_env(tmp_path, monkeypatch, npx)
+    monkeypatch.setattr(play, "LOCK_WAIT_S", 1); monkeypatch.setattr(play, "TEST_TIMEOUT_S", 100)
+    rc = play.main(["test", "--spec", "a.spec.ts"])
+    o = capsys.readouterr().out
+    assert rc == 124 and "no e2e host lock within 1s (holder: pid 7, /w/T-2)" in o and "team-play: result lock_timeout" in o
+
+
+def test_team_play_falls_back_to_a_local_server_when_no_test_runs_on_the_deployed_host(tmp_path: Path, monkeypatch, capsys):
+    npx = _fake_npx(tmp_path, f"""
+        rep = os.environ["PLAYWRIGHT_JSON_OUTPUT_NAME"]
+        if os.environ.get("BASE_URL"):
+            print("Error: No tests found", flush=True); sys.exit(1)
+        assert "PLAYWRIGHT_BASE_URL" not in os.environ and os.environ["E2E_PORT"].isdigit()
+        pathlib.Path(rep).write_text(json.dumps({json.dumps(ONE_PASS)}))
+        """)
+    out = _play_env(tmp_path, monkeypatch, npx)
+    rc = play.main(["test", "--spec", "tests/e2e/cups.spec.ts", "--project", "desktop"])
+    o = capsys.readouterr().out
+    assert rc == 0 and "no test for the deployed host" in o and "against a local server of this checkout: passed 1" in o
+    rec = [json.loads(l) for l in (out / "team-play.jsonl").read_text().splitlines()]
+    assert [(r["local"], r["reason"]) for r in rec] == [(False, "no_tests_live"), (True, "passed")]
+    monkeypatch.setenv("TEAM_PLAY_BASE_URL", "")
+    assert play.main(["test", "--spec", "tests/e2e/cups.spec.ts", "--local"]) == 0
+
+
+def test_inconclusive_reason_words():
+    from team.cycle import inconclusive_reason
+    assert inconclusive_reason({"inconclusive_reason": "lock_timeout", "summary": "timed out after 600s"}) == "lock_timeout"
+    assert inconclusive_reason({"inconclusive_reason": "made-up", "first_failure": "playwright test timed out after 600s, no per-test line"}) == "run_timeout"
+    assert inconclusive_reason({"limits": "team-play: playwright test stopped: no e2e host lock within 600s"}) == "lock_timeout"
+    assert inconclusive_reason({"first_failure": "Error: No tests found"}) == "no_tests"
+    assert inconclusive_reason({"first_failure": "not observable: the toast"}) == "not_observable"
+    assert inconclusive_reason({"summary": "hmm"}) == "other"
+    schema = json.loads((Path(play.__file__).parent / "schemas" / "review-verdict.schema.json").read_text())
+    assert tuple(schema["properties"]["inconclusive_reason"]["enum"]) == play.INCONCLUSIVE_REASONS
+    assert set(play.INCONCLUSIVE_FOR.values()) <= set(play.INCONCLUSIVE_REASONS)
+
+
+def test_tester_bash_timeouts_cover_lock_wait_and_run():
+    from team.cycle import tester_bash_timeouts
+    ms = int(tester_bash_timeouts()["BASH_DEFAULT_TIMEOUT_MS"])
+    assert ms >= (play.LOCK_WAIT_S + play.TEST_TIMEOUT_S) * 1000
 
 
 def test_team_play_test_progress_line_on_stderr_at_start(tmp_path: Path, monkeypatch, capsys):

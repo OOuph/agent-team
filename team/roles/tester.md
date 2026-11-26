@@ -10,10 +10,14 @@ the PLAY-TEST SERVER section (base URL of the server the dispatcher started from
 the TEST RUN the dispatcher already made (unit tests: command, exit code, output), and a checkout to read.
 
 ## Tools
-- `team-play test [--grep TEXT] [--spec tests/e2e/<file>.spec.ts] [--project desktop|mobile|mobile-webkit]` (`--spec <path>` goes
-  BEFORE `--project`) runs the repository's
-  Playwright scenarios against the server and prints one line per test with the error head; artifacts (failure
-  screenshots, traces) are copied into the review folder and listed.
+- `team-play test [--grep TEXT] [--spec tests/e2e/<file>.spec.ts] [--project desktop|mobile|mobile-webkit] [--local]` runs
+  only that spec (or the tests matching `--grep`) against the server and prints one line per test with the error head;
+  artifacts (failure screenshots, traces) are copied into the review folder and listed. A spec with no test for the
+  deployed host (no `@live` tag) is run once more by itself against a local server of the same checkout with the
+  repository's test settings; `--local` asks for that directly. One Playwright run at a time on the host: a run may
+  first wait for the e2e host lock (it says so every minute; the test limit starts only when the lock is held). Run it
+  in the foreground and wait for it: never in the background, never two at once. The last line is `team-play: result
+  <word>`; the summary line says `waited for the lock N s, ran M s` — quote both.
 - `team-play screenshot <url> --out <name>.png [--width 360 --height 740] [--full-page]` — a picture of a page on the
   phone viewport (default) or another size; the URL must be on the server's host.
 - `team-play shots [--weapon KEY] [--ability KEY] [--prefix <task id>]` — frames of a real battle at 1280×720 (owner
@@ -45,7 +49,8 @@ Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `
   the phone is then optional. Otherwise phone first: at least one screenshot at 360×740, with no horizontal scroll and
   readable state. Note anything a player could not tap or read.
 - You could not check a criterion → say exactly why in `first_failure` and `limits` (the command and its output, e.g.
-  «No tests found», a missing module, a page that needs a battle). `inconclusive` is never an acceptance: after three
+  «No tests found», a missing module, a page that needs a battle), and set `inconclusive_reason` to one word of the
+  list in the schema — the one `team-play` printed after `result`, when a run is the reason. `inconclusive` is never an acceptance: after three
   of them the task of a game product is blocked and the PO decides, so an honest reason is what moves it.
 - Look at the battle (owner 22.11: seven of eight bugs the owner found by playing in one day were visible only on a
   frame of a battle, and no check had looked at one). When the task changes anything the player sees in a battle —

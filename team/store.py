@@ -499,7 +499,8 @@ class Store:
         rid = self._next_id("R", "reviews")
         r = {"id": rid, "task": task_id, "run_id": run_id, "created": utcnow(), **verdict}
         _write(self._path("R", rid), r)
-        self.event("review", task_id, "reviewer", {"id": rid, "verdict": verdict.get("verdict")})
+        self.event("review", task_id, "reviewer", {"id": rid, "verdict": verdict.get("verdict"),
+                                                   **({"reason": verdict["inconclusive_reason"]} if verdict.get("inconclusive_reason") else {})})
         return r
 
     # ------------------------------------------------------------ posts
