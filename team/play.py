@@ -1,7 +1,10 @@
 """`team-play` — the tester's only shell command (game profile, slice 4; owner 20.11). Like `team-fetch` for the reviewer:
 one allow-listed binary that runs Playwright in a fixed checkout against a fixed base URL and prints a compact result.
 
-  team-play test [--grep TEXT ...] [--spec PATH] [--project NAME]    run the repository's Playwright tests (tests/e2e) against BASE_URL
+  team-play test [--grep TEXT ...] [--spec PATH] [--project NAME] [--local]   run the repository's Playwright tests (tests/e2e)
+      against BASE_URL, or with --local against the server the repository's playwright config starts from this checkout
+      (its test settings). A selection with no test for BASE_URL is run once more with --local by itself. The time limit
+      counts from the moment the repository's e2e host lock is held; the wait for the lock has its own limit.
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
   team-play shots [--weapon KEY] [--ability KEY] [--prefix NAME]  frames of a battle (the repository's tests/tools/battle-shots.mjs) into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
@@ -18,14 +21,39 @@ import json
 import os
 import re
 import shutil
+import signal
+import socket
 import subprocess
 import threading
 import sys
 import time
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
-TEST_TIMEOUT_S = int(os.environ.get("TEAM_PLAY_TIMEOUT_S") or 600)
+TEST_TIMEOUT_S = int(os.environ.get("TEAM_PLAY_TIMEOUT_S") or 600)          # the tests themselves, counted from the lock
+LOCK_WAIT_S = int(os.environ.get("TEAM_PLAY_LOCK_WAIT_S") or 600)          # waiting for the repository's e2e host lock
+# Both fit the review run's own limit (1500 s for ai-battles): wait 600 + run 600 + the agent's own work.
+LOCAL_FALLBACK = (os.environ.get("TEAM_PLAY_LOCAL_FALLBACK") or "1") != "0"  # no test for the deployed host → once on a local server
+LOCAL_PORT_ENV = "E2E_PORT"                    # the port the repository's playwright.config gives its own server (template convention)
+REPORTERS = "line,json"                        # one line per test on stdout as it runs; the JSON report into PLAYWRIGHT_JSON_OUTPUT_NAME
+RUNS_LOG = "team-play.jsonl"                   # one line per run in the review folder: reason, waited_s, ran_s, totals
+POLL_S = 1.0
+KILL_GRACE_S = 15                              # SIGTERM → this long for Playwright's teardown (server stop, lock release) → SIGKILL
+TAIL_CHARS = 2500
+# The repository's host lock (ai-battles tests/e2e/host-lock.ts) says on stderr when it waits and when it got the lock.
+LOCK_WAIT_RE = re.compile(os.environ.get("TEAM_PLAY_LOCK_WAIT_RE") or r"waiting for the [\w .-]*lock: (\d+) s")
+LOCK_ACQUIRED_RE = re.compile(os.environ.get("TEAM_PLAY_LOCK_ACQUIRED_RE") or r"lock acquired after (\d+) s")
+LOCK_SKIPPED_RE = re.compile(r"running without the lock")
+LOCK_HOLDER_RE = re.compile(r"holds the lock \(([^)]*)\)")
+TEST_LINE_RE = re.compile(r"^\s*\[(\d+)/(\d+)\]")   # the line reporter: «[3/9] [desktop] › file.spec.ts:12:1 › title»
+# Why a check could not be made: the fixed words of review-verdict `inconclusive_reason` (owner 26.11: the PO and the
+# operator count them). Keep in sync with team/schemas/review-verdict.schema.json.
+INCONCLUSIVE_REASONS = ("lock_timeout", "run_timeout", "no_tests_live", "no_tests", "server_not_started", "test_tooling",
+                        "no_test_for_criterion", "not_observable", "other")
+INCONCLUSIVE_FOR = {"lock_timeout": "lock_timeout", "run_timeout": "run_timeout", "no_tests_live": "no_tests_live",
+                    "no_tests": "no_tests", "server_not_started": "server_not_started", "no_report": "test_tooling",
+                    "tool_missing": "test_tooling", "bad_arguments": "test_tooling", "tests_failed": "other"}
 SCREENSHOT_TIMEOUT_S = 60
 MAX_ERROR_CHARS = 400
 MAX_TESTS_SHOWN = 60
@@ -117,20 +145,241 @@ def summarize(report: dict) -> tuple[list[str], dict[str, int]]:
 
 
 def build_test_argv(a: argparse.Namespace) -> list[str]:
-    """Options first (--project, --grep joined with '|'), then `--` and the spec as a separate positional argument."""
-    argv = [*npx(), "playwright", "test", "--reporter=json"]
-    if a.project:
-        argv += ["--project", a.project]
-    if a.grep:
-        argv += ["--grep", "|".join(a.grep)]
+    """The spec first as a positional filter, then options in their `--name=value` form.
+
+    26.11 (T-0416, T-0435 and 18 more blocked «inconclusive 3×»): the spec used to go after `--`, and Playwright 1.65 drops
+    every argument after `--` from the test filters (lib/program.js), so `--spec cups.spec.ts` ran the WHOLE @live suite
+    (80 tests in 34 files) and hit the time limit in 159 of 188 calls on 24-26.11. `--project desktop <spec>` does not work
+    either: --project is variadic and would take the spec as a project name; `--project=desktop` does."""
+    argv = [*npx(), "playwright", "test"]
     if a.spec:
-        argv += ["--", a.spec]
+        argv.append(a.spec)
+    argv.append("--reporter=" + REPORTERS)
+    if a.project:
+        argv.append("--project=" + a.project)
+    if a.grep:
+        argv.append("--grep=" + "|".join(a.grep))
     return argv
 
 
-def _progress(stop: threading.Event, t0: float) -> None:
-    while not stop.wait(PROGRESS_EVERY_S):
-        print(f"team-play: playwright test still running ({time.time() - t0:.0f}s)", file=sys.stderr, flush=True)
+def free_port() -> int:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return int(s.getsockname()[1])
+
+
+def test_env(a: argparse.Namespace, base: str, local: bool, report_path: Path) -> dict[str, str]:
+    """Live: BASE_URL points the repository's config at the server the dispatcher gave. Local: no BASE_URL, so the
+    repository's config starts its own server from this (built) checkout with its test settings, on a free E2E_PORT."""
+    env = dict(os.environ)
+    env.update({"PW_TEST_HTML_REPORT_OPEN": "never", "CI": "1", "PLAYWRIGHT_JSON_OUTPUT_NAME": str(report_path),
+                "PLAYWRIGHT_FORCE_TTY": "0", "FORCE_COLOR": "0"})
+    if local:
+        for k in ("BASE_URL", "PLAYWRIGHT_BASE_URL"):
+            env.pop(k, None)
+        env[LOCAL_PORT_ENV] = str(free_port())
+    else:
+        env.update({"BASE_URL": base, "PLAYWRIGHT_BASE_URL": base})
+    if a.project and a.project.lower().startswith("mobile"):
+        env["E2E_MOBILE"] = "1"  # the repository's playwright.config enables its mobile projects on this
+    return env
+
+
+class Run:
+    """One Playwright process: its output read as it comes, the host lock's lines parsed from stderr, and two clocks.
+    The run's time limit (TEST_TIMEOUT_S) counts from the moment the lock was acquired — or from the start when the
+    repository prints no lock lines; the wait for the lock has its own limit (LOCK_WAIT_S)."""
+
+    def __init__(self, argv: list[str], cwd_: Path, env: dict[str, str]):
+        self.t0 = time.time()
+        self.p = subprocess.Popen(argv, cwd=str(cwd_), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+                                  errors="replace", start_new_session=True)   # own group: a stop takes Playwright, its browsers and its server
+        self.out: list[str] = []
+        self.err: list[str] = []
+        self.waiting_since: float | None = None   # first «waiting for the lock» line
+        self.acquired_at: float | None = None
+        self.waited_s: float = 0.0
+        self.holder = ""
+        self.lock_skipped = False
+        self.tests_started = 0
+        self.tests_total = 0
+        self.stopped: str | None = None           # None | "run_timeout" | "lock_timeout"
+        self._threads = [threading.Thread(target=self._read, args=(self.p.stdout, self.out, False), daemon=True),
+                         threading.Thread(target=self._read, args=(self.p.stderr, self.err, True), daemon=True)]
+        for t in self._threads:
+            t.start()
+
+    def _read(self, fh: Any, sink: list[str], is_err: bool) -> None:
+        for line in iter(fh.readline, ""):
+            sink.append(line)
+            self._parse(line)
+
+    def _parse(self, line: str) -> None:
+        now = time.time()
+        m = LOCK_ACQUIRED_RE.search(line)
+        if m and self.acquired_at is None:
+            self.acquired_at = now
+            self.waited_s = float(m.group(1)) if self.waiting_since is None else max(float(m.group(1)), now - self.waiting_since)
+            return
+        m = LOCK_WAIT_RE.search(line)
+        if m and self.acquired_at is None:
+            if self.waiting_since is None:
+                self.waiting_since = now - float(m.group(1))
+            h = LOCK_HOLDER_RE.search(line)
+            self.holder = h.group(1) if h else self.holder
+            return
+        if LOCK_SKIPPED_RE.search(line) and self.acquired_at is None:
+            self.lock_skipped = True
+            self.acquired_at = now
+            self.waited_s = now - (self.waiting_since or self.t0)
+            return
+        m = TEST_LINE_RE.match(line)
+        if m:
+            self.tests_started = max(self.tests_started, int(m.group(1)))
+            self.tests_total = int(m.group(2))
+
+    @property
+    def phase(self) -> str:
+        return "waiting" if self.waiting_since is not None and self.acquired_at is None else "running"
+
+    def ran_s(self, now: float | None = None) -> float:
+        now = now or time.time()
+        return now - (self.acquired_at or self.t0)
+
+    def waited(self, now: float | None = None) -> float:
+        if self.acquired_at is not None or self.waiting_since is None:
+            return self.waited_s
+        return (now or time.time()) - self.waiting_since
+
+    def progress_line(self) -> str:
+        if self.phase == "waiting":
+            return (f"team-play: waiting for the e2e host lock: {self.waited():.0f}s of {LOCK_WAIT_S}s (another Playwright run holds it"
+                    + (f": {self.holder}" if self.holder else "") + "); the test limit has not started")
+        tests = f", test {self.tests_started}/{self.tests_total}" if self.tests_total else ""
+        return f"team-play: playwright test running {self.ran_s():.0f}s of {TEST_TIMEOUT_S}s{tests} (waited for the lock {self.waited():.0f}s)"
+
+    def wait(self) -> int:
+        last = time.time()
+        while self.p.poll() is None:
+            time.sleep(POLL_S)
+            now = time.time()
+            if self.phase == "waiting" and self.waited(now) > LOCK_WAIT_S:
+                self.stop("lock_timeout")
+            elif self.phase == "running" and self.ran_s(now) > TEST_TIMEOUT_S:
+                self.stop("run_timeout")
+            elif now - last >= PROGRESS_EVERY_S:
+                print(self.progress_line(), file=sys.stderr, flush=True)
+                last = now
+        for t in self._threads:
+            t.join(timeout=5)
+        self.ended = time.time()
+        return self.p.returncode
+
+    def stop(self, why: str) -> None:
+        """SIGTERM to the whole group (Playwright's teardown stops the repository's server and frees the lock), SIGKILL after
+        a grace. Before 26.11 only `npm exec` was killed: Playwright went on (ppid 1), holding the lock for the next run."""
+        self.stopped = why
+        for sig, grace in ((signal.SIGTERM, KILL_GRACE_S), (signal.SIGKILL, 5)):
+            try:
+                os.killpg(self.p.pid, sig)
+            except (ProcessLookupError, PermissionError):
+                return
+            try:
+                self.p.wait(timeout=grace)
+                return
+            except subprocess.TimeoutExpired:
+                continue
+
+
+def read_report(path: Path, stdout: str) -> dict | None:
+    """The JSON reporter's file (PLAYWRIGHT_JSON_OUTPUT_NAME); a repository or a fake that prints JSON on stdout still works."""
+    try:
+        if path.exists() and path.stat().st_size:
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        pass
+    for i, line in enumerate(stdout.splitlines()):
+        if line.lstrip().startswith("{"):
+            try:
+                return json.loads("\n".join(stdout.splitlines()[i:]))
+            except json.JSONDecodeError:
+                continue
+    return None
+
+
+def record(entry: dict[str, Any]) -> None:
+    """One line per run in <review folder>/team-play.jsonl: what the operator and the PO count (reason, wait, run)."""
+    try:
+        with (out_dir() / RUNS_LOG).open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except OSError:
+        pass
+
+
+def run_once(a: argparse.Namespace, base: str, local: bool) -> tuple[int, str, dict[str, Any]]:
+    """One Playwright run → (exit code for team-play, reason word, facts). Prints the run's own report."""
+    out = out_dir()
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    raw_path = out / f"playwright-{stamp}{'-local' if local else ''}.json"
+    raw_path.unlink(missing_ok=True)
+    argv = build_test_argv(a)
+    env = test_env(a, base, local, raw_path)
+    target = f"a local server of this checkout (port {env[LOCAL_PORT_ENV]}, the repository's test settings)" if local else base
+    print(f"team-play: playwright test started against {target}; the {TEST_TIMEOUT_S}s limit counts from the moment the e2e host lock "
+          f"is held, the wait for the lock has its own {LOCK_WAIT_S}s (progress every {PROGRESS_EVERY_S}s)", file=sys.stderr, flush=True)
+    try:
+        r = Run(argv, cwd(), env)
+    except FileNotFoundError:
+        print(f"team-play: {argv[0]} not found — Node and Playwright are not installed on this machine (friction for the retro)")
+        return 2, "tool_missing", {}
+    rc = r.wait()
+    facts = {"waited_s": round(r.waited(r.ended)), "ran_s": round(r.ran_s(r.ended)), "local": local, "lock_skipped": r.lock_skipped}
+    timing = f"waited for the lock {facts['waited_s']}s, ran {facts['ran_s']}s"
+    stdout, stderr = "".join(r.out), "".join(r.err)
+    if r.stopped:
+        what = (f"stopped: no e2e host lock within {LOCK_WAIT_S}s (holder: {r.holder or '?'}); the tests did not start" if r.stopped == "lock_timeout"
+                else f"stopped: the tests ran {facts['ran_s']}s after the lock, limit {TEST_TIMEOUT_S}s"
+                     + (f"; {r.tests_started} of {r.tests_total} tests had started" if r.tests_total else ""))
+        print(f"team-play: playwright test {what} · {timing}")
+        tail = _clean(stdout)[-TAIL_CHARS:]
+        if tail.strip():
+            print("output tail (one line per test that started):\n" + tail)
+        return 124, r.stopped, facts
+    report = read_report(raw_path, stdout)
+    if report is None:
+        tail = _clean(stdout + stderr)
+        print(f"team-play: no JSON report (exit {rc}) · {timing}; output tail:\n{tail[-2000:]}")
+        if a.project and re.search(r"project.*not found", tail, re.I):
+            m = re.search(r"Available projects?:[^\n]*", tail, re.I)
+            print("team-play: unknown --project " + repr(a.project) + ". " + (m.group(0) if m else
+                  "List the names with `npx playwright test --list` (project names are in its output) or read playwright.config.ts; projects starting with 'mobile' get E2E_MOBILE=1."))
+            return 2, "bad_arguments", facts
+        if re.search(r"No tests found", tail):
+            return 2, ("no_tests_live" if not local else "no_tests"), facts
+        return 2, ("server_not_started" if local and re.search(r"e2e server|did not answer|exited with code", tail) else "no_report"), facts
+    if not raw_path.exists():
+        raw_path.write_text(json.dumps(report), encoding="utf-8")
+    lines, totals = summarize(report)
+    facts["totals"] = {k: v for k, v in totals.items() if v}
+    copied = copy_artifacts(cwd() / RESULTS_DIR, out)
+    where = "a local server of this checkout" if local else base
+    print(f"playwright test against {where}: " + (", ".join(f"{k} {v}" for k, v in totals.items() if v) or "no tests")
+          + f" · {timing} · exit {rc}")
+    for ln in lines[:MAX_TESTS_SHOWN]:
+        print(ln)
+    if len(lines) > MAX_TESTS_SHOWN:
+        print(f"… {len(lines) - MAX_TESTS_SHOWN} more tests in {raw_path}")
+    errs = [e for e in (report.get("errors") or []) if isinstance(e, dict) and e.get("message")]
+    for e in errs[:5]:
+        print("error: " + _clean(e["message"]).strip()[:MAX_ERROR_CHARS])
+    if copied:
+        print("artifacts: " + ", ".join(copied[:20]))
+    print(f"report: {raw_path}")
+    if not lines:
+        return 2, ("no_tests_live" if not local else "no_tests"), facts
+    if totals["failed"] or totals["timedOut"]:
+        return 1, "tests_failed", facts
+    return (0, "passed", facts) if rc == 0 else (1, "tests_failed", facts)
 
 
 def cmd_test(a: argparse.Namespace) -> int:
@@ -140,54 +389,28 @@ def cmd_test(a: argparse.Namespace) -> int:
     if a.spec and (".." in Path(a.spec).parts or Path(a.spec).is_absolute()):
         sys.exit("team-play: --spec is a path inside the checkout")
     base = _env("TEAM_PLAY_BASE_URL")
-    if not base:
-        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to test against")
-    argv = build_test_argv(a)
-    env = dict(os.environ)
-    env.update({"BASE_URL": base, "PLAYWRIGHT_BASE_URL": base, "PW_TEST_HTML_REPORT_OPEN": "never", "CI": "1"})
-    if a.project and a.project.lower().startswith("mobile"):
-        env["E2E_MOBILE"] = "1"  # the repository's playwright.config enables its mobile projects on this
-    t0 = time.time()
-    print(f"team-play: playwright test started (progress every {PROGRESS_EVERY_S}s)", file=sys.stderr, flush=True)
-    stop = threading.Event()
-    threading.Thread(target=_progress, args=(stop, t0), daemon=True).start()
-    try:
-        cp = subprocess.run(argv, cwd=str(cwd()), capture_output=True, text=True, timeout=TEST_TIMEOUT_S, env=env)
-    except FileNotFoundError:
-        sys.exit(f"team-play: {argv[0]} not found — Node and Playwright are not installed on this machine (friction for the retro)")
-    except subprocess.TimeoutExpired:
-        sys.exit(f"team-play: playwright test timed out after {TEST_TIMEOUT_S}s")
-    finally:
-        stop.set()
-    out = out_dir()
-    stamp = time.strftime("%Y%m%dT%H%M%S")
-    raw_path = out / f"playwright-{stamp}.json"
-    try:
-        start = cp.stdout.index("{")
-        report = json.loads(cp.stdout[start:])
-        raw_path.write_text(cp.stdout[start:], encoding="utf-8")
-    except (ValueError, json.JSONDecodeError):
-        tail = cp.stdout + cp.stderr
-        print(f"team-play: no JSON report (exit {cp.returncode}); output tail:\n{tail[-2000:]}")
-        if a.project and re.search(r"project.*not found", tail, re.I):
-            m = re.search(r"Available projects?:[^\n]*", tail, re.I)
-            print("team-play: unknown --project " + repr(a.project) + ". " + (m.group(0) if m else
-                  "List the names with `npx playwright test --list` (project names are in its output) or read playwright.config.ts; projects starting with 'mobile' get E2E_MOBILE=1."))
-        return 2
-    lines, totals = summarize(report)
-    copied = copy_artifacts(cwd() / RESULTS_DIR, out)
-    print(f"playwright test against {base}: " + ", ".join(f"{k} {v}" for k, v in totals.items() if v) + f" · {time.time() - t0:.0f}s · exit {cp.returncode}")
-    for ln in lines[:MAX_TESTS_SHOWN]:
-        print(ln)
-    if len(lines) > MAX_TESTS_SHOWN:
-        print(f"… {len(lines) - MAX_TESTS_SHOWN} more tests in {raw_path}")
-    errs = [e for e in (report.get("errors") or []) if isinstance(e, dict) and e.get("message")]
-    for e in errs[:5]:
-        print("error: " + re.sub(r"\x1b\[[0-9;]*m", "", e["message"]).strip()[:MAX_ERROR_CHARS])
-    if copied:
-        print("artifacts: " + ", ".join(copied[:20]))
-    print(f"report: {raw_path}")
-    return 0 if cp.returncode == 0 else 1
+    local = bool(getattr(a, "local", False))
+    if not base and not local:
+        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to test against (or pass --local)")
+    code, reason, facts = run_once(a, base, local)
+    runs = [{"local": local, "reason": reason, **facts}]
+    if reason == "no_tests_live" and LOCAL_FALLBACK:
+        # 19 of 53 specs of ai-battles (26.11) have no @live test: they need the server's test settings (dictionary text
+        # generation, short matches, own garage). The same commit is checked out and built here, so its own server proves it.
+        print("team-play: this selection has no test for the deployed host; running it once more against a local server of the "
+              "same checkout, started by the repository's playwright config with its test settings")
+        code, reason, facts = run_once(a, base, True)
+        runs.append({"local": True, "reason": reason, **facts})
+    print(f"team-play: result {reason}" + ("" if reason == "passed" else
+          f" (if this is why a criterion could not be checked, write `inconclusive_reason: {INCONCLUSIVE_FOR.get(reason, 'other')}`)"))
+    for r in runs:
+        record({"ts": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "spec": a.spec or "", "project": a.project or "",
+                "grep": "|".join(a.grep or []), **r})
+    return code
+
+
+def _clean(s: str) -> str:
+    return re.sub(r"\x1b\[[0-9;]*m", "", s)
 
 
 def copy_artifacts(results: Path, out: Path) -> list[str]:
@@ -385,7 +608,8 @@ def cmd_load(a: argparse.Namespace) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(prog="team-play", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("test"); s.add_argument("--grep", action="append"); s.add_argument("--spec"); s.add_argument("--project"); s.set_defaults(fn=cmd_test)
+    s = sub.add_parser("test"); s.add_argument("--grep", action="append"); s.add_argument("--spec"); s.add_argument("--project")
+    s.add_argument("--local", action="store_true"); s.set_defaults(fn=cmd_test)
     s = sub.add_parser("screenshot"); s.add_argument("url"); s.add_argument("--out", required=True); s.add_argument("--width", type=int)
     s.add_argument("--height", type=int); s.add_argument("--full-page", action="store_true"); s.add_argument("--wait-ms", type=int, default=800)
     s.set_defaults(fn=cmd_screenshot)
