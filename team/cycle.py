@@ -894,7 +894,10 @@ class Cycle:
         if (t.get("repo_only") or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
             try:
                 try:
-                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock)
+                    # the whole output is kept beside the review's evidence: this run, not the one in `start_playtest`, is
+                    # the one a game task gets (26.11: `team-play unit` found nothing on the first live reviews)
+                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock,
+                                                 full_log=self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
                 except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
                     tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
                 tests_out = tests
