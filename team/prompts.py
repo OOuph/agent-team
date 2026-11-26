@@ -486,7 +486,8 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
 
 
 def tester_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None, *, base_url: str,
-                  local: bool, checkout: Path, out_dir: Path, tests: str, server_notes: list[str] | None = None) -> str:
+                  local: bool, checkout: Path, out_dir: Path, tests: str, server_notes: list[str] | None = None,
+                  test_flags: list[str] | None = None, unit_log: bool = False) -> str:
     """The tester's prompt (game profile, slice 4): the task, the implementer's claim, where the server runs and what
     `team-play` can do there, the dispatcher's unit-test run, the checkout to read."""
     specs = sorted(str(p.relative_to(checkout)) for p in (checkout / "tests" / "e2e").glob("*.spec.*")) if (checkout / "tests" / "e2e").exists() else []
@@ -505,7 +506,15 @@ def tester_prompt(product: Product, task: dict[str, Any], result: dict[str, Any]
                   if (checkout / SHOTS_SCRIPT_REL).exists() else
                   f"No `{SHOTS_SCRIPT_REL}` in the checkout: nobody can look at a battle; if the task changes what the player sees in a battle, say so in `limits`.\n")
                + ("E2E specs present: " + ", ".join(specs) if specs else "No tests/e2e specs in the checkout: judge from screenshots, /healthz and the server log, and say in `limits` which spec file is missing."))
+            + ("\nTest server: what the play-test server above cannot show (a feature that is switched off there, text from the dictionary "
+               f"provider) is shown by a server of this checkout with the test settings — `team-play shots --local --prefix {task['id']}` and "
+               "`team-play screenshot /<path> --local --out <name>.png` start it, use it and stop it. "
+               + (f"Flags you may switch with `--env NAME=VALUE`: {', '.join(test_flags)}." if test_flags else "No flag can be changed.")
+               if test_flags is not None else "")
             + "\n\n# TEST RUN (unit tests, by the dispatcher)\n" + (tests or "(none)")
+            + ("\nOnly the end of the output is shown. `team-play unit --grep <test file or name>` prints the lines of the WHOLE output "
+               "that name it (and the three lines after each): use it when the acceptance names a unit test you do not see above."
+               if unit_log else "")
             + "\n\nPlay every acceptance criterion and negative case in the browsers; quote test lines and screenshot names as evidence.\n")
 
 

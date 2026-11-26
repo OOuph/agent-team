@@ -8,6 +8,9 @@ one allow-listed binary that runs Playwright in a fixed checkout against a fixed
   team-play screenshot URL --out NAME [--width W --height H] [--full-page]   a PNG of a page into the review folder
   team-play shots [--weapon KEY] [--ability KEY] [--prefix NAME]  frames of a battle (the repository's tests/tools/battle-shots.mjs) into the review folder
   team-play logs [--tail N]                                       the tail of the play-test server log
+  team-play shots|screenshot … --local [--env NAME=VALUE]   the same, against a server of this checkout started with the
+      product's test settings (product.yaml `playtest.test_env`; `--env` only for names in `playtest.test_flags`)
+  team-play unit [--grep TEXT] [--tail N]   lines of the WHOLE output of the dispatcher's unit-test run (the prompt shows its tail)
   team-play load --clients N --seconds S [--clients-per-room K] [--rate R] [--script tests/load/clients.ts] [--moves]   N WebSocket clients against BASE_URL
 
 Environment set by the dispatcher: TEAM_PLAY_CWD (the checkout), TEAM_PLAY_BASE_URL (the server), TEAM_PLAY_OUT (where
@@ -76,6 +79,16 @@ SHOTS_VIEWPORT = (1280, 720)           # the desktop first for the frames of a b
 SHOTS_KEY_RE = re.compile(r"^[a-z_]{2,24}$")   # --weapon / --ability: a catalogue key of the game, nothing else reaches the script
 SHOTS_FACTS_CHARS = 260                # how much of a frame's facts line is printed
 LOAD_KEYS = ("clients", "connected", "seconds", "messages", "samples", "p50_ms", "p95_ms", "max_ms", "errors", "disconnects", "rejected")
+
+
+# ---- a local server with the product's test settings (rework slice 6; set by the dispatcher from product.yaml `playtest`)
+LOCAL_START_TIMEOUT_S = float(os.environ.get("TEAM_PLAY_LOCAL_START_S") or 90)   # the server must answer its health path within this
+LOCAL_STOP_GRACE_S = 10                        # SIGTERM, then SIGKILL after this many seconds
+LOCAL_LOG_TAIL = 1200                          # characters of the server's log shown when it does not start
+ENV_NAME_RE = re.compile(r"^[A-Z][A-Z0-9_]{1,60}$")
+ENV_VALUE_RE = re.compile(r"^[A-Za-z0-9_.,:/@+-]{0,200}$")
+UNIT_MAX_LINES = 200                           # of `team-play unit` output
+UNIT_CONTEXT_LINES = 3                         # lines after a match (the assertion text follows the test's name)
 
 
 def _env(name: str, default: str = "") -> str:
@@ -427,7 +440,13 @@ def copy_artifacts(results: Path, out: Path) -> list[str]:
 
 
 def cmd_screenshot(a: argparse.Namespace) -> int:
-    if not allowed_url(a.url):
+    if getattr(a, "local", False) and not getattr(a, "_base", None):
+        if not str(a.url).startswith("/"):
+            sys.exit("team-play: with --local give the path on the server, e.g. `team-play screenshot /?render=test --local --out x.png`")
+        with local_server(getattr(a, "env", None) or []) as base_local:
+            a._base, a.url = base_local, base_local + str(a.url)
+            return cmd_screenshot(a)
+    if not getattr(a, "_base", None) and not allowed_url(a.url):
         sys.exit(f"team-play: {a.url} is not on an allowed host (the play-test server or TEAM_ALLOWED_HOSTS)")
     name = a.out if a.out.lower().endswith(".png") else a.out + ".png"
     if not NAME_RE.match(name):
@@ -496,6 +515,117 @@ def server_version(base: str) -> str:
         return ""
 
 
+def _test_settings() -> tuple[dict[str, str], set[str]]:
+    """(`playtest.test_env`, `playtest.test_flags`) of product.yaml as the dispatcher passed them; exits when the product
+    has none — a local server without the test settings would show the live behaviour, not the tested one."""
+    raw = _env("TEAM_PLAY_TEST_ENV")
+    if not raw:
+        sys.exit("team-play: --local is not set up for this product: product.yaml has no `playtest.test_env` (the variables of a test "
+                 "server). Say so in `limits` with `inconclusive_reason: test_tooling` and file one observation for the PO.")
+    try:
+        d = json.loads(raw)
+    except json.JSONDecodeError:
+        sys.exit("team-play: TEAM_PLAY_TEST_ENV is not JSON (dispatcher error; friction for the retro)")
+    env = {str(k): str(v) for k, v in (d if isinstance(d, dict) else {}).items() if ENV_NAME_RE.match(str(k))}
+    return env, {f.strip() for f in _env("TEAM_PLAY_TEST_FLAGS").split(",") if f.strip()}
+
+
+class local_server:
+    """`with local_server(["SAW_ENABLED=1"]) as base:` — a server of the checkout on a free port, started with the
+    product's run command, a clean environment (no secrets), the test settings and the flags asked for; stopped with
+    its whole process group on exit. `{port}` and `{tmp}` in a setting's value are filled in (`{tmp}` = a folder of
+    this server under the review folder: replays, a garage, a database of its own)."""
+
+    def __init__(self, pairs: list[str] | None = None):
+        self.pairs, self.proc, self.log = list(pairs or []), None, None
+        self.shown: list[str] = []
+
+    def __enter__(self) -> str:
+        from . import playtest
+        settings, flags = _test_settings()
+        asked: dict[str, str] = {}
+        for pair in self.pairs:
+            name, _, value = str(pair).partition("=")
+            if not ENV_NAME_RE.match(name) or not ENV_VALUE_RE.match(value):
+                sys.exit("team-play: --env takes NAME=VALUE with a plain value (letters, digits, _ . , : / @ + -), e.g. --env SAW_ENABLED=1")
+            if name not in flags:
+                sys.exit(f"team-play: --env {name} is not a test flag of this product; allowed: {', '.join(sorted(flags)) or '(none: product.yaml playtest.test_flags is empty)'}")
+            asked[name] = value
+        run_cmd = _env("TEAM_PLAY_RUN_CMD")
+        if not run_cmd:
+            sys.exit("team-play: TEAM_PLAY_RUN_CMD is not set: the dispatcher did not say how the server starts")
+        port = playtest.free_port()
+        tmp = out_dir() / f"local-server-{port}"
+        tmp.mkdir(parents=True, exist_ok=True)
+        env = playtest.clean_env()
+        for k in ("BASE_URL", "PLAYWRIGHT_BASE_URL"):
+            env.pop(k, None)
+        fill = lambda v: v.replace("{port}", str(port)).replace("{tmp}", str(tmp))   # noqa: E731
+        env.update({k: fill(v) for k, v in settings.items()})
+        env.update(asked)
+        env.update({"PORT": str(port), "HOST": playtest.HOST})
+        self.shown = [f"{k}={v}" for k, v in asked.items()]
+        self.log = (tmp / "server.log").open("w", encoding="utf-8")
+        self.proc = subprocess.Popen(run_cmd.replace("{port}", str(port)), shell=True, cwd=str(cwd()), stdout=self.log, stderr=subprocess.STDOUT,
+                                     env=env, start_new_session=True)
+        base = f"http://{playtest.HOST}:{port}"
+        health = base + (_env("TEAM_PLAY_HEALTH_PATH") or playtest.DEFAULT_HEALTH_PATH)
+        t0 = time.time()
+        while time.time() - t0 < LOCAL_START_TIMEOUT_S:
+            if self.proc.poll() is not None:
+                break
+            if playtest.health_ok(health):
+                return base
+            time.sleep(0.3)
+        code = self.proc.poll()
+        self.__exit__(None, None, None)
+        tail = (tmp / "server.log").read_text(encoding="utf-8", errors="replace")[-LOCAL_LOG_TAIL:]
+        sys.exit(f"team-play: result server_not_started — the local server {'exited with code ' + str(code) if code is not None else 'did not answer ' + health} "
+                 f"within {LOCAL_START_TIMEOUT_S:.0f}s. Log tail:\n{tail}")
+
+    def __exit__(self, *exc: Any) -> None:
+        if self.proc is not None and self.proc.poll() is None:
+            try:
+                os.killpg(self.proc.pid, signal.SIGTERM)
+                self.proc.wait(timeout=LOCAL_STOP_GRACE_S)
+            except (ProcessLookupError, PermissionError):
+                pass
+            except subprocess.TimeoutExpired:
+                try:
+                    os.killpg(self.proc.pid, signal.SIGKILL)
+                except (ProcessLookupError, PermissionError):
+                    pass
+        if self.log is not None:
+            self.log.close()
+
+
+def cmd_unit(a: argparse.Namespace) -> int:
+    """`team-play unit`: lines of the whole output of the dispatcher's unit-test run. The prompt shows only its tail
+    (ai-battles T-0435: the test the acceptance named was cut off, and the tester may not run the tests itself)."""
+    p = _env("TEAM_PLAY_UNIT_LOG")
+    if not p or not Path(p).exists():
+        print("team-play: no full test output was kept for this review; judge from the TEST RUN section of the prompt")
+        return 0
+    lines = Path(p).read_text(encoding="utf-8", errors="replace").splitlines()
+    if a.grep:
+        want = str(a.grep).lower()
+        keep: set[int] = set()
+        for i, ln in enumerate(lines):
+            if want in ln.lower():
+                keep.update(range(i, min(len(lines), i + 1 + UNIT_CONTEXT_LINES)))
+        picked = [lines[i] for i in sorted(keep)]
+        if not picked:
+            print(f"team-play: no line of the test output ({len(lines)} lines) contains «{a.grep}»")
+            return 0
+    else:
+        picked = lines[-max(1, int(a.tail)):]
+    print(f"unit-test output: {len(picked[:UNIT_MAX_LINES])} of {len(lines)} lines" + (f" matching «{a.grep}» (+{UNIT_CONTEXT_LINES} after each)" if a.grep else " (tail)"))
+    print("\n".join(picked[:UNIT_MAX_LINES]))
+    if len(picked) > UNIT_MAX_LINES:
+        print(f"… {len(picked) - UNIT_MAX_LINES} more line(s): narrow --grep")
+    return 0
+
+
 def cmd_shots(a: argparse.Namespace) -> int:
     """`team-play shots`: run the repository's battle-frames script against BASE_URL. The script plays one battle in one
     browser and writes PNG frames into the review folder; its last stdout line is a JSON summary {frames: [{file, what, facts}]}.
@@ -504,9 +634,16 @@ def cmd_shots(a: argparse.Namespace) -> int:
     script = Path(a.script or SHOTS_SCRIPT)
     if ".." in script.parts or script.is_absolute():
         sys.exit("team-play: --script is a path inside the checkout")
-    base = _env("TEAM_PLAY_BASE_URL")
+    if getattr(a, "local", False) and not getattr(a, "_base", None):
+        # rework slice 6: a feature that is off on the live host (the saw, T-0238) is played on a server of this checkout
+        with local_server(getattr(a, "env", None) or []) as base_local:
+            a._base = base_local
+            print(f"team-play: playing on a local server of this checkout ({base_local}), test settings on"
+                  + (f", flags {' '.join(a.env)}" if getattr(a, "env", None) else ""))
+            return cmd_shots(a)
+    base = getattr(a, "_base", None) or _env("TEAM_PLAY_BASE_URL")
     if not base:
-        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to play on")
+        sys.exit("team-play: TEAM_PLAY_BASE_URL is not set: no server to play on (or pass --local)")
     if not (cwd() / script).exists():
         sys.exit(f"team-play: {script} not found in the checkout — the repository needs a battle-frames script (see the tester card); "
                  "say so in `limits` and file one observation for the PO")
@@ -538,7 +675,8 @@ def cmd_shots(a: argparse.Namespace) -> int:
     if d is None or not present:
         print(f"team-play: no battle frames (exit {cp.returncode}). {str((d or {}).get('error') or '')[:MAX_ERROR_CHARS]}\noutput tail:\n{(cp.stdout + cp.stderr)[-1500:]}")
         return 2
-    print(f"battle frames {w}x{h} against {base}: {len(present)} of {len(frames)} written, car {json.dumps(d.get('car') or {})}, exit {cp.returncode}")
+    where = f"a local server of this checkout ({base}{', ' + ' '.join(a.env) if getattr(a, 'env', None) else ''})" if getattr(a, "_base", None) else base
+    print(f"battle frames {w}x{h} against {where}: {len(present)} of {len(frames)} written, car {json.dumps(d.get('car') or {})}, exit {cp.returncode}")
     for f in present:
         facts = json.dumps(f.get("facts") or {}, ensure_ascii=False)[:SHOTS_FACTS_CHARS]
         print(f"- {out / str(f['file'])} · {f.get('what', '')} · {facts}")
@@ -612,9 +750,12 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--local", action="store_true"); s.set_defaults(fn=cmd_test)
     s = sub.add_parser("screenshot"); s.add_argument("url"); s.add_argument("--out", required=True); s.add_argument("--width", type=int)
     s.add_argument("--height", type=int); s.add_argument("--full-page", action="store_true"); s.add_argument("--wait-ms", type=int, default=800)
+    s.add_argument("--local", action="store_true"); s.add_argument("--env", action="append")
     s.set_defaults(fn=cmd_screenshot)
     s = sub.add_parser("shots"); s.add_argument("--weapon"); s.add_argument("--ability"); s.add_argument("--prefix"); s.add_argument("--script")
-    s.add_argument("--width", type=int); s.add_argument("--height", type=int); s.set_defaults(fn=cmd_shots)
+    s.add_argument("--width", type=int); s.add_argument("--height", type=int)
+    s.add_argument("--local", action="store_true"); s.add_argument("--env", action="append"); s.set_defaults(fn=cmd_shots)
+    s = sub.add_parser("unit"); s.add_argument("--grep"); s.add_argument("--tail", type=int, default=60); s.set_defaults(fn=cmd_unit)
     s = sub.add_parser("logs"); s.add_argument("--tail", type=int, default=3000); s.set_defaults(fn=cmd_logs)
     s = sub.add_parser("load"); s.add_argument("--clients", type=int, required=True); s.add_argument("--seconds", type=int, required=True)
     s.add_argument("--rate", type=float, default=2.0); s.add_argument("--script"); s.add_argument("--moves", action="store_true")
