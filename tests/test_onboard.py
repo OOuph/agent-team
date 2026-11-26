@@ -231,3 +231,57 @@ def test_cli_dry_run_end_to_end(tmp_path: Path, monkeypatch, capsys):
     assert "state=done" in capsys.readouterr().out
     with pytest.raises(SystemExit):
         main(["onboard", "demo-game"])                                           # no mode given
+
+
+# ------------------------------------------------------------------ profile site (owner 26.11: a static site, not a game)
+
+def test_site_profile_start_uses_site_template_and_fixture(tmp_path: Path):
+    st = _settings(tmp_path)
+    res = onboard.start(st, "stats", _brief(tmp_path), host="stats.example.test", dry_run=True, profile="site")
+    d = st.products_dir / "stats"
+    p = C.load_product(st, d)
+    assert p.raw["profile"] == "site" and p.profile == "site" and res["n_questions"] == 3
+    prompt = (d / "onboarding" / "questions-prompt.md").read_text(encoding="utf-8")
+    assert "profile `site`" in prompt
+    assert onboard.SITE_TEMPLATE.read_text(encoding="utf-8")[:60] in prompt
+    assert onboard.GAME_TEMPLATE.read_text(encoding="utf-8")[:60] not in prompt
+    cyc = Cycle(st, p, None, "c1")
+    assert "onboarding not finished" in (cyc.stopped() or "")          # the barrier holds for a site too
+    cyc.store.close()
+
+
+def test_site_profile_plan_has_no_standing_and_no_gdd(tmp_path: Path):
+    st = _settings(tmp_path)
+    onboard.start(st, "stats", _brief(tmp_path), dry_run=True, profile="site")
+    res = onboard.apply_answers(st, "stats", dry_run=True)
+    d = st.products_dir / "stats"
+    prompt = (d / "onboarding" / "plan-prompt.md").read_text(encoding="utf-8")
+    assert "STANDING DIRECTIONS" not in prompt and "profile `site`" in prompt
+    vision = (d / "VISION.md").read_text(encoding="utf-8")
+    assert onboard.VISION_STANDING_HEADING not in vision                 # no game section appended to a site
+    assert res["game_design"] == "" and not (d / "GAME-DESIGN.md").exists()
+    p = C.load_product(st, d)
+    assert p.profile == "site" and p.raw["onboarding"]["state"] == "done" and p.deploy_mode == "git_pull"
+    assert p.raw["repo"]["kind"] == "static" and "phase_gates" not in p.raw
+    assert len(res["deferred"]) == 1
+
+
+def test_site_fixture_matches_schemas_and_bad_profile_refused(tmp_path: Path):
+    import jsonschema
+    fx = onboard.fixture("site")
+    jsonschema.validate(fx["questions"], schema("onboarding-questions"))
+    jsonschema.validate(fx["plan"], schema("onboarding-plan"))
+    assert fx["plan"]["product"]["profile"] == "site"
+    with pytest.raises(onboard.OnboardingError):
+        onboard.start(_settings(tmp_path), "x", _brief(tmp_path), dry_run=True, profile="app")
+
+
+def test_cli_profile_site(tmp_path: Path, monkeypatch, capsys):
+    cfg = tmp_path / "team.yaml"
+    cfg.write_text("paths:\n  products_dir: products\n  data_dir: data\n", encoding="utf-8")
+    monkeypatch.setenv("TEAM_CONFIG", str(cfg))
+    monkeypatch.setattr(C, "ROOT", tmp_path)
+    assert main(["onboard", "demo-site", "--brief", str(_brief(tmp_path)), "--profile", "site", "--dry-run"]) == 0
+    assert "3 questions and 3 accounts" in capsys.readouterr().out
+    assert main(["onboard", "demo-site", "--answers", "--dry-run"]) == 0
+    assert "onboarding done (fixture" in capsys.readouterr().out
