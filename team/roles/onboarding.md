@@ -67,8 +67,9 @@ team does meanwhile, and what to hand over — the NAME of a secret or a host na
 - Step 2: fill the SITE VISION template from the prompt (not the game one): goals from the brief's threshold with the
   dates, «чего не делаем» from the brief, budget. `game_design_md` stays empty; there are no standing directions.
   `product`: profile `site`, `stage` = the first week id (e.g. `W1`), `repo.kind: static`, `deploy.mode: git_pull`,
-  no `phase_gates`. Backlog ≤ 8 in the order of the brief's plan: `ops` (repository, data collector), `feature`
-  (generator, pages, sitemap, markup), `research` only for a real open question; a task that needs a key, domain or
+  no `phase_gates`. Backlog ≤ 8 in the order of the brief's plan: `ops` (repository, data collector, generator, pages, sitemap, markup)
+  — the base build of the site is never `feature`: a `feature` needs evidence from people (the hypothesis rule) and
+  waits in `proposed` without it (hittheline 26.11); `research` only for a real open question; a task that needs a key, domain or
   account the owner has not granted yet is `deferred` with `return_condition`. Acceptance: checks a tester or a test
   can run on the built `public/` («the page has the number in <h1> without JS», «sitemap lists every page»).
 - `owner_summary_md` in Russian: what is built first, what waits for which key or account, the daily cost.

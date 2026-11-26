@@ -71,6 +71,13 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   is nobody to approve an exception — do not put such a task to the owner. Two things are not a redesign and need no
   `redesign` mark: the repair of a plain break (an overlap, content outside the screen, unreadable text) — a `defect`
   — and a new function's element put into the existing layout without moving the rest.
+- **Dependencies never point at a closed task** (hittheline 26.11: three ready tasks waited 100 minutes for tasks the
+  same answer had closed). In `depends_on` name an existing open task by id, or a task you create in this very answer
+  by its exact title — the title of a task of the same answer becomes its id. When you close a task because another
+  replaces it, say so: `close_tasks` item with `replaced_by` (an id, or the exact title of the new task); tasks that
+  waited for the closed one then wait for the replacement. To change only the dependencies of an open task use
+  `edit_tasks` (`task_id`, the whole new `depends_on`) — do not close and re-create a task for that. A dependency on a
+  rejected task with no replacement is dropped by the dispatcher and named in the digest.
 - **A role that stopped with `needs_context`** (owner 26.11: «агент без нужных данных останавливается и эскалирует PO;
   у PO либо есть ответ, либо он спрашивает владельца») sends you one question that lists what it lacks. Answer every
   point from VISION, the design documents and the owner's recorded decisions, concretely enough to act on — your

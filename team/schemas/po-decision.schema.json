@@ -192,7 +192,7 @@
       "items": {
        "type": "string"
       },
-      "description": "Task ids that must be accepted/done with a non-stub result before this task starts (e.g. a task that consumes another task's report). Omit when independent."
+      "description": "Tasks that must be accepted/done with a non-stub result before this task starts: an id of an existing task, or the exact title of a task of the same answer. Never a task this answer closes. Omit when independent."
      },
      "plan": {
       "type": "boolean",
@@ -402,6 +402,11 @@
      "reason": {
       "type": "string",
       "maxLength": 300
+     },
+     "replaced_by": {
+      "type": "string",
+      "maxLength": 140,
+      "description": "when the task is closed because another replaces it: that task's id, or the exact title of a task this answer creates. Tasks that depend on the closed one then wait for the replacement"
      }
     }
    },
@@ -577,6 +582,35 @@
         }
        }
       }
+     }
+    }
+   }
+  },
+  "edit_tasks": {
+   "type": "array",
+   "maxItems": 10,
+   "description": "change an open task in place instead of closing it and creating a new one; today: its dependencies",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "depends_on"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "depends_on": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      },
+      "description": "the task's whole new list of dependencies (ids); empty = it waits for nothing"
+     },
+     "reason": {
+      "type": "string",
+      "maxLength": 200
      }
     }
    }

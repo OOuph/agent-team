@@ -116,7 +116,7 @@ plan:
       state: ready
       repo_only: true
     - title: "Генератор страниц и шаблоны текста"
-      type: feature
+      type: ops
       role: developer
       priority: P1
       size: M
