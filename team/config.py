@@ -19,6 +19,7 @@ log = logging.getLogger("team.config")
 
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
 
+PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
@@ -40,7 +41,11 @@ DEFAULTS: dict[str, Any] = {
               "parallel": dict(PARALLEL_DEFAULTS),
               # continuous work of the seats (owner 25.11, team/flow.py): a freed seat takes the next task inside the cycle,
               # the next cycle starts right after the previous one; off by default, product.yaml `cycle: {flow: {...}}` overrides
-              "flow": dict(FLOW_DEFAULTS)},
+              "flow": dict(FLOW_DEFAULTS),
+              # the PO's prompt (owner 26.11, rework slice 1): `compact_finished` gives accepted / released / measured tasks as a
+              # short card instead of their full text, `stable_first` puts VISION first and the cycle number and the spend last;
+              # both off by default, product.yaml `cycle: {po_prompt: {...}}` overrides key by key
+              "po_prompt": dict(PO_PROMPT_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -379,6 +384,30 @@ class Product:
     def flow(self) -> FlowConfig:
         """`cycle.flow` of team.yaml with this product's `cycle: {flow: {...}}` on top (validated; team/flow.py)."""
         return flow_settings(self.st.cycle, self.raw, self.slug)
+
+    def switches(self, block: str, defaults: dict[str, bool]) -> dict[str, bool]:
+        """On/off switches of `cycle.<block>`: team.yaml first, this product's `cycle: {<block>: {...}}` on top, key by
+        key. Only a real true/false counts; anything else is reported and the default stays (a typo never switches a
+        behaviour on)."""
+        out = dict(defaults)
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get(block)), (f"{self.slug} product.yaml", own.get(block) if isinstance(own, dict) else None)):
+            if src is None:
+                continue
+            if not isinstance(src, dict):
+                log.warning("%s: cycle.%s=%r is not a mapping — ignored", where, block, src)
+                continue
+            for k, v in src.items():
+                if k in out and isinstance(v, bool):
+                    out[k] = v
+                elif k in out:
+                    log.warning("%s: cycle.%s.%s=%r is not true/false — %s in use", where, block, k, v, out[k])
+        return out
+
+    @property
+    def po_prompt_cfg(self) -> dict[str, bool]:
+        """`cycle.po_prompt` (rework slice 1): {compact_finished, stable_first}, both off by default."""
+        return self.switches("po_prompt", PO_PROMPT_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 

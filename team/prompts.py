@@ -38,9 +38,47 @@ def _tail(s: str, n: int) -> str:
     return s if len(s) <= n else s[:n] + f"\n… [cut {len(s) - n} chars]"
 
 
+FINISHED_STATES = ("accepted", "released", "measured")   # work is done: with `cycle.po_prompt.compact_finished` the PO gets a card, not the text
+FINISHED_KEYS = ("id", "title", "state", "type", "role", "goal", "links", "accepted_at")
+FINISHED_OUTCOME_CHARS = 200               # of the last result's summary on that card, one line
+
+
+def finished_brief(t: dict[str, Any]) -> dict[str, Any]:
+    """The card of a task whose work is done (owner 26.11, rework slice 1): enough for the PO to avoid a duplicate, to
+    continue the work with a new task (`continues`) and to see what came out — `outcome` is one line of the last result's
+    summary, else the note of the last transition. Nothing is invented for a task that has neither."""
+    out = {k: t.get(k) for k in FINISHED_KEYS if t.get(k) not in (None, [], "")}
+    summary = next((str(r.get("summary")) for r in reversed(t.get("results") or []) if isinstance(r, dict) and r.get("summary")), "")
+    if not summary:
+        summary = next((str(h.get("note")) for h in reversed(t.get("history") or []) if isinstance(h, dict) and h.get("note")), "")
+    summary = " ".join(summary.split())
+    if summary:
+        out["outcome"] = summary if len(summary) <= FINISHED_OUTCOME_CHARS else summary[:FINISHED_OUTCOME_CHARS - 1] + "…"
+    return out
+
+
+def _po_backlog(tasks: list[dict[str, Any]], compact_finished: bool) -> str:
+    """`# BACKLOG (open tasks)`: every task that is not done or rejected. With `compact_finished` the finished ones come
+    first as cards (they change least from cycle to cycle), the unfinished ones follow with their full text."""
+    if not tasks:
+        return "(empty)"
+    if not compact_finished:
+        return _y([_task_brief(t) for t in tasks])
+    fin = [t for t in tasks if t.get("state") in FINISHED_STATES]
+    rest = [t for t in tasks if t.get("state") not in FINISHED_STATES]
+    out = []
+    if fin:
+        out.append(f"## Work already done ({len(fin)}: accepted, released, measured) — a card per task; `outcome` is one line of its last "
+                   "result. Do not create a task that repeats one of these; to build on one, name it in `continues`.\n"
+                   + _y([finished_brief(t) for t in fin]))
+    out.append(f"## Unfinished tasks ({len(rest)}) — full text\n" + (_y([_task_brief(t) for t in rest]) if rest else "(none)"))
+    return "\n".join(out)
+
+
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
               metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
               channel_caps: dict[str, Any] | None = None, stuck_md: str = "") -> str:
+    cfg = product.po_prompt_cfg
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
@@ -50,17 +88,16 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
     fw_txt = framework_context(product)
     mkt_txt = po_marketing_block(product, store, caps=channel_caps)
     game_txt = "\n\n".join(x for x in (game_block(product), standing_block(product, store)) if x)
-    return (f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n"
-            f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
-            + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
-            + (" The developer has no ready work: queue 1–2 tasks of type `defect` or `quality` (see the quality rule) from failing "
-               "SEO/GEO checks, review fails, persona `ux_friction`, critic findings or facts on the live site, each naming its source "
-               "in `problem`; if nothing is broken or measurably improvable, say so in the digest and invent no feature."
-               if dev_idle and not idle else "")
-            + "\n\n# VISION\n" + product.vision()
+    this_cycle = (f"Spend today ${spent_today:.2f} of the daily cap ${cap:.2f}. Propose at most {max_ready} Ready tasks."
+                  + (" The team is idle: no task is ready or in progress — if VISION promises daily work, create it." if idle else "")
+                  + (" The developer has no ready work: queue 1–2 tasks of type `defect` or `quality` (see the quality rule) from failing "
+                     "SEO/GEO checks, review fails, persona `ux_friction`, critic findings or facts on the live site, each naming its source "
+                     "in `problem`; if nothing is broken or measurably improvable, say so in the digest and invent no feature."
+                     if dev_idle and not idle else ""))
+    body = ("# VISION\n" + product.vision()
             + (("\n\n" + stuck_md) if stuck_md else "")
             + run_time_block(product, store)
-            + "\n\n# BACKLOG (open tasks)\n" + (_y([_task_brief(t) for t in tasks]) if tasks else "(empty)")
+            + "\n\n# BACKLOG (open tasks)\n" + _po_backlog(tasks, cfg["compact_finished"])
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
             + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
@@ -71,6 +108,12 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + "\n\n# READER EXPERIENCE (personas, scores 1–5)\n" + _ux_block(product)
             + "\n\n# NEW OBSERVATIONS\n" + obs_txt
             + "\n\n# LATEST METRICS\n" + (_tail(metrics_md, 6000) or "(no metrics yet)") + "\n")
+    if cfg["stable_first"]:
+        # what does not change between two cycles goes first, the cycle number and the spend last: two runs then share the
+        # whole head of the prompt (before 26.11 they shared 18 characters, so nothing of it was read from the prompt cache)
+        return (f"# PO triage for product `{product.slug}` ({product.site_base})\n\n" + body
+                + f"\n# THIS CYCLE\nCycle {cycle_id}. " + this_cycle + "\n")
+    return f"# Cycle {cycle_id} — PO triage for product `{product.slug}` ({product.site_base})\n\n" + this_cycle + "\n\n" + body
 
 
 def _voice_block(product: Product) -> str:
