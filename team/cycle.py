@@ -144,6 +144,13 @@ REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(team-fetch *)", "Bash(te
 SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
                        "ANTHROPIC_API_KEY", "GSC_")
 REVIEW_TEST_TIMEOUT_S = 900
+GD_CHECKOUT_TOOLS = ["Read", "Glob", "Grep"]      # the game designer with `cycle.game_designer.checkout`: reads, never writes
+GD_CHECKOUT_TURNS = 24                     # turns of such a run (8 without tools)
+GD_CHECKOUT_PROMPT = (
+    "\n\n# REPOSITORY CHECKOUT (read-only)\nThe working directory is a read-only checkout of the base branch at commit {sha}. You have Read, "
+    "Glob and Grep: open the files the task names before you write — the documents above are only the ones the dispatcher always "
+    "attaches. Files the task names that exist here: {named}. You still change nothing yourself: return complete documents in "
+    "`files`, as before. Return `missing` only for what is neither in the prompt nor in this checkout.\n")
 REVIEW_TEST_OUTPUT_CHARS = 6000
 UNIT_LOG_NAME = "unit-tests.log"           # the whole output of the dispatcher's test run, in the review folder (`team-play unit`)
 TESTER_BASH_SLACK_S = 120   # over team-play's lock wait + run limits, for its own start and the teardown
@@ -2457,7 +2464,25 @@ class Cycle:
             partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         work = self.p.work_dir / self.cycle_id / f"gd-{t['id']}"
-        rr = self.role_run("game-designer", prompt, "design-spec", cwd=work, label=f"gd-{t['id']}", cap=cap, allowed_tools=[], max_turns=8)
+        cwd, tools, turns = work, [], 8
+        if has_repo and read_sha and self.p.game_designer_cfg["checkout"] and not self.dry_run:
+            # Rework slice 12: the role was shown GAME-DESIGN.md, the balance tables and a standing direction's documents, and
+            # nothing else of the repository — a task about any other file (design/gdd/22-3-sources.md, ai-battles T-0483,
+            # T-0495, T-0501) ended in `needs_context`. A read-only copy of the commit it was shown is its working folder.
+            try:
+                with self.repo_lock:                     # the clone is copied while no lane is merging into it
+                    cwd = gitops.readonly_checkout(repo, read_sha, work / "checkout")
+                tools, turns = list(GD_CHECKOUT_TOOLS), GD_CHECKOUT_TURNS
+                named = [f for f in prompts.task_files(t) if (cwd / f).is_file()]
+                prompt += GD_CHECKOUT_PROMPT.format(sha=read_sha[:10], named=", ".join(f"`{f}`" for f in named) or "(none of the paths the task names exists here)")
+            except (gitops.GitError, OSError) as exc:    # no copy → the old run, with the reason in the log
+                log.warning("%s: %s: read-only checkout for the game designer failed: %s", self.p.slug, t["id"], gitops.redact(str(exc))[:300])
+                cwd, tools, turns = work, [], 8
+        try:
+            rr = self.role_run("game-designer", prompt, "design-spec", cwd=cwd, label=f"gd-{t['id']}", cap=cap, allowed_tools=tools, max_turns=turns)
+        finally:
+            if cwd != work:
+                remove_tree(work / "checkout")           # the documents come back in `files`; the copy is not kept
         if rr is None:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False

@@ -117,6 +117,8 @@ cycle:
   measure:                        # owner 26.11, rework slice 11: the day is measured, not every task
     by_day: false                 # true = accepted tasks close by themselves (no-metric ones at once, the rest after measure_after_h);
                                   # the analyst gives a day-to-day summary only; its failed run is not repeated in the same window
+  game_designer:                  # 26.11, rework slice 12: what the game designer's run can read
+    checkout: false               # true = a read-only checkout of the base branch as its working folder, with Read / Glob / Grep
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

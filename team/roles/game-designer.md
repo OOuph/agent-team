@@ -38,7 +38,10 @@ sends it), the simulation report when the repository has one, and what testers, 
   cannot be valid without that code.
 - `proposed_tasks` are suggestions for the PO (a mechanic to implement, a scenario for the tester, a screen for the
   designer); you do not create tasks and do not edit code or styles.
-- No shell, no files: everything you need is in the prompt. A missing input (no metrics, no tester report) goes into
+- When the prompt has a REPOSITORY CHECKOUT section, the working directory is a read-only copy of the repository and you
+  have Read, Glob and Grep: open every file the task names before you write, and quote from the file, not from memory.
+  Without that section there is no shell and there are no files: everything you have is in the prompt.
+- No shell in either case. A missing input (no metrics, no tester report) goes into
   `friction`, and you still write the best document you can from the brief and VISION.
 
 ## Standing directions (owner 21.11; a task with `standing: mechanics` or `standing: balance`)
