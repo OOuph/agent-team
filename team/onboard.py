@@ -45,9 +45,12 @@ DECISION_LABEL = "Решение:"
 DEFAULT_MARK = "(по умолчанию)"
 TEMPLATES = Path(__file__).parent / "templates"
 GAME_TEMPLATE = TEMPLATES / "VISION.game.template.md"
+SITE_TEMPLATE = TEMPLATES / "VISION.template.md"          # a static site (owner 26.11: Hit the Line is a site, not a game)
 SAMPLE_FIXTURE = TEMPLATES / "onboarding.sample.yaml"
+SITE_FIXTURE = TEMPLATES / "onboarding.sample-site.yaml"
 SAMPLE_BRIEF = TEMPLATES / "onboarding.sample-brief.md"
 DEFAULT_PROFILE = "game"
+PROFILES = ("game", "site")
 VISION_STANDING_HEADING = "Постоянные направления"   # the VISION section a game product must have (team/standing.py, owner 21.11)
 
 
@@ -90,20 +93,28 @@ def _write_yaml(p: Path, obj: dict[str, Any]) -> None:
     p.write_text(yaml.safe_dump(obj, sort_keys=False, allow_unicode=True, width=110), encoding="utf-8")
 
 
-def fixture() -> dict[str, Any]:
-    return _read_yaml(SAMPLE_FIXTURE)
+def fixture(profile: str = DEFAULT_PROFILE) -> dict[str, Any]:
+    return _read_yaml(SITE_FIXTURE if profile == "site" else SAMPLE_FIXTURE)
+
+
+def _profile(raw: dict[str, Any]) -> str:
+    return str(raw.get("profile") or DEFAULT_PROFILE)
+
+
+def vision_template(profile: str) -> str:
+    return (SITE_TEMPLATE if profile == "site" else GAME_TEMPLATE).read_text(encoding="utf-8")
 
 
 # ------------------------------------------------------------------ prompts
 
 def questions_prompt(slug: str, brief: str, raw: dict[str, Any]) -> str:
-    return (f"# ONBOARDING — step 1: QUESTIONS — product `{slug}`\n\n"
+    return (f"# ONBOARDING — step 1: QUESTIONS — product `{slug}` · profile `{_profile(raw)}`\n\n"
             "Read the owner's brief and return the onboarding-questions schema: one batch of clarifying questions (each with "
             "why, options, default) and the accounts/access the team needs with reasons. Nothing the brief already answers.\n\n"
             "## BRIEF (the owner's words)\n" + brief.strip() +
             "\n\n## WHAT THE DISPATCHER ALREADY KNOWS\n" + yaml.safe_dump({k: raw.get(k) for k in ("slug", "name", "host", "repo", "budget_usd_per_day")},
                                                                          sort_keys=False, allow_unicode=True) +
-            "\n## VISION TEMPLATE (what step 2 will have to fill — ask what it needs)\n" + GAME_TEMPLATE.read_text(encoding="utf-8"))
+            "\n## VISION TEMPLATE (what step 2 will have to fill — ask what it needs)\n" + vision_template(_profile(raw)))
 
 
 def standing_note() -> str:
@@ -119,17 +130,21 @@ def standing_note() -> str:
 
 
 def plan_prompt(slug: str, brief: str, qa: dict[str, Any], raw: dict[str, Any]) -> str:
-    return (f"# ONBOARDING — step 2: PLAN — product `{slug}`\n\n"
+    game = _profile(raw) == "game"
+    what = ("the full VISION.md by the template, GAME-DESIGN.md v1 or a first game-designer task, product fields, the first "
+            "backlog (M0 only; " if game else
+            "the full VISION.md by the template (a static site: no GAME-DESIGN.md, `game_design_md` empty), product fields "
+            "(profile `site`), the first backlog (the first weeks of the brief's plan; ")
+    return (f"# ONBOARDING — step 2: PLAN — product `{slug}` · profile `{_profile(raw)}`\n\n"
             "Read the brief and the owner's answers (empty answer = the default you proposed; say so in `decisions`) and return "
-            "the onboarding-plan schema: the full VISION.md by the template, GAME-DESIGN.md v1 or a first game-designer task, "
-            "product fields, the first backlog (M0 only; a task that needs an account the owner declined or postponed is "
+            "the onboarding-plan schema: " + what + "a task that needs an account the owner declined or postponed is "
             "`deferred` with `return_condition`), decisions and a Russian summary for the owner.\n\n"
-            + standing_note() +
+            + (standing_note() if game else "") +
             "## BRIEF\n" + brief.strip() +
             "\n\n## QUESTIONS AND ANSWERS\n" + yaml.safe_dump(qa, sort_keys=False, allow_unicode=True, width=110) +
             "\n## PRODUCT (product.yaml as it is now)\n" + yaml.safe_dump({k: raw.get(k) for k in ("slug", "name", "host", "repo", "budget_usd_per_day")},
                                                                           sort_keys=False, allow_unicode=True) +
-            "\n## VISION TEMPLATE (fill every section; keep the headings)\n" + GAME_TEMPLATE.read_text(encoding="utf-8"))
+            "\n## VISION TEMPLATE (fill every section; keep the headings)\n" + vision_template(_profile(raw)))
 
 
 # ------------------------------------------------------------------ rendering and parsing the owner's file
@@ -230,8 +245,11 @@ def _run(st: C.Settings, p: C.Product, runner: Any, prompt: str, schema_name: st
 
 
 def start(st: C.Settings, slug: str, brief_path: Path, *, name: str | None = None, host: str = "", repo: str = "",
-          budget: float | None = None, runner: Any = None, dry_run: bool = False) -> dict[str, Any]:
-    """Step 1: create the product folder (if needed), run the questions step, write questions.md, open one owner question."""
+          budget: float | None = None, runner: Any = None, dry_run: bool = False, profile: str | None = None) -> dict[str, Any]:
+    """Step 1: create the product folder (if needed), run the questions step, write questions.md, open one owner question.
+    `profile`: `game` (default) or `site` — picks the VISION template, the role's instructions and the dry-run fixture."""
+    if profile is not None and profile not in PROFILES:
+        raise OnboardingError(f"profile {profile!r}: expected one of {', '.join(PROFILES)}")
     d = st.products_dir / slug
     brief = brief_path.read_text(encoding="utf-8")
     if not brief.strip():
@@ -243,9 +261,11 @@ def start(st: C.Settings, slug: str, brief_path: Path, *, name: str | None = Non
     else:
         d.mkdir(parents=True)
         raw = {"slug": slug, "name": name or slug, "host": host, "site_base": f"https://{host}" if host else "",
-               "profile": DEFAULT_PROFILE, "repo": {"url": repo or "", "branch": "main", "public_dir": "public"}, "channels": {},
+               "profile": profile or DEFAULT_PROFILE, "repo": {"url": repo or "", "branch": "main", "public_dir": "public"}, "channels": {},
                "targets": [], "budget_usd_per_day": budget, "paused": False}
         (d / "decisions.md").write_text(f"# {raw['name']} — решения\n\n", encoding="utf-8")
+    if profile:
+        raw["profile"] = profile
     raw["onboarding"] = {"state": STATE_QUESTIONS, "brief": f"{DIR}/{BRIEF_FILE}", "asked": utcnow()}
     _write_yaml(d / "product.yaml", raw)
     od = _dir(d)
@@ -256,7 +276,7 @@ def start(st: C.Settings, slug: str, brief_path: Path, *, name: str | None = Non
     res = _run(st, p, runner, prompt, "onboarding-questions", "onboarding-questions", QUESTIONS_CAP_USD, dry_run)
     source = "model"
     if res is None:
-        res, source = fixture()["questions"], "fixture (dry-run)"
+        res, source = fixture(_profile(raw))["questions"], "fixture (dry-run)"
     _write_yaml(od / QUESTIONS_YAML, res)
     md_path = od / QUESTIONS_MD
     md_path.write_text(render_questions_md(slug, res), encoding="utf-8")
@@ -297,7 +317,7 @@ def apply_answers(st: C.Settings, slug: str, answers_path: Path | None = None, *
     plan = _run(st, p, runner, prompt, "onboarding-plan", "onboarding-plan", PLAN_CAP_USD, dry_run)
     source = "model"
     if plan is None:
-        plan, source = fixture()["plan"], "fixture (dry-run)"
+        plan, source = fixture(_profile(raw))["plan"], "fixture (dry-run)"
     _write_yaml(od / PLAN_YAML, plan)
     created = apply_plan(d, raw, plan, qa)
     _log(d, "plan", source=source, **{k: v for k, v in created.items() if k != "tasks"}, tasks=len(created["tasks"]))
@@ -308,7 +328,7 @@ def apply_answers(st: C.Settings, slug: str, answers_path: Path | None = None, *
 def apply_plan(d: Path, raw: dict[str, Any], plan: dict[str, Any], qa: dict[str, Any]) -> dict[str, Any]:
     """Write the plan into the product folder. Pure file/store work, no model: tested directly."""
     vision = str(plan.get("vision_md") or "")
-    profile = str((plan.get("product") or {}).get("profile") or DEFAULT_PROFILE)
+    profile = str((plan.get("product") or {}).get("profile") or _profile(raw))
     if profile == "game" and VISION_STANDING_HEADING.lower() not in vision.lower():
         # owner 21.11: every game VISION names the standing directions; a plan that left the section out gets the default one
         from . import standing
@@ -319,7 +339,7 @@ def apply_plan(d: Path, raw: dict[str, Any], plan: dict[str, Any], qa: dict[str,
     if gdd:
         (d / GAME_DESIGN_FILE).write_text(gdd + "\n", encoding="utf-8")
     prod = plan.get("product") or {}
-    raw["profile"] = str(prod.get("profile") or DEFAULT_PROFILE)
+    raw["profile"] = profile
     raw["stage"] = str(prod.get("stage") or "M0")
     if prod.get("stack"):
         raw["stack"] = prod["stack"]

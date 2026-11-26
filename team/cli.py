@@ -1,7 +1,7 @@
 """`team` — the dispatcher's command line.
 
   team init <slug> --name N --host H [--repo URL] [--channel telegram=@chan ...]   create products/<slug>/ from the template
-  team onboard <slug> --brief F [--host H --repo URL] | --answers [F] | --status [--dry-run]   brief → questions/accounts → VISION + backlog
+  team onboard <slug> --brief F [--host H --repo URL --profile game|site] | --answers [F] | --status [--dry-run]   brief → questions/accounts → VISION + backlog
   team deploy <slug> [--sha S | --rollback] [--force] [--show]   service deploy by hand (deploy.mode: service; the cycle does it after a merge)
   team cycle [--product SLUG|all] [--phase collect,review,...] [--dry-run] [--cycle ID]
   team cycle --due              only products with product.yaml `cycle.every_min` whose last finished cycle is that old (run-cycle-fast.sh)
@@ -90,7 +90,7 @@ def cmd_onboard(st: C.Settings, a: argparse.Namespace) -> int:
     try:
         if a.brief:
             res = onboard.start(st, a.slug, Path(a.brief), name=a.name, host=a.host or "", repo=a.repo or "", budget=a.budget,
-                                runner=runner, dry_run=a.dry_run)
+                                runner=runner, dry_run=a.dry_run, profile=a.profile)
             print(f"{a.slug}: {res['n_questions']} questions and {res['n_accounts']} accounts written ({res['source']}) → {res['questions_md']}\n"
                   f"owner question {res['question_id']}; fill the file, then: team onboard {a.slug} --answers {res['questions_md']}")
         elif a.answers is not None:
@@ -548,7 +548,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--budget", type=float, default=None); s.set_defaults(fn=cmd_init)
     s = sub.add_parser("onboard"); s.add_argument("slug"); s.add_argument("--brief"); s.add_argument("--answers", nargs="?", const="")
     s.add_argument("--status", action="store_true"); s.add_argument("--name"); s.add_argument("--host"); s.add_argument("--repo")
-    s.add_argument("--budget", type=float, default=None); s.add_argument("--dry-run", action="store_true"); s.set_defaults(fn=cmd_onboard)
+    s.add_argument("--budget", type=float, default=None); s.add_argument("--dry-run", action="store_true")
+    s.add_argument("--profile", choices=["game", "site"], default=None, help="new product: game (default) or site"); s.set_defaults(fn=cmd_onboard)
     s = sub.add_parser("deploy"); s.add_argument("slug"); s.add_argument("--sha"); s.add_argument("--rollback", action="store_true")
     s.add_argument("--force", action="store_true"); s.add_argument("--show", action="store_true"); s.set_defaults(fn=cmd_deploy)
     s = sub.add_parser("cycle"); s.add_argument("--product", default="all"); s.add_argument("--phase"); s.add_argument("--cycle")
