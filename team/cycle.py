@@ -135,6 +135,7 @@ SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_
                        "ANTHROPIC_API_KEY", "GSC_")
 REVIEW_TEST_TIMEOUT_S = 900
 REVIEW_TEST_OUTPUT_CHARS = 6000
+UNIT_LOG_NAME = "unit-tests.log"           # the whole output of the dispatcher's test run, in the review folder (`team-play unit`)
 TESTER_BASH_SLACK_S = 120   # over team-play's lock wait + run limits, for its own start and the teardown
 
 
@@ -192,7 +193,7 @@ def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
     return gone
 
 
-def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None) -> str:
+def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None, full_log: Path | None = None) -> str:
     """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
     environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
     `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files. `lock`: the
@@ -217,16 +218,23 @@ def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "
         return "(no tests found in the repository: no test_*.py files and no repo.test_cmd)"
     env = {k: v for k, v in os.environ.items() if not k.startswith(SECRET_ENV_PREFIXES)}
     env.update({"TEAM_PUBLISH_DRY_RUN": "1", "PYTHONDONTWRITEBYTECODE": "1"})
-    out = []
+    out, full = [], []
     for c in cmds:
         try:
             cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=REVIEW_TEST_TIMEOUT_S, env=env)
             text, code = (cp.stdout + "\n" + cp.stderr).strip(), cp.returncode
         except subprocess.TimeoutExpired:
             text, code = f"timed out after {REVIEW_TEST_TIMEOUT_S} s", "timeout"
+        full.append(f"$ {c}\nexit code: {code}\n{text}")
         if len(text) > REVIEW_TEST_OUTPUT_CHARS:
             text = "… [head cut]\n" + text[-REVIEW_TEST_OUTPUT_CHARS:]
         out.append(f"$ {c}\nexit code: {code}\n{text}")
+    if full_log is not None:                           # rework slice 6: the whole output, for `team-play unit --grep`
+        try:
+            full_log.parent.mkdir(parents=True, exist_ok=True)
+            full_log.write_text("\n\n".join(full), encoding="utf-8")
+        except OSError as exc:
+            log.warning("full test output not kept in %s: %s", full_log, exc)
     return "\n\n".join(out)
 
 
@@ -1066,13 +1074,14 @@ class Cycle:
         still judges what it can, and the PO gets one environment_error observation. `tests` is the dispatcher's unit-test
         run from the repo_only path (not repeated here)."""
         work = self.p.work_dir / self.cycle_id / f"playtest-{t['id']}"      # its own folder: the review checkout is read-only
-        if not tests:
-            try:
-                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock)
-            except Exception as e:  # noqa: BLE001
-                tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         out_dir = self.p.dir / "reviews" / t["id"]
         out_dir.mkdir(parents=True, exist_ok=True)
+        unit_log = out_dir / UNIT_LOG_NAME
+        if not tests:
+            try:
+                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, full_log=unit_log)
+            except Exception as e:  # noqa: BLE001
+                tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         try:
             server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock, **({"force_local": True} if force_local else {}))
         except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
@@ -1088,11 +1097,31 @@ class Cycle:
         hosts = self._allowed_hosts("tester").split(",") + [playtest.HOST]
         env = {"TEAM_PLAY_CWD": str(server.dest), "TEAM_PLAY_BASE_URL": server.base_url, "TEAM_PLAY_OUT": str(out_dir),
                "TEAM_PLAY_SERVER_LOG": str(server.log_path or ""), "TEAM_ALLOWED_HOSTS": ",".join(dict.fromkeys(h for h in hosts if h)),
+               **({"TEAM_PLAY_UNIT_LOG": str(unit_log)} if unit_log.exists() else {}), **self.test_server_env(),
                **tester_bash_timeouts()}
         prompt = prompts.tester_prompt(self.p, t, result, sha, base_url=server.base_url, local=server.local, checkout=server.dest,
-                                       out_dir=out_dir, tests=tests, server_notes=server.notes)
+                                       out_dir=out_dir, tests=tests, server_notes=server.notes,
+                                       test_flags=sorted(f for f in env.get("TEAM_PLAY_TEST_FLAGS", "").split(",") if f) if env.get("TEAM_PLAY_TEST_ENV") else None,
+                                       unit_log=unit_log.exists())
         self.store.event("playtest.started", t["id"], "dispatcher", {"base_url": server.base_url, "local": server.local})
         return server, prompt, list(TESTER_TOOLS), env
+
+    def test_server_env(self) -> dict[str, str]:
+        """product.yaml `playtest: {test_env: {NAME: value}, test_flags: [NAME, …]}` (rework slice 6) for `team-play
+        shots|screenshot --local`: the variables of a test server and the names the tester may set with `--env`. Empty
+        when the product has no `test_env` — the tools then say that the local mode is not set up."""
+        cfg = self.p.raw.get("playtest")
+        cfg = cfg if isinstance(cfg, dict) else {}
+        te = cfg.get("test_env")
+        if not isinstance(te, dict) or not te or not self.p.run_cmd:
+            return {}
+        name = re.compile(r"^[A-Z][A-Z0-9_]{1,60}$")
+        bad = [str(k) for k in te if not name.match(str(k))] + [str(f) for f in (cfg.get("test_flags") or []) if not name.match(str(f))]
+        if bad:
+            log.warning("%s: product.yaml playtest: %s is not a variable name (A-Z, 0-9, _) — dropped", self.p.slug, ", ".join(bad))
+        return {"TEAM_PLAY_TEST_ENV": json.dumps({str(k): str(v) for k, v in te.items() if name.match(str(k))}),
+                "TEAM_PLAY_TEST_FLAGS": ",".join(str(f) for f in (cfg.get("test_flags") or []) if name.match(str(f))),
+                "TEAM_PLAY_RUN_CMD": self.p.run_cmd, "TEAM_PLAY_HEALTH_PATH": self.p.health_path or playtest.DEFAULT_HEALTH_PATH}
 
     def content_without_post(self, t: dict[str, Any]) -> bool:
         if str(t.get("role") or "") != "marketer":

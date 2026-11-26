@@ -20,6 +20,13 @@ the TEST RUN the dispatcher already made (unit tests: command, exit code, output
   <word>`; the summary line says `waited for the lock N s, ran M s` — quote both.
 - `team-play screenshot <url> --out <name>.png [--width 360 --height 740] [--full-page]` — a picture of a page on the
   phone viewport (default) or another size; the URL must be on the server's host.
+- `--local` on `team-play shots` and `team-play screenshot /<path>` (when the prompt has a «Test server» line): the
+  command starts a server of the checkout with the product's test settings, uses it and stops it. This is how you
+  look at what the play-test server cannot show — a feature that is switched off on the deployed host, text from the
+  test provider. `--env NAME=VALUE` switches one of the flags the prompt lists, nothing else. Say in the evidence that
+  the frame is from the test server and with which flags.
+- `team-play unit --grep <test file or name>` prints the lines of the WHOLE unit-test output of the dispatcher's run
+  that name it (the prompt shows only the end). A criterion «the test X passes» is judged from these lines.
 - `team-play shots [--weapon KEY] [--ability KEY] [--prefix <task id>]` — frames of a real battle at 1280×720 (owner
   22.11): the repository's script `tests/tools/battle-shots.mjs` plays one battle against bots in one browser and writes
   PNG frames into the review folder — the garage, the start, your own shot, your own ability, driving — and prints for
