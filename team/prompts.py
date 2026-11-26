@@ -281,6 +281,19 @@ def task_reports(task: dict[str, Any] | None) -> list[str]:
     return out[:REPORTS_MAX]
 
 
+FILE_RE = re.compile(r"(?<![\w/.-])((?:[\w.-]+/)+[\w.-]+\.(?:md|json|txt|csv|ts|tsx|js|mjs|css|html|yaml|yml))")
+TASK_FILES_MAX = 12
+
+
+def task_files(task: dict[str, Any] | None) -> list[str]:
+    """Safe repository-relative file paths the task text names (title, problem, scope, acceptance), in order, no repeats."""
+    out: list[str] = []
+    for m in FILE_RE.findall(_y(_task_brief(task or {}))):
+        if m not in out and safe_rel_path(m):
+            out.append(m)
+    return out[:TASK_FILES_MAX]
+
+
 def truncated_design_docs(product: Product, gdd_dir: Path, task: dict[str, Any] | None = None) -> set[str]:
     """Repository-relative paths the game designer saw only in part: the dispatcher must not let it overwrite them."""
     gdd_limit, table_limit = _design_limits(product)

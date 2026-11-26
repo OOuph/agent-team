@@ -33,6 +33,7 @@ QUEUE_DEFAULTS: dict[str, Any] = {
 _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
+GAME_DESIGNER_DEFAULTS: dict[str, bool] = {"checkout": False}   # `cycle.game_designer`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -95,7 +96,10 @@ DEFAULTS: dict[str, Any] = {
               # the day is measured, not every task (owner 26.11, rework slice 11): `by_day` true = accepted tasks close by
               # themselves after measure_after_h (no-metric tasks at once), the analyst gives a day-to-day summary only, a failed
               # analyst run is not repeated in the same window; off by default
-              "measure": dict(MEASURE_DEFAULTS)},
+              "measure": dict(MEASURE_DEFAULTS),
+              # the game designer's run (26.11, rework slice 12): `checkout` true = a read-only checkout of the base branch is
+              # its working folder and it has Read / Glob / Grep; off = no tools, an empty folder, documents in the prompt only
+              "game_designer": dict(GAME_DESIGNER_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -537,6 +541,11 @@ class Product:
     def measure_cfg(self) -> dict[str, bool]:
         """`cycle.measure` (rework slice 11): {by_day}, off by default."""
         return self.switches("measure", MEASURE_DEFAULTS)
+
+    @property
+    def game_designer_cfg(self) -> dict[str, bool]:
+        """`cycle.game_designer` (rework slice 12): {checkout}, off by default."""
+        return self.switches("game_designer", GAME_DESIGNER_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
