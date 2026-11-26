@@ -19,6 +19,8 @@
      "evidence": {"type": "array", "minItems": 1, "items": {"type": "string", "maxLength": 20}, "description": "friction ids F-0001"},
      "files": {"type": "array", "items": {"type": "string", "maxLength": 200}},
      "change": {"type": "string", "maxLength": 1500},
+     "was": {"type": "string", "maxLength": 3000, "description": "a change of a role card or DEPUTY.md (kind role_card): the exact text as it is now, copied from the file"},
+     "becomes": {"type": "string", "maxLength": 3000, "description": "… and the exact text you propose instead. The owner reads the pair and decides; such a proposal is not turned into a task"},
      "acceptance": {"type": "array", "minItems": 1, "maxItems": 5, "items": {"type": "string", "maxLength": 300}}
     }
    }

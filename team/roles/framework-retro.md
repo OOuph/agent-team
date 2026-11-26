@@ -21,6 +21,10 @@ for more than a day, environment errors, and what the roles themselves reported 
   is a defect of the retro.
 - A proposal that changes behaviour lists `SCHEME.md` and `CHANGELOG.md` among its files: the scheme is the single full
   description of the loop and must stay true after the change.
+- A change of an instruction — a role card (`team/roles/*.md`) or `DEPUTY.md` — goes to the owner, not to a developer
+  (owner 26.11). Give it `kind: role_card`, and fill `was` with the exact text as it stands in the file (copy it) and
+  `becomes` with the exact text you propose instead. The dispatcher keeps the pair as a proposal file and the owner
+  gets all of them once a week; no task and no pull request is made from it. One proposal per file.
 - No invention: if the register is empty, one-off, or explained by an outage, put that into `no_action` and propose nothing.
 - Terse English. The owner reads this once a day; the diary site publishes the counts.
 
@@ -29,4 +33,4 @@ for more than a day, environment errors, and what the roles themselves reported 
   answer, or empty. Never more than one.
 
 ## Output
-`retro-report`: summary_md, owner_question, proposals (title, kind, risk, evidence, files, change, acceptance), no_action.
+`retro-report`: summary_md, owner_question, proposals (title, kind, risk, evidence, files, change, acceptance; `was` and `becomes` for a role card), no_action.

@@ -2507,6 +2507,9 @@ class Cycle:
         fw = dict(self.st.raw.get("framework") or {})
         touched = gitops.changed_files(repo, self.p.repo_branch)
         protected = [f for f in touched if any(f == pp or f.startswith(pp.rstrip("/") + "/") for pp in fw.get("protected_paths") or [])]
+        from . import instructions as instructions_mod
+        inst_cfg = instructions_mod.settings(self.st)      # rework slice 8: instructions change only through the owner
+        inst_files = instructions_mod.protected(touched, inst_cfg["paths"]) if inst_cfg["owner_only"] else []
         tests_changed = gitops.tests_modified_or_deleted(repo, self.p.repo_branch)
         try:
             with self.repo_lock:                    # the push writes refs of the clone the other lanes fetch into
@@ -2546,6 +2549,16 @@ class Cycle:
             self.store.transition(t["id"], "blocked", "dispatcher", f"push/PR failed: {gitops.redact(str(exc))[:300]}", force=True)
             return True
         no_reason = bool(tests_changed) and not gitops.has_tests_change_reason(body)
+        if inst_files:
+            # the change is kept as «было → стало» for the owner's weekly list; the pull request stays open and is not merged
+            for f in inst_files:
+                was, becomes = self.instruction_diff(repo, f)
+                instructions_mod.propose(self.st, source=str(t.get("role") or "developer"), file=f, was=was, becomes=becomes,
+                                         why=f"{t['id']} {t.get('title', '')}: {_short_text(res.get('summary'), 300)}", product=self.p.slug, ref=url)
+            self.store.transition(t["id"], "waiting_owner", "dispatcher", f"pull request {url} (instructions change only through the owner: "
+                                  f"{', '.join(inst_files[:5])}; kept as a proposal for his weekly list)", force=True, pr_url=url, assignee_run=None)
+            self.store.event("instructions.proposed", t["id"], "dispatcher", {"files": inst_files[:10], "pr": url})
+            return True
         guard = canary_mod.guard_settings(fw)                          # rework slice 7: off by default
         strict = self.tests_guard(repo, tests_changed) if guard["tests_strict"] and fw.get("auto_merge") and not protected else ""
         if not fw.get("auto_merge") or protected or no_reason or strict:
@@ -2679,6 +2692,28 @@ class Cycle:
                 log.warning("could not record canary.empty: %s", exc)
             return False, note, facts
         return True, f"dry-run cycle {cyc} of {product} on a state copy: all phases, {len(artefacts)} result artefact(s)", facts
+
+    def instruction_diff(self, repo: Path, path: str) -> tuple[str, str]:
+        """(«было», «стало») of an instruction file the candidate branch changes: the removed and the added lines of its
+        diff against the base branch (the whole new file when it did not exist)."""
+        ref = f"origin/{self.p.repo_branch}" if gitops.has_remote(repo) else self.p.repo_branch
+        diff = gitops.git(repo, "diff", "-U0", f"{ref}...HEAD", "--", path, check=False)
+        was = [ln[1:] for ln in diff.splitlines() if ln.startswith("-") and not ln.startswith("---")]
+        becomes = [ln[1:] for ln in diff.splitlines() if ln.startswith("+") and not ln.startswith("+++")]
+        return "\n".join(was), "\n".join(becomes)
+
+    def keep_lessons(self, lessons: list[str]) -> None:
+        """The editor's lessons. `framework.instructions.owner_only` (rework slice 8): a lesson is an instruction the role
+        writes for itself, so it is kept as a proposal for the owner's weekly list and does not take effect; off — it is
+        appended to the product's editorial-lessons.md, as before."""
+        from . import editorial, instructions as instructions_mod
+        if not instructions_mod.settings(self.st)["owner_only"]:
+            editorial.add_lessons(self.p, lessons, "editor")
+            return
+        for ls in lessons:
+            if str(ls).strip() and not editorial.is_label_lesson(str(ls)):
+                instructions_mod.propose(self.st, source="editor", file=f"products/{self.p.slug}/{editorial.LESSONS_FILE}", was="",
+                                         becomes=str(ls).strip(), why="the editor's lesson after a review", product=self.p.slug)
 
     def protected_functions_touched(self, repo: Path) -> list[str]:
         """`path:function` of the protected functions (the canary, the merge gate: team/canary.py PROTECTED_FUNCTIONS,
@@ -2862,7 +2897,7 @@ class Cycle:
                 verdicts = {n: editorial.enforce_series_bar(r, series, last_round=round_no == max_rounds) for n, r in verdicts.items()}
             new_lessons = [ls for r in verdicts.values() for ls in (r.get("lessons") or [])][: editorial.MAX_LESSONS_PER_REVIEW]
             if new_lessons:
-                editorial.add_lessons(self.p, new_lessons, "editor")
+                self.keep_lessons(new_lessons)
             revise = [(n, r) for n, r in verdicts.items() if r.get("verdict") == "revise"]
             final = round_no == max_rounds or not revise
             for name, d in drafts:
