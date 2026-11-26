@@ -142,11 +142,12 @@ def live_base_url(product: Product) -> str | None:
 
 
 def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd: str = "", start_timeout_s: int = START_TIMEOUT_S,
-          lock: Any = None) -> Server:
+          lock: Any = None, force_local: bool = False) -> Server:
     """Copy `sha`, install, build, run, wait for health. Raises PlaytestError with the log tail when the server does not come up.
     `lock`: the cycle's repository lock (team/lanes.py), held only while the clone is copied — another lane may be merging
     into it; install, build and the server run outside it."""
-    live = live_base_url(product)
+    # `force_local` (rework slice 5): a commit that is not merged yet is not on the deployed host — always a local server
+    live = None if force_local else live_base_url(product)
     if not live and not product.run_cmd:
         raise PlaytestError("repo.run_cmd is not set in product.yaml: the dispatcher cannot start the server")
     with lock if lock is not None else nullcontext():

@@ -37,6 +37,15 @@ the TEST RUN the dispatcher already made (unit tests: command, exit code, output
 Shell rule: only bare `team-play …` and `team-fetch …` calls — no pipes, `cd`, `&&`, redirects or other commands.
 
 ## Rules
+- **Redesign only with a new function** (owner 26.11, after a night in which the first screen was re-laid «by the
+  mock-up» and passed review: «редизайн делаем только при новом функционале — я не вижу новых функций, а редизайн
+  вижу»). When the change touches a screen that already existed, compare it with the live site (the «before»): what
+  moved, changed size or look must be what the task's new function needs and no more. A change that re-lays or
+  restyles an existing screen and gives the player nothing new to do is a `fail` with `first_failure` «redesign
+  without a new function: <what moved>» — matching a mock-up or DESIGN.md is not an answer to that. Not a redesign: a
+  new element put into the existing layout without moving the rest, and the repair of a plain break (an overlap,
+  content outside the screen). A task marked REVIEW BEFORE THE MERGE is not live yet: your pass is what lets players
+  see it.
 - Every acceptance criterion is checked by a scenario you ran: a Playwright test whose line you quote, or a screenshot
   you took. The implementer's `self_check` is never evidence. If a criterion has no test yet, say which spec file
   should hold it in `limits`, run what exists, and judge from screenshots and `/healthz`.

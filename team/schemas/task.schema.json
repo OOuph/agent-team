@@ -11,6 +11,10 @@
   "scope": {"type": "string"},
   "acceptance": {"type": "array", "items": {"type": "string"}},
   "negative_cases": {"type": "array", "items": {"type": "string"}},
+  "visible": {"type": "boolean", "description": "The task changes what a player or reader SEES (a screen, its layout, visuals, on-screen text). With cycle.visible.review_before_merge it is reviewed on its branch and merged only by a pass."},
+  "redesign": {"type": "boolean", "description": "It changes the layout, size or look of a screen that already exists. Owner 26.11: a redesign comes only with a new function."},
+  "new_function": {"type": "string", "description": "What the player can newly do thanks to this change; a redesign without it waits in `proposed` for the owner (cycle.visible.redesign_gate)."},
+  "pre_merge": {"type": "boolean", "description": "Set by the dispatcher: the task is in `review` with its commit still on task/<id>, not merged and not deployed."},
   "plan": {"type": "boolean", "default": false, "description": "Marketer: the deliverable is products/<slug>/marketing-plan.md (a week of slots per channel), not a post; the task is accepted by that file."},
   "repo_only": {
    "type": "boolean",

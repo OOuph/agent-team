@@ -26,7 +26,7 @@ def _y(obj: Any) -> str:
 def _task_brief(t: dict[str, Any]) -> dict[str, Any]:
     keys = ("id", "title", "type", "state", "priority", "size", "goal", "role", "plan", "repo_only", "not_before", "blocked_by", "problem", "scope",
             "acceptance", "negative_cases", "observations", "links", "continues", "probe_of", "review_fails", "created",
-            "standing", "docs")                     # owner 21.11: a standing direction's task says so (team/standing.py)
+            "standing", "docs", "visible", "redesign", "new_function", "pre_merge")                     # owner 21.11: a standing direction's task says so (team/standing.py)
     out = {k: t.get(k) for k in keys if t.get(k) not in (None, [], "")}
     if t.get("hypothesis"):
         from . import hypothesis

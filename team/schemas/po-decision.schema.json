@@ -108,7 +108,8 @@
        "marketing",
        "ops",
        "milestone",
-       "design", "load"
+       "design",
+       "load"
       ]
      },
      "problem": {
@@ -165,7 +166,8 @@
        "marketer",
        "analyst",
        "designer",
-       "game-designer", "tester"
+       "game-designer",
+       "tester"
       ]
      },
      "observations": {
@@ -304,6 +306,19 @@
        "type": "string"
       },
       "description": "ids of earlier tasks this task retries or replaces for the SAME goal (e.g. a defect re-created after it stalled). Required when you re-create a goal: the dispatcher counts failed attempts over the whole chain."
+     },
+     "visible": {
+      "type": "boolean",
+      "description": "true when the task changes what a player or reader SEES: a screen, its layout, visuals, on-screen text"
+     },
+     "redesign": {
+      "type": "boolean",
+      "description": "true when it changes the layout, size or look of a screen that ALREADY exists (not: adds one element in place, fixes an overlap)"
+     },
+     "new_function": {
+      "type": "string",
+      "maxLength": 300,
+      "description": "what the player can newly DO thanks to this change; a redesign without it waits for the owner"
      }
     }
    }
