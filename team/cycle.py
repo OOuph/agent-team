@@ -73,7 +73,8 @@ INCONCLUSIVE_LIMIT = 3                 # `inconclusive` verdicts of one released
 NEEDS_CONTEXT = "needs_context"            # result status: the role lacks what the task needs and says what (rework slice 2a)
 NEEDS_CONTEXT_ITEMS = 5                    # of the role's `missing` list that go into the question to the PO
 NEEDS_CONTEXT_EVENT = "task.needs_context"
-RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"   # rework slice 4: a run stopped by the loop guard / the cost guard
+RUN_LOOP_EVENT, RUN_COST_EVENT = "run.loop", "run.cost_guard"
+DEAD_DEPENDENCY_EVENT = "task.dependency_dead"   # a ready task waits for a rejected or missing task (hittheline 26.11)   # rework slice 4: a run stopped by the loop guard / the cost guard
 ANALYST_FAILED_EVENT, UNMEASURED_CLOSED_EVENT = "analyst.failed", "measure.closed"     # rework slice 11 (`cycle.measure.by_day`)
 NO_METRIC_TYPES = ("quality", "defect", "design")          # task types with no user metric of their own: never wait for a measurement
 NO_METRIC_ROLES = ("game-designer", "designer", "tester", "analyst")
@@ -1314,10 +1315,13 @@ class Cycle:
                 t["priority"] = rp["priority"]
                 t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t["state"], "to": t["state"], "note": f"priority → {rp['priority']}: {rp.get('reason', '')[:200]}"})
                 self.store.save_task(t)
+        closed_now: dict[str, str] = {}               # task this answer closed → its `replaced_by` as the PO wrote it
+        created_now: list[tuple[dict[str, Any], list[str]]] = []
         for c in res.get("close_tasks") or []:
             t = self.store.task(str(c.get("task_id")))
             if t and t.get("state") in CLOSABLE_BY_PO:
                 self.store.transition(t["id"], "rejected", "po", f"closed by PO: {c.get('reason', '')[:300]}", force=True)
+                closed_now[t["id"]] = str(c.get("replaced_by") or "").strip()
         skipped, held = [], []
         for pr in res.get("promote_tasks") or []:
             t = self.store.task(str(pr.get("task_id")))
@@ -1368,6 +1372,7 @@ class Cycle:
                                    role=rt["role"], observations=rt.get("observations"), links=rt.get("links"), created_by="po", state="ready",
                                    not_before=rt.get("not_before"), plan=bool(rt.get("plan")) and rt["role"] == "marketer",
                                    depends_on=[str(x) for x in (rt.get("depends_on") or [])])
+            created_now.append((new, [str(x) for x in (rt.get("depends_on") or [])]))
             marks = {k: rt[k] for k in TASK_MARKS if rt.get(k) not in (None, "", False)}
             if marks:                                 # rework slice 5: the PO's marks of a visible change stay on the task
                 new.update(marks)
@@ -1395,12 +1400,15 @@ class Cycle:
                 if problems:                          # owner 07.11: no real evidence → the feature waits as an idea
                     self.store.transition(new["id"], "proposed", "dispatcher", f"hypothesis rule: {'; '.join(problems)}"[:500], force=True)
                     held.append(f"{new['id']} → proposed: {'; '.join(problems)[:160]}")
+        dep_notes = self.apply_task_edits(res.get("edit_tasks") or []) + self.settle_dependencies(created_now, closed_now)
         for q in res.get("owner_questions") or []:
             self.store.ask(from_="po", to="owner", question=f"{q['question']} (why the owner: {q.get('why_owner', '')})", task_id=q.get("task_id"))
         replan_notes = self.apply_replans(res.get("replans") or [])
         digest = res.get("digest_md", "")
         if replan_notes:
             digest += "\n\n_Перепланирование застрявших целей: " + "; ".join(replan_notes) + "._"
+        if dep_notes:
+            digest += "\n\n_Зависимости задач: " + "; ".join(dep_notes) + "._"
         if skipped:
             digest += "\n\n_Диспетчер не создал дубли (задача уже открыта или уже сделана): " + "; ".join(skipped) + "._"
         if held:
@@ -1576,8 +1584,96 @@ class Cycle:
         if nb and _now() < nb:
             return f"scheduled for {nb.isoformat(timespec='minutes')} (`not_before`)"
         if t.get("state") == "ready" and unmet_dependencies(self.store, t):
-            return f"waits for {', '.join(str(d) for d in unmet_dependencies(self.store, t))[:120]} (`depends_on`)"
+            dead = dead_dependencies(self.store, t)
+            return (f"waits for {', '.join(str(d) for d in unmet_dependencies(self.store, t))[:120]} (`depends_on`)"
+                    + (f" — {', '.join(dead)} rejected or missing: it can never be met" if dead else ""))
         return ""
+
+    def report_dead_dependency(self, t: dict[str, Any], dead: list[str]) -> None:
+        """`depends_on` names a task that was rejected (with nothing in its place) or does not exist: the task can never
+        start. Said aloud every cycle in the log; recorded and put to the PO once per set of dead ids."""
+        states = {d: ((self.store.task(d) or {}).get("state") or "missing") for d in dead}
+        what = ", ".join(f"{d} ({st})" for d, st in states.items())
+        log.warning("%s: %s cannot start: its dependency %s is rejected or missing and can never be met", self.p.slug, t["id"], what)
+        if self.dry_run or sorted(t.get("dead_deps_reported") or []) == sorted(dead):
+            return
+        with self.store.lock:
+            cur = self.store.task(t["id"]) or t
+            cur["dead_deps_reported"] = list(dead)
+            self.store.save_task(cur)
+            self.store.event(DEAD_DEPENDENCY_EVENT, t["id"], "dispatcher", {"dead": list(dead), "states": states})
+            self.store.ask(from_="dispatcher", to="po", task_id=None, question=(
+                f"Task {t['id']} ({_short_text(t.get('title'), 80)}) is ready but waits for {what}: that can never be met, so it will "
+                f"never start. Point the dependency at the task that replaced it or remove it — `edit_tasks`: "
+                f"[{{task_id: {t['id']}, depends_on: [<ids or nothing>]}}] — or close {t['id']} with `close_tasks`."))
+
+    def apply_task_edits(self, items: list[dict[str, Any]]) -> list[str]:
+        """The PO's `edit_tasks`: change `depends_on` of an open task without closing it and making a new one (the only
+        way it had until 26.11, and how the dead dependencies of hittheline were made). Returns notes for the digest."""
+        notes = []
+        for e in items or []:
+            t = self.store.task(str(e.get("task_id")))
+            if not t or t.get("state") in ("done", "rejected") or "depends_on" not in e:
+                continue
+            new = [str(x) for x in (e.get("depends_on") or []) if self.store.task(str(x))]
+            old = [str(x) for x in t.get("depends_on") or []]
+            if new == old:
+                continue
+            t["depends_on"] = new
+            t.pop("dead_deps_reported", None)
+            t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t["state"], "to": t["state"],
+                                                "note": f"depends_on {old or '[]'} → {new or '[]'}: {str(e.get('reason') or '')[:200]}"})
+            self.store.save_task(t)
+            self.store.event("task.edited", t["id"], "po", {"depends_on": new, "was": old})
+            notes.append(f"{t['id']}: зависимости {', '.join(old) or 'нет'} → {', '.join(new) or 'нет'}")
+        return notes
+
+    def settle_dependencies(self, created: list[tuple[dict[str, Any], list[str]]], closed: dict[str, str]) -> list[str]:
+        """After one PO answer is applied. `created`: (new task, its `depends_on` as the PO wrote it); `closed`: task id →
+        `replaced_by` as the PO wrote it ("" when none). A dependency may be the TITLE of a task of the same answer; a
+        closed task's `replaced_by` may be such a title too. Every dependency on a rejected task is moved to its
+        replacement, or dropped when there is none — never kept as a dead end. Open tasks that waited for a task this
+        answer closed are treated the same. Returns notes for the digest."""
+        notes: list[str] = []
+        by_title = {_norm_title(t.get("title")): t["id"] for t, _ in created}
+        for cid, rep in closed.items():               # the replacement of each closed task: an id, or a title of this answer
+            rid = by_title.get(_norm_title(rep)) or (rep if rep and self.store.task(rep) else "")
+            if rid and rid != cid:
+                c = self.store.task(cid)
+                if c:
+                    c["replaced_by"] = rid
+                    self.store.save_task(c)
+
+        def settle(t: dict[str, Any], deps: list[str]) -> None:
+            out: list[str] = []
+            for dep in deps:
+                dep = by_title.get(_norm_title(dep)) or str(dep)
+                d = self.store.task(dep)
+                if d is not None and d.get("state") != "rejected":
+                    out.append(dep)
+                    continue
+                r = resolve_dependency(self.store, dep) if d is not None else None
+                if r is not None and r.get("state") != "rejected" and r["id"] != t["id"]:
+                    out.append(r["id"])
+                    self.store.event("task.dependency_moved", t["id"], "dispatcher", {"from": dep, "to": r["id"]})
+                    notes.append(f"{t['id']} «{t['title'][:50]}»: зависимость с закрытой {dep} переведена на {r['id']}")
+                else:
+                    self.store.event("task.dependency_dropped", t["id"], "dispatcher", {"dep": dep, "why": "rejected" if d else "no such task"})
+                    notes.append(f"{t['id']} «{t['title'][:50]}»: зависимость на {dep} снята ({'задача закрыта без замены' if d else 'такой задачи нет'})")
+            out = list(dict.fromkeys(out))
+            if out != [str(x) for x in t.get("depends_on") or []]:
+                cur = self.store.task(t["id"]) or t
+                cur["depends_on"] = out
+                self.store.save_task(cur)
+
+        for t, deps in created:
+            settle(t, deps)
+        if closed:
+            made = {t["id"] for t, _ in created}
+            for t in self.store.tasks(["proposed", "ready", "deferred", "blocked", "waiting_owner", "in_progress"]):
+                if t["id"] not in made and any(str(d) in closed for d in t.get("depends_on") or []):
+                    settle(t, [str(d) for d in t.get("depends_on") or []])
+        return notes
 
     def normalize_roles(self) -> None:
         """Before the seats are filled: a ready task whose role is a product's word for a role (`artist`) gets the role's
@@ -1614,6 +1710,9 @@ class Cycle:
         if nb and _now() < nb:
             return False        # scheduled for later (daily posts): the PO set not_before
         if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+            dead = dead_dependencies(self.store, t)
+            if dead:
+                self.report_dead_dependency(t, dead)
             return None         # `depends_on`: a dependency is not done yet or its result is a stub
         if t.get("state") == "ready" and hypothesis.applies(t):
             problems = self.hypothesis_problems(t)
@@ -3398,11 +3497,37 @@ def is_stub_result(summary: str) -> bool:
 DEPENDENCY_DONE = ("accepted", "measured", "done")
 
 
-def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
-    """Ids from `depends_on` that are not finished (accepted/measured/done) with a non-stub last result; unknown ids count as unmet."""
+REPLACED_HOPS = 5                          # how far `replaced_by` is followed from a rejected dependency
+
+
+def resolve_dependency(store: Any, dep: str) -> dict[str, Any] | None:
+    """The task a dependency really waits for: the task itself, or — when it was rejected with `replaced_by` — its
+    replacement, followed up to REPLACED_HOPS times. None when the id does not exist."""
+    d = store.task(str(dep))
+    for _ in range(REPLACED_HOPS):
+        if not d or d.get("state") != "rejected" or not d.get("replaced_by"):
+            break
+        d = store.task(str(d["replaced_by"]))
+    return d
+
+
+def dead_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
+    """Ids from `depends_on` that can never be met: the task does not exist, or it was rejected and nothing replaced it
+    (hittheline 26.11: three ready tasks waited 100 minutes for tasks the same PO answer had closed)."""
     out = []
     for dep in t.get("depends_on") or []:
-        d = store.task(str(dep))
+        d = resolve_dependency(store, str(dep))
+        if d is None or d.get("state") == "rejected":
+            out.append(str(dep))
+    return out
+
+
+def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
+    """Ids from `depends_on` that are not finished (accepted/measured/done) with a non-stub last result; unknown ids count
+    as unmet. A rejected dependency with `replaced_by` is judged by its replacement."""
+    out = []
+    for dep in t.get("depends_on") or []:
+        d = resolve_dependency(store, str(dep))
         res = (d.get("results") or []) if d else []
         if not d or d.get("state") not in DEPENDENCY_DONE or not res or is_stub_result(str(res[-1].get("summary") or "")):
             out.append(str(dep))
