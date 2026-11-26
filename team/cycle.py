@@ -1173,7 +1173,16 @@ class Cycle:
                 held.append(f"{t['id']} stays {t['state']}: {'; '.join(problems)[:160]}")
             elif t["state"] != "ready":
                 self.store.transition(t["id"], "ready", "po", "hypothesis rule met", force=True)
+        closed_check = self.p.duplicates_cfg["closed_check"]
         for rt in res.get("ready_tasks") or []:
+            # rework slice 3: the same title as a task closed in the last days — finished work is not created again, a
+            # rejected task's successor is linked to it (the chain of one goal, for the stuck-goal counter)
+            twin = closed_twin(prompts.recently_closed(self.store, CLOSED_TWIN_DAYS, CLOSED_TWIN_STATES), rt) if closed_check else None
+            if twin is not None and twin.get("state") != "rejected":
+                self.store.event("task.duplicate_skipped", twin["id"], "po", {"title": str(rt.get("title"))[:140], "closed": twin.get("state")})
+                skipped.append(f"{str(rt.get('title'))[:80]} → уже сделана: {twin['id']} ({twin.get('state')})")
+                log.info("%s: PO task %r not created: the work is done as %s (%s)", self.p.slug, str(rt.get("title"))[:60], twin["id"], twin.get("state"))
+                continue
             dup = duplicate_task(self.store.tasks(OPEN_TASK_STATES), rt)
             sid = str(rt.get("standing") or "")
             if sid and not standing.known_id(self.p, sid):
@@ -1195,6 +1204,10 @@ class Cycle:
             if rt.get("continues"):                   # owner 11.11: the chain of one goal, for the stuck-goal counter
                 new["continues"] = [str(x) for x in rt["continues"]][:5]
                 self.store.save_task(new)
+            if twin is not None:                      # the PO re-created a rejected task without naming it: the dispatcher links them
+                new["continues"] = ([twin["id"]] + [x for x in (new.get("continues") or []) if x != twin["id"]])[:5]
+                self.store.save_task(new)
+                self.store.event("task.recreated", new["id"], "po", {"continues": twin["id"], "title": new["title"][:140]})
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
@@ -1218,7 +1231,7 @@ class Cycle:
         if replan_notes:
             digest += "\n\n_Перепланирование застрявших целей: " + "; ".join(replan_notes) + "._"
         if skipped:
-            digest += "\n\n_Диспетчер не создал дубли (задача уже открыта): " + "; ".join(skipped) + "._"
+            digest += "\n\n_Диспетчер не создал дубли (задача уже открыта или уже сделана): " + "; ".join(skipped) + "._"
         if held:
             digest += "\n\n_Правило гипотез (фича без доказательств от живых людей ждёт в proposed): " + "; ".join(held) + "._"
         (self.p.dir / "digests" / f"{self.cycle_id}.md").write_text(f"# PO digest {self.cycle_id}\n\n{digest}\n", encoding="utf-8")
@@ -3017,6 +3030,24 @@ def _channels_in(title: str) -> frozenset[str]:
         if w in low:
             out.add("x" if w.startswith("x") or w == " x " or w == "twitter" else ("devto" if w in ("devto", "dev.to") else w))
     return frozenset(out)
+
+
+CLOSED_TWIN_STATES = ("done", "rejected", "accepted", "measured")   # `cycle.duplicates.closed_check`: states a proposal is compared with
+CLOSED_TWIN_DAYS = 14                      # … closed within this many days
+
+
+def closed_twin(closed: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, Any] | None:
+    """The closed task a proposed ready task repeats by its normalized title, newest first, or None. Not compared: a
+    proposal scheduled with `not_before` or belonging to a standing direction (a slot or a cadence repeats its title by
+    design), one for another role, and one that names the closed task in `continues` (the PO builds on it knowingly)."""
+    title = _norm_title(rt.get("title"))
+    if not title or rt.get("not_before") or rt.get("standing"):
+        return None
+    named = {str(x) for x in (rt.get("continues") or [])} if isinstance(rt.get("continues"), list) else {str(rt.get("continues") or "")}
+    for t in reversed(closed):
+        if _norm_title(t.get("title")) == title and str(t.get("role") or "developer") == str(rt.get("role") or "developer") and t["id"] not in named:
+            return t
+    return None
 
 
 def duplicate_task(open_tasks: list[dict[str, Any]], rt: dict[str, Any]) -> dict[str, Any] | None:

@@ -75,6 +75,39 @@ def _po_backlog(tasks: list[dict[str, Any]], compact_finished: bool) -> str:
     return "\n".join(out)
 
 
+CLOSED_STATES = ("done", "rejected")        # `# CLOSED TASKS` of the PO's prompt (`cycle.duplicates.closed_list`, rework slice 3)
+CLOSED_LIST_DAYS = 7                       # closed within this many days
+CLOSED_LIST_MAX = 80                       # newest of them
+CLOSED_WHY_CHARS = 160                     # of the note the task was closed with
+
+
+def recently_closed(store: Store, days: int, states: tuple[str, ...] = CLOSED_STATES) -> list[dict[str, Any]]:
+    """Tasks in `states` whose last change is at most `days` old, oldest first."""
+    since = (datetime.now(timezone.utc) - timedelta(days=days)).isoformat(timespec="seconds")
+    ts = [t for t in store.tasks(list(states)) if str(t.get("updated") or t.get("created") or "") >= since]
+    return sorted(ts, key=lambda t: str(t.get("updated") or t.get("created") or ""))
+
+
+def closed_block(store: Store) -> str:
+    """`# CLOSED TASKS`: one line per task closed in the last `CLOSED_LIST_DAYS` days — id, state, title and why it was
+    closed. Before 26.11 the PO saw no closed task at all and re-created work under new ids. "" when there is none."""
+    ts = recently_closed(store, CLOSED_LIST_DAYS)
+    if not ts:
+        return ""
+    shown = ts[-CLOSED_LIST_MAX:]
+    lines = []
+    for t in shown:
+        why = next((str(h.get("note")) for h in reversed(t.get("history") or []) if isinstance(h, dict) and h.get("note")), "")
+        why = " ".join(why.split())
+        lines.append(f"- {t['id']} [{t.get('state')}] {' '.join(str(t.get('title') or '').split())[:140]}"
+                     + (f" — {why if len(why) <= CLOSED_WHY_CHARS else why[:CLOSED_WHY_CHARS - 1] + '…'}" if why else ""))
+    head = (f"\n\n# CLOSED TASKS (done or rejected in the last {CLOSED_LIST_DAYS} days"
+            + (f", the {CLOSED_LIST_MAX} newest of {len(ts)}" if len(ts) > len(shown) else "")
+            + ") — do not create a task that repeats one of these. A rejected task was closed for the reason on its line: a new task "
+              "for the same goal must differ in what made the old one fail and name it in `continues`.\n")
+    return head + "\n".join(lines)
+
+
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
               metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
               channel_caps: dict[str, Any] | None = None, stuck_md: str = "") -> str:
@@ -99,6 +132,7 @@ def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: li
             + run_time_block(product, store)
             + "\n\n# BACKLOG (open tasks)\n" + _po_backlog(tasks, cfg["compact_finished"])
             + "\n\n# RECENTLY FINISHED\n" + (_y([{k: t.get(k) for k in ("id", "title", "state")} for t in recent_done]) if recent_done else "(none)")
+            + (closed_block(store) if product.duplicates_cfg["closed_list"] else "")
             + "\n\n# OPEN QUESTIONS TO YOU\n" + q_txt
             + "\n\n# QUESTIONS THE OWNER ALREADY ANSWERED (last 72 h — do not ask these again)\n" + answered_txt
             + (("\n\n# FRAMEWORK CONTEXT (this product is the framework itself)\n" + fw_txt) if fw_txt else "")
