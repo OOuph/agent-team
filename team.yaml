@@ -93,6 +93,9 @@ cycle:
                                   # failure, and the answer travels to the role; false = the old `blocked` + `question` path
     review_return: false          # true = the third unproven review returns the same task to its role with the reason word and what
                                   # to do (an environment reason retries the review); false = blocked + a PO question
+  duplicates:                     # owner 26.11, rework slice 3: work re-created under a new id
+    closed_list: false            # true = the PO's prompt lists tasks closed in the last 7 days (id, state, title, one line of why)
+    closed_check: false           # true = a proposal titled like finished work is skipped; like a rejected task — linked with `continues`
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

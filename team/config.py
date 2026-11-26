@@ -21,6 +21,7 @@ ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.paren
 
 PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False}   # `cycle.escalation`, see DEFAULTS
+DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,
@@ -52,7 +53,11 @@ DEFAULTS: dict[str, Any] = {
               # role with the task. Off = the old `blocked` + `question` path. product.yaml `cycle: {escalation: {...}}` overrides
               # `review_return` true = the third unproven review returns the SAME task to its role with the reason word and
               # what to do (slice 2b); an environment reason retries the review; off = blocked + a PO question, as before
-              "escalation": dict(ESCALATION_DEFAULTS)},
+              "escalation": dict(ESCALATION_DEFAULTS),
+              # work that is re-created under a new id (owner 26.11, rework slice 3): `closed_list` true = the PO's prompt lists
+              # the tasks closed in the last days (id, title, state, one line of why); `closed_check` true = a proposed task with
+              # the title of finished work is skipped, one with the title of a rejected task is linked to it with `continues`
+              "duplicates": dict(DUPLICATES_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -420,6 +425,11 @@ class Product:
     def escalation_cfg(self) -> dict[str, bool]:
         """`cycle.escalation` (rework slice 2): {needs_context, review_return}, off by default."""
         return self.switches("escalation", ESCALATION_DEFAULTS)
+
+    @property
+    def duplicates_cfg(self) -> dict[str, bool]:
+        """`cycle.duplicates` (rework slice 3): {closed_list, closed_check}, off by default."""
+        return self.switches("duplicates", DUPLICATES_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
