@@ -159,3 +159,30 @@ def test_forced_local_review_server_gets_the_test_settings(tmp_path: Path):
         assert srv.local and srv.port != 3101 and playtest.health_ok(srv.base_url + "/healthz")
     finally:
         playtest.stop(srv)
+
+
+def test_the_review_of_a_repo_only_game_task_keeps_the_full_output_too(tmp_path: Path):
+    """26.11, first live reviews: the tests of such a task are run by `review_task` itself, before `start_playtest`,
+    and that run kept no log — `team-play unit` answered «no full test output»."""
+    from team import gitops
+    from team.runner import RunResult
+    from team.store import Store
+    st = _settings(tmp_path)
+    p = _game(st)
+    (p.repo_dir / "tests" / "test_x.py").write_text("import unittest\nclass T(unittest.TestCase):\n    def test_a(self):\n        pass\n")
+    gitops.git(p.repo_dir, "add", "-A"); gitops.git(p.repo_dir, "commit", "-q", "-m", "a unit test")
+    s = Store(p.dir)
+    t = s.create_task(title="rooms", type_="milestone", problem="x", scope="src/", acceptance=["a"], goal="M0", created_by="po", state="ready")
+    s.transition(t["id"], "released", "dispatcher", force=True, released_at="2020-01-01T00:00:00+00:00", released_sha=gitops.head(p.repo_dir), repo_only=True)
+    s.close()
+
+    class R:
+        env = {}
+
+        def run(self, role, prompt, schema, **kw):
+            R.env = dict(kw.get("env_extra") or {})
+            out = {"verdict": "pass", "steps": [], "criteria": [], "scenarios": [{"name": "a", "status": "passed", "evidence": "e"}], "summary": "seen it all. ok."}
+            return RunResult(True, out, {}, 0.1, 2, None, session_id="s", duration_s=1.0)
+
+    c = Cycle(st, p, R(), "c1"); c.run(["review"]); c.store.close()
+    assert (p.dir / "reviews" / t["id"] / "unit-tests.log").exists() and R.env.get("TEAM_PLAY_UNIT_LOG", "").endswith("unit-tests.log")

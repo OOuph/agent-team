@@ -1270,7 +1270,7 @@ def test_run_caps_never_lift_a_run_above_what_is_left_of_the_day(tmp_path: Path)
 
 # ------------------------------------------------------------------ the disk: what a review leaves, and old cycle folders (25.11: disk full)
 
-def _fake_tests_run(repo_dir, sha, dest, test_cmd="", lock=None) -> str:
+def _fake_tests_run(repo_dir, sha, dest, test_cmd="", lock=None, **kw) -> str:
     (dest / "node_modules" / "left-pad").mkdir(parents=True)
     (dest / "node_modules" / "left-pad" / "index.js").write_text("x\n", encoding="utf-8")
     return "$ npm test\nexit code: 0\nok"
