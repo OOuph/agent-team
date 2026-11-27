@@ -197,6 +197,11 @@ def _chain(st: C.Settings, a: argparse.Namespace, slugs: list[str]) -> None:
         if locks.update_waiting(st):
             log.info("chain: ended — a code update is waiting at %s", locks.gate_path(st))
             return
+        from . import drain as _drain
+        products = [p for p in products if not _drain.requested(st, p.slug)]
+        if not products:
+            log.info("chain: ended — a drain request stands")
+            return
         products = [p for p in products if cadence.check(st, p, chained=True).due]
         if not products:
             log.info("chain: ended — no product is due any more (STOP, paused)")
@@ -218,7 +223,7 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
     (only `--due`): filled with the products whose next cycle should follow at once (`Cycle.chain_reason`); `chained`:
     this call is such a follow-up — the pause of `cycle.every_min` is not asked for, and the product lock is waited for
     `chain_lock_wait_s` (an operator script may have taken it in the window between the two cycles)."""
-    from . import cadence, locks
+    from . import cadence, drain, locks
     roles = load_roles(ROLES_DIR)
     runner = Runner(st.claude, roles) if roles else None
     cycle_id = a.cycle or datetime.now(timezone.utc).strftime("%Y%m%dT%H%M")
@@ -233,6 +238,8 @@ def _run_cycles(st: C.Settings, a: argparse.Namespace, products: list[C.Product]
             why = None
             if not free:
                 why = f"its cycle is already running (lock {locks.product_lock_path(st, p.slug)})"
+            elif not a.dry_run and drain.requested(st, p.slug):
+                why = f"a drain request stands ({drain.requested(st, p.slug)}): an update or an edit is waiting for this product"
             elif a.due and not cadence.check(st, p, chained=chained).due:
                 why = "no longer due: another entry finished its cycle while this one was busy"     # the list was made before the locks
             elif not a.cycle and cadence.has_cycle(p, cycle_id):
@@ -421,6 +428,29 @@ def cmd_obs(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_hold(st: C.Settings, a: argparse.Namespace) -> int:
+    """`team hold <product> [--wait-s N] [--by X] [--why …] -- <command …>`: the product's running cycle drains, the
+    command runs under the product's lock, the request is removed (team/drain.py)."""
+    from . import drain
+    p = _products(st, a.product)[0]
+    argv = [x for x in a.command if x != "--"] if a.command and a.command[0] == "--" else list(a.command or [])
+    if not argv:
+        print("team hold: no command after `--`")
+        return 2
+    return drain.hold(st, p.slug, argv, a.by, a.why or "", float(a.wait_s))
+
+
+def cmd_drain(st: C.Settings, a: argparse.Namespace) -> int:
+    """`team drain <product|all> [--clear]`: place or remove the request by hand (`all` = data/locks/update.pending)."""
+    from . import drain
+    f = drain.global_file(st) if a.product == "all" else drain.product_file(st, _products(st, a.product)[0].slug)
+    if a.clear:
+        print(f"drain request {'removed' if drain.clear(f) else 'was not there'}: {f}")
+    else:
+        print(f"drain requested: {drain.place(f, a.by, a.why or '')}")
+    return 0
+
+
 def cmd_stop(st: C.Settings, a: argparse.Namespace) -> int:
     targets = [st.root / "STOP"] if a.product == "all" else [p.stop_file for p in _products(st, a.product)]
     for f in targets:
@@ -576,6 +606,11 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--by", default="owner"); s.add_argument("--not-before", dest="not_before"); s.set_defaults(fn=cmd_answer)
     s = sub.add_parser("obs"); s.add_argument("product"); s.add_argument("--title", required=True); s.add_argument("--text", required=True)
     s.add_argument("--class", dest="cls", default="need_hypothesis"); s.add_argument("--url"); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_obs)
+    s = sub.add_parser("hold"); s.add_argument("product"); s.add_argument("--wait-s", type=float, default=2700.0)
+    s.add_argument("--by", default="operator"); s.add_argument("--why", default=""); s.add_argument("command", nargs=argparse.REMAINDER)
+    s.set_defaults(fn=cmd_hold)
+    s = sub.add_parser("drain"); s.add_argument("product"); s.add_argument("--clear", action="store_true")
+    s.add_argument("--by", default="operator"); s.add_argument("--why", default=""); s.set_defaults(fn=cmd_drain)
     for name in ("stop", "resume"):
         s = sub.add_parser(name); s.add_argument("product"); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_stop)
     s = sub.add_parser("digest"); s.add_argument("product"); s.set_defaults(fn=cmd_digest)

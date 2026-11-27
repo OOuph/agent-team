@@ -39,6 +39,7 @@ from . import canary as canary_mod
 from . import nodecache
 from . import testworkers
 from . import firstcycle
+from . import drain as drain_mod
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -339,6 +340,8 @@ class Cycle:
         self.canary_started: str | None = None                # ISO time the release that ran it began
         self._po_lock = threading.RLock()                      # one PO run at a time (the triage phase and `cut_after_design`)
         self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
+        self._drain = drain_mod.Watch(st, product.slug)   # a request to finish what runs and end (team/drain.py)
+        self._drain_said = False
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
@@ -376,6 +379,19 @@ class Cycle:
             self.store.unmark_working(task_id)
         else:
             self.store.mark_working(task_id, lane)
+
+    def draining(self) -> str | None:
+        """A drain request stands (team/drain.py): nothing new is started in this cycle. Said once, as an event."""
+        why = None if self.dry_run else self._drain()
+        if why and not self._drain_said:
+            self._drain_said = True
+            self.close_refill(f"drain requested ({why})")
+            log.info("%s: drain requested (%s): no new task, review or phase is started; the runs in flight finish", self.p.slug, why)
+            try:
+                self.store.event("cycle.drain", self.cycle_id, "dispatcher", {"request": why, "in_flight": self.lanes.gate.at_work()})
+            except Exception as exc:  # noqa: BLE001 — the event is for the record only
+                log.debug("%s: cycle.drain event not written: %s", self.p.slug, exc)
+        return why
 
     def stopped(self) -> str | None:
         from . import cadence
@@ -558,6 +574,8 @@ class Cycle:
                 except Exception as exc:  # noqa: BLE001 — the phases go on in their order; the execute phase starts the seats itself
                     log.exception("%s: early start of the seats failed: %s", self.p.slug, exc)
             for ph in phases or PHASES:
+                if self.draining():
+                    break                         # the phases that are left would start new runs; `finish_lanes` waits for the ones going
                 try:
                     getattr(self, f"phase_{ph}")()
                     self.phases_done.append(ph)
@@ -673,6 +691,8 @@ class Cycle:
             return False, "dry run"
         if res.get("stopped") or self.stopped():
             return False, f"stopped ({res.get('stopped') or self.stopped()})"
+        if self.draining():
+            return False, f"a drain request stands ({self.draining()})"
         if "execute" not in (res.get("phases") or []):
             return False, "the execute phase did not finish"
         if not self.n_executed:
@@ -955,6 +975,9 @@ class Cycle:
             self.finish_lanes()                   # called on its own: the reviews are done when the phase returns
 
     def review_task(self, t: dict[str, Any]) -> None:
+        if self.draining():
+            log.info("%s: review of %s not started: a drain request stands; the next cycle reviews it", self.p.slug, t["id"])
+            return                                # the lane waited for its slot and the request came meanwhile
         result = (t.get("results") or [None])[-1]
         prompt = prompts.reviewer_prompt(self.p, t, result, t.get("released_sha"))
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
@@ -1321,7 +1344,7 @@ class Cycle:
         """`cycle.queue.cut_on_design` (27.11): a design document was merged inside the execute phase — the PO runs now, in
         this lane, instead of in the triage of the next cycle; what it cuts is `ready` at once and a seat with refill takes
         it in this cycle. At most CUT_MAX_PER_CYCLE such runs per cycle; never raises."""
-        if not self.p.queue_cfg["cut_on_design"] or self.dry_run:
+        if not self.p.queue_cfg["cut_on_design"] or self.dry_run or self.draining():
             return
         if str(t.get("type") or "") != "design" and str(t.get("role") or "") not in ("game-designer", "designer"):
             return
@@ -1660,6 +1683,8 @@ class Cycle:
     def start_seat_lanes(self, wave: int) -> int:
         """Start the seat lanes for what is startable now and return how many were started (nothing is joined here). A
         seat never gets more lanes than it has places, counting the lanes of an earlier call that are still at work."""
+        if self.draining():
+            return 0                              # a drain request: no new executor lane
         slots, used, seen = self._exec_slots, self._exec_used, self._exec_seen
         with self._seat_lock:
             if not any(self._seat_lanes.values()):
@@ -1719,6 +1744,8 @@ class Cycle:
         leases are released first, as collect would do. The execute phase later starts whatever seat is still free and
         joins everything. Returns the number of lanes started."""
         if not (self.flow.early_execute and self.flow.refill and self.lanes.parallel) or self.dry_run:
+            return 0
+        if self.draining():
             return 0
         self.release_stale_claims()
         self.execute_prepare()
@@ -1948,6 +1975,8 @@ class Cycle:
         healthy = True                            # refill: this lane's last task was carried through and its run went well
         first = True
         while True:
+            if self.draining():
+                return                            # a drain request: this lane takes nothing more (it may not have taken anything yet)
             if self.flow.fair_seats and not first:
                 # between two tasks: a seat without a lane gets one, and a lane that waits for a run slot gets this one
                 try:
