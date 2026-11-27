@@ -563,10 +563,12 @@ def test_update_code_waits_for_running_cycles_with_the_gate_closed_then_fast_for
         with locks.cycles(st) as ok:
             assert not ok                                              # no new cycle starts meanwhile
         assert cycle.running() and upd.poll() is None and _git(root, "rev-parse", "HEAD") == old     # still waiting, nothing changed
+        assert (root / "data" / "locks" / "update.pending").exists()   # … and the running cycles are asked to drain (team/drain.py)
         out, _ = upd.communicate(timeout=60)
         assert cycle.ended()                                           # it got the code only after the cycle was over
     assert upd.returncode == 0, out
     assert _git(root, "rev-parse", "HEAD") == new and f"{old[:7]} -> {new[:7]}" in out
+    assert not (root / "data" / "locks" / "update.pending").exists() and "after the request to drain" in out
     with locks.cycles(st) as ok:
         assert ok                                                      # gate and lock are free again
 
@@ -578,6 +580,7 @@ def test_update_code_gives_up_without_changes_when_cycles_do_not_end_in_time(tmp
         r = subprocess.run(["bash", str(root / "update-code.sh")], env={**env, "UPDATE_WAIT_S": "1"}, cwd=root, capture_output=True, text=True, timeout=60)
     assert r.returncode == 75 and "cycles still running after 1s" in r.stdout
     assert _git(root, "rev-parse", "HEAD") == old
+    assert not (root / "data" / "locks" / "update.pending").exists()   # the request is removed when the update gives up, too
     with locks.cycles(_settings(root)) as ok:
         assert ok                                                      # the gate did not stay closed
 
