@@ -63,6 +63,12 @@ HEAVY_QUEUE_PROMPT = ("\n\n# LONG SIMULATIONS RUN ONE AT A TIME ON THIS SERVER �
                       "other such run is going on the server (up to {wait} minutes), then runs yours at low priority and gives you its "
                       "output and exit code. Give the command enough time: it may wait before it starts. If it answers that the server is "
                       "still busy, report the command in your result instead of starting it another way.\n")
+TEST_BUDGET_PROMPT = ("\n\n# THE WHOLE TEST SUITE: AT MOST {times} IN THIS RUN (the server is shared: every whole run costs every other run minutes)\n"
+                      "While you work, run only the tests of what you touched: the test files of the modules you changed and the ones that "
+                      "import them (name the files on the command line of the test tool; do not run everything «to be sure»). Run the whole "
+                      "suite — `{cmd}` or its test part — at most {times}: at the end, when you believe the task is done. If it is red, fix "
+                      "it and check the fix with the failing files only; do not repeat the whole suite after every fix. The dispatcher runs "
+                      "the whole suite again on the merged commit before the review, so nothing reaches the players untested.\n")
 SUITE_CACHE_KEEP = 30                                     # `cycle.review_tests.once_per_batch`: results of the suite kept per product
 SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main branch that contains this task's commit {sha}; "
               "its result stands for every task merged up to it)\n")
@@ -369,6 +375,9 @@ class Cycle:
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
         self._review_lock = threading.Lock()                   # `start_reviews`: one caller at a time decides which tasks get a review lane
         self._review_queued: set[str] = set()                  # tasks that got a review lane in this cycle
+        self._suite_mu = threading.Lock()                      # guards the two fields below
+        self._suite_locks: dict[str, threading.Lock] = {}      # commit → the lock of the suite run on it
+        self._suite_going = ""                                 # the commit a suite run is going on right now ("" = none)
         self._suite_lock = threading.Lock()                    # `batch_suite`: one run of the suite on a head at a time
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._dep_merged = merged_counts(product.dependencies_cfg)      # `cycle.dependencies.at_merge`: None = a dependency must be accepted
@@ -458,6 +467,14 @@ class Cycle:
             out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=int(cfg["wait_s"]) // 60)
         return out
 
+    def test_budget_prompt(self, role: str) -> str:
+        """`cycle.test_budget`: the block that tells a role how often it may run the WHOLE test suite ("" = no rule)."""
+        cfg = self.p.test_budget_cfg
+        n = int(cfg["full_runs"])
+        if n <= 0 or role not in cfg["roles"] or not self.p.test_cmd:
+            return ""
+        return TEST_BUDGET_PROMPT.format(n=n, times="once" if n == 1 else f"{n} times", cmd=self.p.test_cmd)
+
     def heavy_env(self) -> dict[str, str]:
         cfg = self.p.heavy_runs_cfg
         if not cfg["queue"]:
@@ -523,6 +540,7 @@ class Cycle:
             deny = self.heavy_deny(role)
             if deny:
                 prompt += self.heavy_prompt(role)
+            prompt += self.test_budget_prompt(role)
             rd = self.run_dir / label
             rd.mkdir(parents=True, exist_ok=True)
             (rd / "prompt.md").write_text(prompt, encoding="utf-8")
@@ -1216,14 +1234,38 @@ class Cycle:
         before the switch — the task whose commit turns the suite red is the one whose review reads the failures and sends
         it back to its author; the tasks merged before it pass on their own green runs. The PO gets one observation per
         red head."""
+        cache = self.st.data_dir / "cache" / "suite" / self.p.slug
         with self.repo_lock:
             head = gitops.head(self.p.repo_dir)
             inside = bool(head) and gitops.is_ancestor(self.p.repo_dir, sha, head)
         if not inside:
             return None
-        cache = self.st.data_dir / "cache" / "suite" / self.p.slug
+        covered = self.suite_covering(cache, sha)
+        if covered is not None:
+            # 27.11, the first live cycle: a second review found the head moved by a merge and ran the whole suite again
+            # (692 s), though a green run on a commit that held its task was 15 minutes old. Any green run that contains the
+            # task's commit stands for it.
+            self.store.event("review.suite_reused", t["id"], "dispatcher", {"head": str(covered["sha"])[:12], "sha": sha[:12], "earlier": True})
+            return SUITE_NOTE.format(head=str(covered["sha"])[:12], sha=sha[:12]) + str(covered["report"])
+        with self._suite_mu:
+            going = self._suite_going
+            lock = self._suite_locks.setdefault(head, threading.Lock())
+        if going and going != head:
+            with self.repo_lock:
+                waits = gitops.is_ancestor(self.p.repo_dir, sha, going)
+            if waits:
+                # a run on another commit that holds this task is going: its result will do — wait for it, not beside it
+                lock = self._suite_locks.setdefault(going, threading.Lock())
+                with lock:
+                    pass
+                covered = self.suite_covering(cache, sha)
+                if covered is not None:
+                    self.store.event("review.suite_reused", t["id"], "dispatcher", {"head": str(covered["sha"])[:12], "sha": sha[:12], "earlier": True})
+                    return SUITE_NOTE.format(head=str(covered["sha"])[:12], sha=sha[:12]) + str(covered["report"])
+                with self._suite_mu:
+                    lock = self._suite_locks.setdefault(head, threading.Lock())
         f = cache / f"{head}.json"
-        with self._suite_lock:
+        with lock:
             rec = None
             if f.exists():
                 try:
@@ -1231,6 +1273,8 @@ class Cycle:
                 except (OSError, ValueError):
                     rec = None
             if rec is None:
+                with self._suite_mu:
+                    self._suite_going = head
                 t0 = time.time()
                 report = run_tests_for_review(self.p.repo_dir, head, self.p.work_dir / self.cycle_id / f"suite-{head[:12]}", self.p.test_cmd,
                                               lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout())
@@ -1251,12 +1295,36 @@ class Cycle:
                         "actual": "Every task merged up to this commit is now tested on its own commit, so its review names the one that broke "
                                   "the suite and sends it back. Tail of the run:\n" + str(rec["report"])[-1200:],
                         "fingerprint": f"suite-red-{head[:12]}", "run_id": f"{self.cycle_id}-suite"})
+        with self._suite_mu:
+            if self._suite_going == head:
+                self._suite_going = ""
         if not rec.get("passed"):
             self.store.event("review.suite_red", t["id"], "dispatcher", {"head": head[:12]})
             log.info("%s: %s: the suite is red on the head %s — the task is tested on its own commit %s", self.p.slug, t["id"], head[:12], sha[:12])
             return None
         self.store.event("review.suite_reused", t["id"], "dispatcher", {"head": head[:12], "sha": sha[:12]})
         return SUITE_NOTE.format(head=head[:12], sha=sha[:12]) + str(rec["report"])
+
+    def suite_covering(self, cache: Path, sha: str) -> dict[str, Any] | None:
+        """The newest GREEN kept result of the suite whose commit contains `sha` (None = there is none)."""
+        try:
+            files = sorted(cache.glob("*.json"), key=lambda x: x.stat().st_mtime, reverse=True)
+        except OSError:
+            return None
+        for f in files:
+            try:
+                rec = json.loads(f.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                continue
+            if not rec.get("passed") or not rec.get("sha"):
+                continue
+            with self.repo_lock:
+                try:
+                    if gitops.is_ancestor(self.p.repo_dir, sha, str(rec["sha"])):
+                        return rec
+                except (gitops.GitError, OSError):
+                    continue
+        return None
 
     def docs_only_change(self, sha: str, pre_merge: bool) -> bool:
         """Does the reviewed commit change documents only (`DOC_SUFFIXES`)? A merged task: the merge commit against its
