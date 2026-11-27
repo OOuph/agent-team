@@ -242,6 +242,30 @@ class RunGate:
                 self._running[kind] -= 1
                 self._cv.notify_all()
 
+    def yield_slot(self, kind: str, label: str = "") -> bool:
+        """The calling lane holds a slot of `kind` and stands between two pieces of work: when another lane of the same
+        kind waits for a slot, give the slot up and queue behind it (returns True once the slot is held again). Nobody
+        waits = nothing happens (False). `cycle.flow.fair_seats`: a seat lane lives as long as the cycle, and without
+        this the seat that was started last would wait for a slot until another lane ENDS."""
+        with self._cv:
+            if not any(tk[2] == kind for tk in self._waiting):
+                return False
+            t0 = time.monotonic()
+            self._running[kind] -= 1
+            ticket = (PRIORITY.get(kind, PRIORITY[LANE_EXECUTE]), next(self._seq), kind)
+            self._waiting.append(ticket)
+            self._cv.notify_all()
+            while not self._may_go(ticket):
+                self._cv.wait()
+            self._waiting.remove(ticket)
+            self._running[kind] = self._running.get(kind, 0) + 1
+            waited = time.monotonic() - t0
+            self.waited_s += waited
+            self._cv.notify_all()
+        log.log(logging.INFO if waited >= SLOT_WAIT_LOG_S else logging.DEBUG, "lane %s (%s): gave its slot to a waiting lane, back after %.1fs",
+                label or "-", kind, waited)
+        return True
+
     def at_work(self) -> int:
         with self._cv:
             return sum(self._running.values())
@@ -422,6 +446,12 @@ class Lanes:
                 except Exception as exc:  # noqa: BLE001 — cleanup must not hide the lane's own outcome
                     log.warning("%s: lane %s cleanup failed: %s", self.slug, label, exc)
             _ctx.label = ""
+
+    def yield_slot(self, kind: str) -> bool:
+        """`RunGate.yield_slot` for the calling lane (nothing in a sequential cycle or outside a lane's slot)."""
+        if not self.parallel or not getattr(_ctx, "slot", False):
+            return False
+        return self.gate.yield_slot(kind, current_lane() or "")
 
     def pending(self) -> int:
         """Lanes submitted and not joined yet (finished or not)."""
