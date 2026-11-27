@@ -45,6 +45,10 @@ DEFAULTS: dict[str, Any] = {
     "refill_min": 20,             # … until the execute phase is this many minutes old (1..180); later starts wait for the next cycle
     "refill_max_min": 60,         # … and beyond that while reviews of this cycle still run or wait for a slot — the cycle is held by
                                   # them anyway — but never after the phase is this old (refill_min..360)
+    "refill_keep_on_failure": False,  # true = a run that failed for its own reason (its cap, the time limit, no answer) does not
+                                  # close refill for the cycle; an outage or repeated failures still do (27.11)
+    "refill_while_running": False,    # true = past refill_min refill stays open while ANY run of the cycle still goes — an execute
+                                  # seat or a review — up to refill_max_min (27.11)
     "chain": False,               # `team cycle --due` starts the next cycle right after a cycle that did work, while work waits
     "chain_max": 6,               # cycles of one product in one `team cycle --due` process (1..50; 1 = no chaining)
     "chain_pause_s": 5,           # seconds without any lock between two chained cycles: the window of a waiting operator script
@@ -60,6 +64,8 @@ class Config:
     refill: bool = False
     refill_min: float = 20.0
     refill_max_min: float = 60.0
+    refill_keep_on_failure: bool = False
+    refill_while_running: bool = False
     chain: bool = False
     chain_max: int = 6
     chain_pause_s: float = 5.0
@@ -118,6 +124,8 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
     cfg = Config(refill=_bool(raw["refill"], bool(DEFAULTS["refill"]), pre + "refill"),
                  refill_min=refill_min,
                  refill_max_min=max(refill_min, _num(raw["refill_max_min"], float(DEFAULTS["refill_max_min"]), 1, 360, pre + "refill_max_min")),
+                 refill_keep_on_failure=_bool(raw["refill_keep_on_failure"], False, pre + "refill_keep_on_failure"),
+                 refill_while_running=_bool(raw["refill_while_running"], False, pre + "refill_while_running"),
                  chain=_bool(raw["chain"], bool(DEFAULTS["chain"]), pre + "chain"),
                  chain_max=int(_num(raw["chain_max"], int(DEFAULTS["chain_max"]), 1, 50, pre + "chain_max", whole=True)),
                  chain_pause_s=_num(raw["chain_pause_s"], float(DEFAULTS["chain_pause_s"]), 0, 600, pre + "chain_pause_s"),

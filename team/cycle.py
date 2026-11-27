@@ -321,6 +321,7 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._refill_failures = 0                              # failed runs of this cycle that did not close refill (guarded by `_seat_lock`)
         self._not_started: list[dict[str, str]] = []           # tasks a lane of this cycle looked at and quietly did not start, with the reason
         self._role_median: dict[str, float | None] = {}       # role → median spend of a run (`cost_guard_cap`), read once per cycle
         self._taken: set[str] = set()                         # tasks handed to a seat lane in this pass of the execute phase (guarded by `_seat_lock`)
@@ -454,6 +455,7 @@ class Cycle:
             log.warning("%s: run %s stopped by the cost guard at $%.2f (%s × the role's median $%s)", self.p.slug, run_id, cap,
                         guards["cost_factor"], self._role_median.get(role))
         self._tl.run_ok = bool(rr.ok)
+        self._tl.run_error = rr.error
         return rr
 
     def cost_guard_cap(self, role: str, guards: dict[str, Any] | None = None) -> float | None:
@@ -543,6 +545,8 @@ class Cycle:
 
     # ------------------------------------------------------------ continuous work of the seats (team/flow.py)
 
+    REFILL_FAILURES_MAX = 3               # `refill_keep_on_failure`: failed runs of one cycle after which refill closes all the same
+
     def refill_open(self) -> bool:
         """May a seat that finished its task take one more in this execute phase? Only in a parallel cycle with
         `cycle.flow.refill`, while the phase is younger than `refill_min`, nothing stopped the product, the last run of
@@ -554,9 +558,12 @@ class Cycle:
         now = time.monotonic()
         if now >= (self._refill_last or self._refill_deadline):
             why = f"the execute phase is older than cycle.flow.refill_max_min ({self.flow.refill_max_min:g} min)"
-        elif now >= self._refill_deadline and not self.lanes.gate.in_flight(LANE_REVIEW):
-            # past refill_min the window stays open only while reviews of this cycle hold the cycle anyway
-            why = f"the execute phase is older than cycle.flow.refill_min ({self.flow.refill_min:g} min) and no review is running"
+        elif now >= self._refill_deadline and not self.lanes.gate.in_flight(LANE_REVIEW) and not (
+                self.flow.refill_while_running and sum(self._seat_running.values()) > 0):
+            # past refill_min the window stays open only while reviews of this cycle hold the cycle anyway — and, with
+            # `refill_while_running`, while another execute seat is still at work (its run holds the cycle just the same)
+            why = (f"the execute phase is older than cycle.flow.refill_min ({self.flow.refill_min:g} min) and no review is running"
+                   + (" and no other seat is at work" if self.flow.refill_while_running else ""))
         else:
             why = self.stopped() or flow_mod.allowed(self.st, self.flow)
         if why:
@@ -1755,6 +1762,7 @@ class Cycle:
                 self._seat_running[key] = self._seat_running.get(key, 0) + 1
             ok, verdict = False, False            # an exception below counts as «dealt with»: the task is not offered again this cycle
             self._tl.run_ok = None                # no run of this task yet (`role_run` sets it)
+            self._tl.run_error = None
             try:
                 if not self.pending_role(t):
                     # The mark first, then the task read again: whatever another process (`team task move`) or a lane wrote
@@ -1789,9 +1797,27 @@ class Cycle:
                     if verdict is not None:      # None = waits for a dependency: a later pass of this cycle may start it
                         seen.add(t["id"])
                 if verdict and not healthy:
+                    started = run_ok is not None
+                    err = getattr(self._tl, "run_error", None)
+                    if self.flow.refill_keep_on_failure and not is_outage(err, started):
+                        # 27.11: the run failed for its own reason (its cap, the time limit, no answer) — that says nothing
+                        # about the next task or the other seats. Refill stays open and this seat goes on; an outage, a run
+                        # that did not start, or REFILL_FAILURES_MAX failures in the cycle still close it.
+                        with self._seat_lock:
+                            self._refill_failures += 1
+                            n_fail = self._refill_failures
+                        self.store.event("flow.run_failed", self.cycle_id, "dispatcher", {"task": t["id"], "error": str(err or "")[:200], "n": n_fail})
+                        log.info("%s: %s: the run failed (%s) — refill stays open (%d of %d failures of this cycle)", self.p.slug, t["id"],
+                                 str(err or "?")[:80], n_fail, self.REFILL_FAILURES_MAX)
+                        if n_fail >= self.REFILL_FAILURES_MAX:
+                            self.close_refill(f"{n_fail} failed runs in this cycle (last: {t['id']})")
+                        else:
+                            healthy = True
+                        continue
                     # a run that failed or did not start (budget, limits, an outage): the next task would meet the same —
                     # nothing more is taken beyond the seat's places in this cycle, by any lane
-                    self.close_refill(f"{t['id']}: the run {'failed' if run_ok is False and ok else 'did not finish'}")
+                    kind = "an outage: " if self.flow.refill_keep_on_failure else ""
+                    self.close_refill(f"{t['id']}: {kind}the run {'failed' if run_ok is False and ok else 'did not finish'}")
 
     # the checkouts of the repository roles: one worktree per task (owner 21.11) ---------------------------------------
 
@@ -3557,6 +3583,19 @@ def accepted_moment(t: dict[str, Any]) -> datetime | None:
         if isinstance(h, dict) and h.get("to") == "accepted":
             return parse_ts(h.get("ts"))
     return None
+
+
+OUTAGE_RE = re.compile(r"api error|overloaded|rate.?limit|usage limit|credit|quota|\b(429|500|502|503|529)\b|connection|network|cli error|not found|"
+                       r"no result event|authentication|unauthorized", re.IGNORECASE)
+
+
+def is_outage(error: Any, started: bool) -> bool:
+    """Does a failed run say that the NEXT run would fail too? Yes when it did not start (budget, limits) or its error
+    reads like the service, the network or the CLI; no when the run failed for its own reason — its cap
+    (`error_max_budget_usd`), the time limit, the loop guard, no structured answer."""
+    if not started or error is None:
+        return True
+    return bool(OUTAGE_RE.search(str(error)))
 
 
 def over_budget(rr: RunResult) -> bool:
