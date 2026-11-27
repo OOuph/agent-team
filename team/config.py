@@ -36,6 +36,8 @@ DEPENDENCIES_DEFAULTS: dict[str, Any] = {
     "at_merge": False,            # true = a dependency is met once it is MERGED (`released`), not only once it is accepted. 27.11,
                                   # ai-battles: reviews take an hour, all 23 tasks with a dependency waited for it (median 54 min)
     "roles": [],                  # … only for dependencies whose own role is in this list; [] = every role
+    "report_stuck": False,        # true = a dependency that is finished without a usable result, or that leads back to the task
+                                  # itself (a circle), is reported like a rejected one: an event and a question to the PO (27.11)
 }
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
@@ -54,6 +56,9 @@ GUARDS_DEFAULTS: dict[str, Any] = {
     "idle_reasons": False,        # true = at the end of the execute phase every task that is still `ready` gets its reason on record
                                   # (one event `execute.left` per cycle) — not only when the cycle executed nothing (26.11: a task of
                                   # a role without a seat lay three hours and nothing said why)
+    "budget_halt": False,         # true = once the day's budget is used up and nothing in flight can free any, the seats take
+                                  # no further task in this cycle (27.11, found by a scenario: with retake and three passes
+                                  # every ready task went ready → in_progress → ready three times per cycle)
     "crash_release": False,       # true = a task whose lane raised an exception goes back to `ready` (after CRASHES_MAX times: to
                                   # the PO with a question) instead of staying `in_progress` with a run id nobody holds (27.11)
 }
@@ -508,7 +513,7 @@ class Product:
             for k, v in src.items():
                 if k not in out:
                     continue
-                if k in ("loop", "cost", "crash_release", "idle_reasons"):
+                if k in ("loop", "cost", "crash_release", "idle_reasons", "budget_halt"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
@@ -532,7 +537,7 @@ class Product:
     @property
     def dependencies_cfg(self) -> dict[str, Any]:
         """`cycle.dependencies`: team.yaml first, this product's block on top; a wrong value keeps the default."""
-        out = {"at_merge": False, "roles": []}
+        out = {"at_merge": False, "roles": [], "report_stuck": False}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("dependencies")), (f"{self.slug} product.yaml", own.get("dependencies") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
@@ -540,11 +545,11 @@ class Product:
                     log.warning("%s: cycle.dependencies=%r is not a mapping — ignored", where, src)
                 continue
             for k, v in src.items():
-                if k == "at_merge":
+                if k in ("at_merge", "report_stuck"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
-                        log.warning("%s: cycle.dependencies.at_merge=%r is not true/false — %s in use", where, v, out[k])
+                        log.warning("%s: cycle.dependencies.%s=%r is not true/false — %s in use", where, k, v, out[k])
                 elif k == "roles":
                     if isinstance(v, list) and all(isinstance(x, str) for x in v):
                         out[k] = [x.strip() for x in v if x.strip()]

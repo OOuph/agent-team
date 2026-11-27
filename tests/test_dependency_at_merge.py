@@ -24,9 +24,9 @@ FAIL = {"verdict": "fail", "summary": "wrong", "first_failure": "the corridor ch
 def test_settings(tmp_path: Path):
     assert C.DEPENDENCIES_DEFAULTS["at_merge"] is False and C.DEFAULTS["cycle"]["dependencies"]["at_merge"] is False
     p = _product(_settings(tmp_path))
-    assert p.dependencies_cfg == {"at_merge": False, "roles": []} and cycle_mod.merged_counts(p.dependencies_cfg) is None
+    assert p.dependencies_cfg == {"at_merge": False, "roles": [], "report_stuck": False} and cycle_mod.merged_counts(p.dependencies_cfg) is None
     p2 = _product(_settings(tmp_path / "b", {"cycle": {"dependencies": {"at_merge": "yes", "roles": "developer"}}}))
-    assert p2.dependencies_cfg == {"at_merge": False, "roles": []}                       # wrong values keep the defaults
+    assert p2.dependencies_cfg == {"at_merge": False, "roles": [], "report_stuck": False}                       # wrong values keep the defaults
     ok = cycle_mod.merged_counts({"at_merge": True, "roles": ["developer"]})
     assert ok({"state": "released", "role": "developer"}) and not ok({"state": "released", "role": "designer"})
     assert not ok({"state": "in_progress", "role": "developer"}) and not ok({"state": "review", "role": "developer"})

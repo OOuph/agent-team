@@ -348,6 +348,7 @@ class Cycle:
         self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
         self._drain = drain_mod.Watch(st, product.slug)   # a request to finish what runs and end (team/drain.py)
         self._drain_said = False
+        self._budget_out = ""                                  # `cycle.guards.budget_halt`: why the seats stopped taking tasks ("" = they have not)
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._dep_merged = merged_counts(product.dependencies_cfg)      # `cycle.dependencies.at_merge`: None = a dependency must be accepted
@@ -456,6 +457,12 @@ class Cycle:
                 if cap < float(self.st.budget.get("min_usd_per_run", 0.3)):
                     self.store.event("budget.stop", self.p.slug, "dispatcher", {"remaining": round(remaining, 3), "cap": self.p.daily_cap,
                                                                                 **({"reserved": round(reserved, 3)} if reserved else {})})
+                    if (guards["budget_halt"] and not reserved and remaining < float(self.st.budget.get("min_usd_per_run", 0.3))
+                            and not self._budget_out):
+                        # nothing is in flight that could come in under its cap: the day is over for this product
+                        self._budget_out = f"the day's budget is used up (${max(0.0, remaining):.2f} left of ${self.p.daily_cap:.2f})"
+                        log.info("%s: %s — the seats take no further task in this cycle", self.p.slug, self._budget_out)
+                        self.close_refill(self._budget_out)
                 return None
             if self.dry_run:
                 log.info("[dry-run] would run %s (%s): prompt %d chars", role, label, len(prompt))
@@ -1711,6 +1718,8 @@ class Cycle:
         why = self.why_not_startable(t)
         if why:
             return why
+        if self._budget_out:
+            return self._budget_out
         if self.draining():
             return "a drain request stands: nothing new was started"
         if t["id"] in self._not_done:
@@ -1796,6 +1805,10 @@ class Cycle:
             return
         self._exec_ready = True
         try:
+            self.release_orphans()
+        except Exception as exc:  # noqa: BLE001 — housekeeping
+            log.warning("%s: orphaned tasks not released: %s", self.p.slug, str(exc)[:300])
+        try:
             self.sweep_worktrees()
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
             log.warning("%s: worktree sweep failed: %s", self.p.slug, gitops.redact(str(exc))[:300])
@@ -1837,6 +1850,8 @@ class Cycle:
         seat never gets more lanes than it has places, counting the lanes of an earlier call that are still at work."""
         if self.draining():
             return 0                              # a drain request: no new executor lane
+        if self._budget_out:
+            return 0
         slots, used, seen = self._exec_slots, self._exec_used, self._exec_seen
         with self._seat_lock:
             if not any(self._seat_lanes.values()):
@@ -1982,9 +1997,10 @@ class Cycle:
     def report_dead_dependency(self, t: dict[str, Any], dead: list[str]) -> None:
         """`depends_on` names a task that was rejected (with nothing in its place) or does not exist: the task can never
         start. Said aloud every cycle in the log; recorded and put to the PO once per set of dead ids."""
-        states = {d: ((self.store.task(d) or {}).get("state") or "missing") for d in dead}
+        wide = self.p.dependencies_cfg["report_stuck"]
+        states = {d: (dead_reason(self.store, t, d, wide) or (self.store.task(d) or {}).get("state") or "missing") for d in dead}
         what = ", ".join(f"{d} ({st})" for d, st in states.items())
-        log.warning("%s: %s cannot start: its dependency %s is rejected or missing and can never be met", self.p.slug, t["id"], what)
+        log.warning("%s: %s cannot start: its dependency %s can never be met", self.p.slug, t["id"], what)
         if self.dry_run or sorted(t.get("dead_deps_reported") or []) == sorted(dead):
             return
         with self.store.lock:
@@ -2100,7 +2116,7 @@ class Cycle:
         if nb and _now() < nb:
             return False        # scheduled for later (daily posts): the PO set not_before
         if t.get("state") == "ready" and unmet_dependencies(self.store, t, self._dep_merged):
-            dead = dead_dependencies(self.store, t)
+            dead = dead_dependencies(self.store, t, self.p.dependencies_cfg["report_stuck"])
             if dead:
                 self.report_dead_dependency(t, dead)
             return None         # `depends_on`: a dependency is not done yet or its result is a stub
@@ -2127,6 +2143,8 @@ class Cycle:
         healthy = True                            # refill: this lane's last task was carried through and its run went well
         first = True
         while True:
+            if self._budget_out:
+                return                            # the day's budget is used up: taking a task would only walk it to in_progress and back
             if self.draining():
                 return                            # a drain request: this lane takes nothing more (it may not have taken anything yet)
             if self.flow.fair_seats and not first:
@@ -2194,9 +2212,11 @@ class Cycle:
                         self._not_done.add(t["id"])
                     if verdict is not None:      # None = waits for a dependency: a later pass of this cycle may start it
                         seen.add(t["id"])
-                    if verdict:
+                    if verdict and run_ok is not None:   # handled = a run was made; «no run (budget)» is not something to take again for
                         self._handled[t["id"]] = self._handled.get(t["id"], 0) + 1
-                    if self.flow.retake and verdict:
+                    if self.flow.retake and verdict and run_ok is not None:
+                        # (`run_ok is None`: no run was made at all — the budget said no; such a task is not offered again
+                        # in this pass either, or it walks ready → in_progress → ready for nothing)
                         # it RAN and no lane holds it now; `seen` and `retake_ok` decide whether it may run again. A task that
                         # was refused (it waits for a dependency or a question) stays taken until the next pass, as before
                         # the switch: 27.11, T-0572 and T-0669 were picked and refused once a minute by lanes with no work
@@ -2517,6 +2537,28 @@ class Cycle:
             raise
         finally:
             self.store.release(t["id"])
+
+    def release_orphans(self) -> int:
+        """`cycle.guards.crash_release`, the other half: a task that is `in_progress` (or `claimed`) for a run of a cycle
+        that is gone — its process was killed, or the cycle was cut short — with no lease left. `startable` answers «a run
+        holds it» for such a task for ever (27.11, T-0572). Before any seat starts: back to `ready`, with an event. The
+        caller holds the product lock, so no other cycle can be the run in question. Returns how many were released."""
+        if not self.p.guards_cfg["crash_release"] or self.dry_run:
+            return 0
+        held = {r[0] for r in self.store.db.execute("SELECT task_id FROM claims").fetchall()}
+        n = 0
+        for t in self.store.tasks(["claimed", "in_progress"]):
+            run = str(t.get("assignee_run") or "")
+            if not run or t["id"] in held or run.startswith(f"{self.cycle_id}-") or self.lanes.busy(t["id"]):
+                continue
+            if t.get("state") == "in_progress" and (t.get("last_review") or (t.get("results") or [{}])[-1].get("status") == "partial"):
+                continue                           # it is startable as it is: a review sent it back, or its run was cut and continues
+            self.store.transition(t["id"], "ready", "dispatcher", f"its run {run} is gone (the cycle ended without it) and holds no lease"[:300],
+                                  force=True, assignee_run=None)
+            self.store.event("task.run_orphaned", t["id"], "dispatcher", {"run": run})
+            log.warning("%s: %s was held by %s, a run that is gone — back to ready", self.p.slug, t["id"], run)
+            n += 1
+        return n
 
     def crash_release(self, tid: str, run_id: str, exc: BaseException) -> None:
         """`cycle.guards.crash_release`: the code that carried this task raised. Without the switch the task stays
@@ -3999,6 +4041,7 @@ def is_stub_result(summary: str) -> bool:
 
 
 DEPENDENCY_DONE = ("accepted", "measured", "done")
+DEPENDENCY_CIRCLE_DEPTH = 12                      # `leads_back`: how far the chain of dependencies is followed
 DEPENDENCY_MERGED = "released"                    # `cycle.dependencies.at_merge`: merged into the main branch, its review still to come
 SUPPORT_FAILED_EVENT = "task.support_failed"      # a task this one was started on (merged, not yet accepted) failed its review
 SUPPORT_STARTED = ("claimed", "in_progress", "released", "review", "accepted", "blocked", "waiting_owner")   # … «started» = one of these
@@ -4018,15 +4061,45 @@ def resolve_dependency(store: Any, dep: str) -> dict[str, Any] | None:
     return d
 
 
-def dead_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
-    """Ids from `depends_on` that can never be met: the task does not exist, or it was rejected and nothing replaced it
-    (hittheline 26.11: three ready tasks waited 100 minutes for tasks the same PO answer had closed)."""
-    out = []
-    for dep in t.get("depends_on") or []:
-        d = resolve_dependency(store, str(dep))
-        if d is None or d.get("state") == "rejected":
-            out.append(str(dep))
-    return out
+def leads_back(store: Any, start: str, target: str, depth: int = DEPENDENCY_CIRCLE_DEPTH) -> bool:
+    """Does the chain of `depends_on` from task `start` reach `target` (a circle through `target`)?"""
+    seen, todo = set(), [(start, 0)]
+    while todo:
+        tid, n = todo.pop()
+        if tid in seen or n > depth:
+            continue
+        seen.add(tid)
+        d = store.task(tid)
+        for nxt in ((d or {}).get("depends_on") or []):
+            if str(nxt) == target:
+                return True
+            todo.append((str(nxt), n + 1))
+    return False
+
+
+def dead_reason(store: Any, t: dict[str, Any], dep: str, wide: bool = False) -> str:
+    """Why dependency `dep` of task `t` can never be met ("" = it can). Always: it does not exist, or it was rejected with
+    nothing in its place. `wide` (`cycle.dependencies.report_stuck`): also a dependency that is finished without a usable
+    result — nothing will ever add one — and one that leads back to `t` itself."""
+    d = resolve_dependency(store, str(dep))
+    if d is None:
+        return "missing"
+    if d.get("state") == "rejected":
+        return "rejected"
+    if not wide:
+        return ""
+    res = d.get("results") or []
+    if d.get("state") in DEPENDENCY_DONE and (not res or is_stub_result(str(res[-1].get("summary") or ""))):
+        return f"{d.get('state')} without a usable result"
+    if d.get("state") not in DEPENDENCY_DONE and leads_back(store, str(d.get("id") or dep), str(t.get("id"))):
+        return "a circle: it waits for this very task"
+    return ""
+
+
+def dead_dependencies(store: Any, t: dict[str, Any], wide: bool = False) -> list[str]:
+    """Ids from `depends_on` that can never be met (`dead_reason`): the task does not exist, or it was rejected and nothing
+    replaced it (hittheline 26.11: three ready tasks waited 100 minutes for tasks the same PO answer had closed)."""
+    return [str(dep) for dep in t.get("depends_on") or [] if dead_reason(store, t, str(dep), wide)]
 
 
 def merged_counts(cfg: dict[str, Any] | None) -> Any:
