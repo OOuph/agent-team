@@ -49,7 +49,8 @@ def _busy(s: Store, ready: int) -> None:
 def test_off_by_default(tmp_path: Path):
     st = _settings(tmp_path, None)
     p = _product(st)
-    assert p.queue_cfg == {"ahead": False, "target_ready": 6, "max_per_run": 6, "wake_every_min": 30, "cut_on_design": False}
+    assert p.queue_cfg == {"ahead": False, "target_ready": 6, "max_per_run": 6, "wake_every_min": 30, "remind_parked": False,
+                           "cut_on_design": False}
     s = Store(p.dir); _busy(s, 1); s.close()
     r = PO()
     c = Cycle(st, p, r, "c1"); c.phase_triage(); c.store.close()
@@ -105,4 +106,5 @@ def test_default_schema_and_limit_stay_when_off(tmp_path: Path):
 
 def test_bad_values_fall_back(tmp_path: Path):
     p = _product(_settings(tmp_path, {"ahead": "yes", "target_ready": 0, "max_per_run": 99, "wake_every_min": "soon"}))
-    assert p.queue_cfg == {"ahead": False, "target_ready": 6, "max_per_run": 6, "wake_every_min": 30, "cut_on_design": False}
+    assert p.queue_cfg == {"ahead": False, "target_ready": 6, "max_per_run": 6, "wake_every_min": 30, "remind_parked": False,
+                           "cut_on_design": False}

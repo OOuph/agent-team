@@ -96,7 +96,8 @@ def test_a_failed_review_of_the_support_leaves_a_trace_and_touches_nothing(tmp_p
     cyc.store.close()
     assert violations(cyc, p, res) == []
     d = _state(p, dep)
-    assert d["state"] == "in_progress" and d["review_fails"] == 1      # the support goes back to its author, as always
+    # the support goes back to its author, as always (with `review_in_cycle` its seat may have taken it again already)
+    assert d["state"] in ("in_progress", "released") and d["review_fails"] == 1
     w = _state(p, waits)
     assert w["state"] not in ("ready", "blocked", "rejected")          # the dependent was started and is not touched
     notes = w["support_failed"]
