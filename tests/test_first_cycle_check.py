@@ -14,6 +14,12 @@ from test_parallel_lanes import LaneRunner, _events, _product, _settings, _task
 ON = {"first_cycle_check": {"enabled": True}}
 
 
+@pytest.fixture(autouse=True)
+def _a_quiet_server(monkeypatch):
+    """The load of the machine that runs the tests is not what is tested (a test sets it where it matters)."""
+    monkeypatch.setattr(fc, "server_load", lambda: (0.1, 0.8, 8))
+
+
 def _log(st) -> list[str]:
     f = st.data_dir / fc.LOG_FILE
     return f.read_text(encoding="utf-8").splitlines() if f.exists() else []
@@ -139,3 +145,32 @@ def test_the_idle_lanes_of_27_11_make_the_first_cycle_red(tmp_path: Path, monkey
     else:
         assert " GREEN " in lines[0]
     assert not (p.dir / "STOP").exists()
+
+
+
+def test_the_thresholds_of_the_second_batch(tmp_path: Path, monkeypatch):
+    """What no scenario can catch: the wait of a seat lane, executor runs with nothing to show, tasks walked into work and
+    back, the load of the server."""
+    st, p = _cycle(tmp_path, monkeypatch, ON, ["bbb"])
+    monkeypatch.setattr(fc, "server_load", lambda: (0.4, 3.2, 8))
+    t = _task(p, "developer")
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    res = cyc.run(["execute"])
+    cfg = fc.settings(st.raw, p.raw)
+    assert fc.findings(cyc, res, cfg) == []
+    cyc.lanes.gate.max_wait["execute"] = 3549.1                        # 27.11: the second game designer lane waited that long
+    for i in range(5):
+        cyc.store.event("run", f"c1-dev-T-90{i:02d}", "developer", {"ok": True, "cost": 1.0, "turns": 9, "error": ""})
+    walked = _task(p, "developer", "walked")
+    for _ in range(3):
+        cyc.store.transition(walked, "in_progress", "dispatcher", "started", force=True)
+        cyc.store.transition(walked, "ready", "dispatcher", "no run (budget or dry-run)", force=True)
+    monkeypatch.setattr(fc, "server_load", lambda: (3.4, 27.0, 8))
+    text = " | ".join(fc.findings(cyc, res, cfg))
+    assert "a seat lane waited 3549s" in text
+    assert "5 of 6 executor runs carried no task through" in text
+    assert f"1 task(s) went in_progress → ready without a run more than 1 time(s): {walked} ×3" in text
+    assert "the server's 5-minute load is 27.0 on 8 cores = 3.4 per core" in text
+    quiet = fc.settings({"first_cycle_check": {"enabled": True, "execute_wait_s": 4000, "no_result_share": 0.9, "churn_per_task": 5, "load_per_core": 4}}, {})
+    assert fc.findings(cyc, res, quiet) == []                          # every threshold is a setting
+    cyc.store.close()

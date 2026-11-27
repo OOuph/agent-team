@@ -31,9 +31,15 @@ DEFAULTS: dict[str, Any] = {
     "min_runs": 4,                # … when it had at least this many runs
     "main_wait_s": 300,           # the PO (a main lane) waited longer than this for a run slot
     "review_wait_s": 1800,        # a review waited longer than this for a run slot
+    "execute_wait_s": 1800,       # a seat lane waited longer than this for a run slot
+    "no_result_share": 0.5,       # share of executor runs that carried no task through, above which the cycle is red (from min_runs)
+    "churn_per_task": 1,          # a task went in_progress → ready without a run more often than this
+    "load_per_core": 2.5,         # the 5-minute load of the server per core at the end of the cycle (27.11: 18–33 on 8 cores = 2.3–4.1)
 }
 _RANGES = {"cycles": (1, 20, int), "refusals_per_task": (1, 1000, int), "picks_per_task": (1, 1000, int), "idle_picks": (0, 100000, int),
-           "fail_share": (0.0, 1.0, float), "min_runs": (1, 1000, int), "main_wait_s": (1, 86400, float), "review_wait_s": (1, 86400, float)}
+           "fail_share": (0.0, 1.0, float), "min_runs": (1, 1000, int), "main_wait_s": (1, 86400, float), "review_wait_s": (1, 86400, float),
+           "execute_wait_s": (1, 86400, float), "no_result_share": (0.0, 1.0, float), "churn_per_task": (0, 1000, int), "load_per_core": (0.1, 100.0, float)}
+EXEC_ROLES = ("developer", "designer", "game-designer", "analyst", "marketer", "tester")
 LOG_FILE = "framework/canary.log"             # under the data directory: one line per checked cycle, newest last
 STATE_DIR = "framework/first-cycle"           # <slug>.json: the commit this product's cycles were last checked on, and how many
 EVENT = "canary.first_cycle"
@@ -144,7 +150,45 @@ def findings(cyc: Any, result: dict[str, Any], cfg: dict[str, Any]) -> list[str]
         out.append(f"the PO waited {waits['main']:.0f}s for a run slot (limit {cfg['main_wait_s']:g}s)")
     if waits.get("review", 0.0) > cfg["review_wait_s"]:
         out.append(f"a review waited {waits['review']:.0f}s for a run slot (limit {cfg['review_wait_s']:g}s)")
+    if waits.get("execute", 0.0) > cfg["execute_wait_s"]:
+        out.append(f"a seat lane waited {waits['execute']:.0f}s for a run slot (limit {cfg['execute_wait_s']:g}s)")
+    # 8. executor runs that carried nothing through
+    exec_runs = [e for e in runs if e["actor"] in EXEC_ROLES]
+    done = int(getattr(cyc, "n_executed", 0))
+    if len(exec_runs) >= cfg["min_runs"] and (len(exec_runs) - done) / len(exec_runs) > cfg["no_result_share"]:
+        out.append(f"{len(exec_runs) - done} of {len(exec_runs)} executor runs carried no task through (limit {cfg['no_result_share']:.0%})")
+    # 9. tasks walked into work and back without a run
+    back: dict[str, int] = {}
+    ran: dict[str, int] = {}
+    for e in events:
+        d = e["detail"] if isinstance(e["detail"], dict) else {}
+        if e["kind"] == "task.transition" and d.get("from") == "in_progress" and d.get("to") == "ready":
+            back[e["subject"]] = back.get(e["subject"], 0) + 1
+        elif e["kind"] == "task.run_crashed":
+            ran[e["subject"]] = ran.get(e["subject"], 0) + 1
+        elif e["kind"] == "run":
+            tid = str(e["subject"]).rsplit("-", 2)[-2:]
+            ran["-".join(tid)] = ran.get("-".join(tid), 0) + 1
+    churned = sorted(((n - ran.get(t, 0), t) for t, n in back.items() if n - ran.get(t, 0) > cfg["churn_per_task"]), reverse=True)
+    if churned:
+        out.append(f"{len(churned)} task(s) went in_progress → ready without a run more than {cfg['churn_per_task']} time(s): "
+                   + ", ".join(f"{t} ×{n}" for n, t in churned[:5]))
+    # 10. the load of the server
+    load = server_load()
+    if load is not None and load[0] > cfg["load_per_core"]:
+        out.append(f"the server's 5-minute load is {load[1]:.1f} on {load[2]} cores = {load[0]:.1f} per core (limit {cfg['load_per_core']:g})")
     return out
+
+
+def server_load() -> tuple[float, float, int] | None:
+    """(5-minute load per core, the load, the cores) of this machine; None where the system does not say."""
+    try:
+        import os
+        cores = os.cpu_count() or 1
+        five = os.getloadavg()[1]
+        return five / cores, five, cores
+    except (OSError, AttributeError):
+        return None
 
 
 def check(cyc: Any, result: dict[str, Any]) -> dict[str, Any] | None:
