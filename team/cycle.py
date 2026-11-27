@@ -2005,8 +2005,11 @@ class Cycle:
                         seen.add(t["id"])
                     if verdict:
                         self._handled[t["id"]] = self._handled.get(t["id"], 0) + 1
-                    if self.flow.retake:
-                        self._taken.discard(t["id"])     # no lane holds it now; `seen` and `retake_ok` decide whether it may run again
+                    if self.flow.retake and verdict:
+                        # it RAN and no lane holds it now; `seen` and `retake_ok` decide whether it may run again. A task that
+                        # was refused (it waits for a dependency or a question) stays taken until the next pass, as before
+                        # the switch: 27.11, T-0572 and T-0669 were picked and refused once a minute by lanes with no work
+                        self._taken.discard(t["id"])
                 if verdict and not healthy:
                     started = run_ok is not None
                     err = getattr(self._tl, "run_error", None)

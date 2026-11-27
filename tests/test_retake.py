@@ -83,3 +83,27 @@ def test_a_task_that_is_ready_but_not_startable_is_picked_again_only_once(tmp_pa
     assert [bool(x) for x in picks] == [True, False, False, False, False]
     assert len(_events(p, "flow.retake")) == 1
     cyc.store.close()
+
+
+def test_a_task_that_waits_for_a_dependency_is_not_picked_over_and_over(tmp_path: Path):
+    """27.11, cycle 13:26: T-0572 waited for T-0629; with `retake` on the lane picked it, was refused, and picked it again
+    for the rest of the cycle — a lane with no work that kept taking a run slot."""
+    st = _settings(tmp_path, ON)
+    p = _product(st)
+    dep = _task(p, "designer", "the dependency, another seat is busy with it", state="in_progress")
+    tid = _task(p, "developer", "waits for it", depends_on=[dep])
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    cyc.execute_prepare()
+    seen: set[str] = set()
+    picks = []
+    orig = cyc.next_for_seat
+
+    def counted(key, slots, seen_):
+        t = orig(key, slots, seen_)
+        picks.append(t and t["id"])
+        return t
+    cyc.next_for_seat = counted                                       # type: ignore[method-assign]
+    cyc._refill_deadline = __import__("time").monotonic() + 600       # refill open: the lane reads the backlog for every pick
+    cyc.seat_lane("developer", __import__("team.cycle", fromlist=["_Feed"])._Feed([]), cyc._exec_slots, cyc._exec_used, seen)
+    assert picks == [tid, None]
+    cyc.store.close()
