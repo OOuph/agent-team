@@ -121,6 +121,8 @@ cycle:
     checkout: false               # true = a read-only checkout of the base branch as its working folder, with Read / Glob / Grep
   review_tests:                   # 27.11: the test step before a review
     skip_for_docs: false          # true = a commit that changes only .md / .txt files is reviewed without the tests and without a play-test
+  node_cache:                     # 27.11 (team/nodecache.py): a ready node_modules per package-lock.json
+    enabled: false                # true = a checkout without node_modules gets a copy from the cache; commands run without `npm ci`
   flow:                           # owner 25.11 («если у нас так простои постоянно, то надо что-то менять»): continuous work of the seats —
                                   # team/flow.py, SCHEME §3 «Непрерывная работа мест». Off here; a product in active development switches
                                   # it on in product.yaml: `cycle: {flow: {refill: true, chain: true}}` (overrides key by key)

@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from . import gitops
+from . import gitops, nodecache
 from .config import Product
 
 log = logging.getLogger("team.playtest")
@@ -163,7 +163,7 @@ def live_base_url(product: Product) -> str | None:
 
 
 def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd: str = "", start_timeout_s: int = START_TIMEOUT_S,
-          lock: Any = None, force_local: bool = False) -> Server:
+          lock: Any = None, force_local: bool = False, prepare: Any = None) -> Server:
     """Copy `sha`, install, build, run, wait for health. Raises PlaytestError with the log tail when the server does not come up.
     `lock`: the cycle's repository lock (team/lanes.py), held only while the clone is copied — another lane may be merging
     into it; install, build and the server run outside it."""
@@ -175,8 +175,14 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
         dest = prepare_copy(repo_dir, sha, work / "checkout")   # the tester's Playwright runs from here even against a deployed host
     log_path = work / "server.log"
     log_fh = log_path.open("w", encoding="utf-8")
+    # `prepare(dest)` (27.11, team/nodecache.py): True = the copy got a ready node_modules — no install, and the build
+    # command runs without its own `npm ci`
+    seeded = bool(prepare(dest)) if prepare is not None else False
+    build_cmd = nodecache.strip_install(product.build_cmd) if seeded and product.build_cmd else product.build_cmd
+    if seeded:
+        log_fh.write("node_modules copied from the dispatcher's cache for this lock file; no install\n")
     try:
-        inst = install_cmd_for(dest, install_cmd or str((product.raw.get("repo") or {}).get("install_cmd") or ""))
+        inst = "" if seeded else install_cmd_for(dest, install_cmd or str((product.raw.get("repo") or {}).get("install_cmd") or ""))
         if inst:
             rc = _run(inst, dest, INSTALL_TIMEOUT_S, log_fh)
             if rc != 0:
@@ -186,17 +192,17 @@ def start(product: Product, repo_dir: Path, sha: str, work: Path, *, install_cmd
             # un-built checkout every spec failed at import («No tests found») and the reviews were inconclusive from
             # 19:24 UTC on. The tester's Playwright runs from this checkout, so it is built here as well; a failed build
             # is reported like a failed install.
-            if product.build_cmd:
-                rc = _run(product.build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
+            if build_cmd:
+                rc = _run(build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
                 if rc != 0:
-                    raise PlaytestError(f"build failed (exit {rc}): {product.build_cmd}\n" + _tail(log_path))
+                    raise PlaytestError(f"build failed (exit {rc}): {build_cmd}\n" + _tail(log_path))
             log_fh.write(f"\ndeployed host {live} in use; no local server\n")
             log_fh.close()
             return Server(base_url=live, port=None, dest=dest, log_path=log_path, proc=None, local=False, notes=[f"deployed host {live} used; no local server"])
-        if product.build_cmd:
-            rc = _run(product.build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
+        if build_cmd:
+            rc = _run(build_cmd, dest, BUILD_TIMEOUT_S, log_fh)
             if rc != 0:
-                raise PlaytestError(f"build failed (exit {rc}): {product.build_cmd}\n" + _tail(log_path))
+                raise PlaytestError(f"build failed (exit {rc}): {build_cmd}\n" + _tail(log_path))
         # the port is picked right before the server starts, not before install and build: with cycles of several
         # products running side by side (F17) a port chosen minutes earlier may have been taken by another play-test
         port = free_port()

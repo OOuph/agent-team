@@ -472,8 +472,15 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
             readme += f"\n\n--- {name} ---\n" + _tail(p.read_text(encoding="utf-8", errors="replace"), 8000)
     prev = ("\n\n# PREVIOUS ATTEMPTS ON THIS TASK\n" + _y(previous[-2:])) if previous else ""
     rev = ("\n\n# REVIEW THAT FAILED (fix this first)\n" + _y({k: review.get(k) for k in ("verdict", "first_failure", "criteria", "summary")})) if review else ""
-    tests = (f"Tests: run `{product.test_cmd}` from the checkout root before reporting done (it creates its own venv; "
-             "the checkout has no .venv). A task is not done while that command fails.\n\n") if product.test_cmd else ""
+    from . import nodecache
+    ready = nodecache.seeded(repo_dir)             # 27.11: the dispatcher put a ready node_modules for this lock file into the checkout
+    test_cmd = nodecache.strip_install(product.test_cmd) if ready and product.test_cmd else product.test_cmd
+    tests = (f"Tests: run `{test_cmd}` from the checkout root before reporting done (it creates its own venv; "
+             "the checkout has no .venv). A task is not done while that command fails.\n\n") if test_cmd else ""
+    if ready:
+        tests += ("Dependencies are already installed: `node_modules` here matches this checkout's `package-lock.json`. Do NOT run `npm ci` "
+                  "or `npm install` (it takes minutes and removes what is there) unless your task changes `package.json` or the lock file — "
+                  "then install once and say so in `changes`.\n\n")
     probe = ("# PROBE (stuck-goal replan): answer one question, do not implement\n"
              f"Task {task.get('probe_of')} failed several times. This run tests ONE alternative approach: run the check in the "
              "acceptance (commands, fetches, comparisons in a scratch directory), do not change or commit product code; nothing "
