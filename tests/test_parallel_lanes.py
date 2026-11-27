@@ -1413,3 +1413,32 @@ def test_review_reserve_keeps_a_slot_for_reviews_while_every_seat_is_busy():
     release.set()
     assert ls.join() == []
     assert len([x for x in order if x.startswith("exec")]) == 3
+
+
+def test_main_outside_lets_the_po_run_while_every_slot_is_taken():
+    """27.11: the seats start early and hold all six slots; the PO waited 499–601 s for one. `cycle.parallel.main_outside`
+    puts the runs of the cycle's own thread beside the lanes."""
+    from team import lanes
+    assert lanes.settings({"parallel": {"enabled": True}}, {}, "t").main_outside is False
+    assert lanes.settings({"parallel": {"enabled": True, "main_outside": "yes"}}, {}, "t").main_outside is False
+    for outside in (True, False):
+        ls = lanes.Lanes(lanes.settings({"parallel": {"enabled": True, "max_runs": 2, "main_outside": outside}}, {}, "t"))
+        release, busy = threading.Event(), threading.Barrier(3)
+
+        def seat():
+            busy.wait(WAIT_S)
+            release.wait(WAIT_S)
+
+        for i in range(2):
+            ls.submit("execute", lanes.LANE_EXECUTE, f"exec-{i}", seat)
+        busy.wait(WAIT_S)                                                  # both slots are held now
+        got = threading.Event()
+
+        def po():
+            with ls.run_slot("po"):
+                got.set()
+
+        th = threading.Thread(target=po); th.start()
+        assert got.wait(1.0) is outside                                    # outside the count: at once; inside: it waits
+        release.set(); th.join(WAIT_S)
+        assert got.is_set() and ls.join() == [] and ls.gate.at_work() == 0
