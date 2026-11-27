@@ -57,6 +57,12 @@ HEAVY_RUNS_PROMPT = ("\n\n# HEAVY RUNS ARE NOT STARTED FROM THIS RUN (the team's
                      "If the task cannot be finished without such a run — a load test, a simulation of hundreds of battles — finish "
                      "everything else, then report `needs_context` (or `partial`) and name the exact command, how long it runs and what "
                      "its output must show: the operator starts it when the server is free and the result comes back to this task.\n")
+HEAVY_QUEUE_PROMPT = ("\n\n# LONG SIMULATIONS RUN ONE AT A TIME ON THIS SERVER — START THEM THROUGH `team-heavy`\n"
+                      "These commands are denied to you as typed:\n{rules}\n"
+                      "Start them as `team-heavy <the same command>`, for example `team-heavy npm run sim:weapons`. The tool waits until no "
+                      "other such run is going on the server (up to {wait} minutes), then runs yours at low priority and gives you its "
+                      "output and exit code. Give the command enough time: it may wait before it starts. If it answers that the server is "
+                      "still busy, report the command in your result instead of starting it another way.\n")
 SUITE_CACHE_KEEP = 30                                     # `cycle.review_tests.once_per_batch`: results of the suite kept per product
 SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main branch that contains this task's commit {sha}; "
               "its result stands for every task merged up to it)\n")
@@ -436,9 +442,27 @@ class Cycle:
     def heavy_deny(self, role: str) -> list[str]:
         """`cycle.heavy_runs`: the permission rules this role's run is started with as denied ([] = none)."""
         cfg = self.p.heavy_runs_cfg
-        if not cfg["deny"] or (cfg["roles"] and role not in cfg["roles"]):
+        if not (cfg["deny"] or cfg["queue"]) or (cfg["roles"] and role not in cfg["roles"]):
             return []
-        return list(cfg["deny"])
+        return list(cfg["deny"]) + list(cfg["queue"])
+
+    def heavy_prompt(self, role: str) -> str:
+        """The block of the role's request about heavy runs ("" = the rule does not apply to this role)."""
+        cfg = self.p.heavy_runs_cfg
+        if not self.heavy_deny(role):
+            return ""
+        out = ""
+        if cfg["deny"]:
+            out += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["deny"]))
+        if cfg["queue"]:
+            out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=int(cfg["wait_s"]) // 60)
+        return out
+
+    def heavy_env(self) -> dict[str, str]:
+        cfg = self.p.heavy_runs_cfg
+        if not cfg["queue"]:
+            return {}
+        return {"TEAM_HEAVY_LOCK": str(self.st.data_dir / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(cfg["nice"]), "TEAM_HEAVY_WAIT_S": str(cfg["wait_s"])}
 
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
@@ -498,13 +522,13 @@ class Cycle:
         try:
             deny = self.heavy_deny(role)
             if deny:
-                prompt += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in deny))
+                prompt += self.heavy_prompt(role)
             rd = self.run_dir / label
             rd.mkdir(parents=True, exist_ok=True)
             (rd / "prompt.md").write_text(prompt, encoding="utf-8")
             env = {"TEAM_USER_AGENT": f"agent-team/{run_id} ({role}; {self.p.slug})", "TEAM_ALLOWED_HOSTS": self._allowed_hosts(role),
                    "TEAM_TRACE_FILE": str(rd / "fetch.jsonl"), "TEAM_PRODUCT": self.p.slug, "TEAM_RUN_ID": run_id,
-                   "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(env_extra or {})}
+                   "PATH": f"{self._bin_dir()}{os.pathsep}{os.environ.get('PATH', '')}", **(self.heavy_env() if deny else {}), **(env_extra or {})}
             model = model or (self.p.raw.get("models") or {}).get(role)   # explicit override (series editing), else product.yaml per role
             limits = self.p.run_limits(role)                              # owner 21.11: the time budget is per role and per product
             with self.lanes.run_slot(label):                              # a lane holds its slot already; the main thread takes one here
