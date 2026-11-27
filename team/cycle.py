@@ -46,7 +46,11 @@ from .lanes import LANE_EXECUTE, LANE_REVIEW
 
 # parallel lanes and per-task checkouts (owner 21.11, frictions F21/F29; team/lanes.py)
 CRASH_RETRY_MIN = 15                                      # … and the task is not offered again for this many minutes (0 = at once)
+PO_FIX_CHARS, PO_FIX_MAX = 800, 3                        # `apply_task_returns`: the PO's instruction kept on the card, and how many of them
 SUPPORT_WHY_CHARS, SUPPORT_NOTES_MAX = 400, 5            # `note_failed_support`: the reason kept on the card, and how many such lines
+REVIEW_ASKS_MAX = 2                                       # `cycle.escalation.review_exit`: times the PO may send a task back after its review gave up; then the owner is asked
+BLOCKED_LIST_AFTER_H = 2.0                                # … and a task `blocked` this long with no open question bound to it is listed for the PO
+BLOCKED_LIST_MAX = 12                                     # … at most this many, oldest first
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
@@ -1127,9 +1131,9 @@ class Cycle:
             fails = int(t.get("review_fails") or 0) + 1
             if fails >= int(self.st.cycle.get("max_review_fails", 2)):
                 self.store.transition(t["id"], "blocked", "reviewer", f"failed review {fails}×: {v.get('first_failure', '')[:200]}",
-                                      review_fails=fails, blocked_by="review")
-                self.store.ask(from_="reviewer", to="po", question=f"Task {t['id']} failed review {fails} times: {v.get('first_failure', '')}. "
-                               f"Narrow the task, drop it, or re-specify?", task_id=None)
+                                      review_fails=fails, blocked_by="review", **({"last_review": v} if self.p.escalation_cfg["review_exit"] else {}))
+                self.ask_after_review(t, f"Task {t['id']} failed review {fails} times: {v.get('first_failure', '')}. "
+                                         f"Narrow the task, drop it, or re-specify?")
             else:
                 self.store.transition(t["id"], "in_progress", "reviewer",
                                       f"failed{' [' + v['fail_reason'] + ']' if v.get('fail_reason') else ''}: {v.get('first_failure', '')[:200]}",
@@ -1150,12 +1154,93 @@ class Cycle:
                     self.store.transition(t["id"], "blocked", "reviewer",
                                           f"inconclusive {INCONCLUSIVE_LIMIT}× [{v['inconclusive_reason']}]: not accepted without proof: {why}"[:400],
                                           force=True, blocked_by="review")
-                    self.store.ask(from_="reviewer", to="po", task_id=None,
-                                   question=f"Task {t['id']} ({str(t.get('title') or '')[:80]}) could not be checked {INCONCLUSIVE_LIMIT} times: {why}. "
-                                            "Nobody has seen its result. Create a check that can run (a scenario, a screenshot, a narrower task) "
-                                            "or close the task with close_tasks; do not treat it as accepted.")
+                    self.ask_after_review(t, f"Task {t['id']} ({str(t.get('title') or '')[:80]}) could not be checked {INCONCLUSIVE_LIMIT} times: {why}. "
+                                             "Nobody has seen its result. Create a check that can run (a scenario, a screenshot, a narrower task) "
+                                             "or close the task with close_tasks; do not treat it as accepted.")
                 else:
                     self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    def ask_after_review(self, t: dict[str, Any], question: str) -> None:
+        """The review gave up on a task (failed twice, unproven three times) and the task is `blocked`. Before 27.11 the
+        question went to the PO bound to nothing: his answer moved nothing, he could only close the task, and what he did not
+        close lay there until a person took it out (ai-battles: T-0119, T-0201, T-0313 for 2–5 days; 14 cases on 26–27.11,
+        seven taken out by hand). `cycle.escalation.review_exit`: the question is BOUND to the task — any answer puts it back
+        to work with the answer in the role's prompt. After REVIEW_ASKS_MAX such rounds the owner is asked instead."""
+        if not self.p.escalation_cfg["review_exit"]:
+            self.store.ask(from_="reviewer", to="po", question=question, task_id=None)
+            return
+        cur = self.store.task(t["id"]) or t
+        asked = int(cur.get("review_asks") or 0)
+        to = "owner" if asked >= REVIEW_ASKS_MAX else "po"
+        if to == "owner":
+            question = f"{question} (The PO has sent it back to work {asked} times already and the review gave up again.)"
+        else:
+            question = f"{question} Your answer goes to the role with the task and puts it back to work: say what to fix. To drop it, use close_tasks."
+        cur["review_asks"] = asked + 1
+        if cur.get("review_inconclusive"):
+            cur["review_inconclusive"] = INCONCLUSIVE_LIMIT - 1          # back at work it gets one more review, not three
+        self.store.save_task(cur)
+        self.store.ask(from_="reviewer", to=to, question=question, task_id=t["id"])
+        log.info("%s: %s: the review gave up — question to the %s, bound to the task (round %d of %d before the owner)", self.p.slug, t["id"], to,
+                 asked + 1, REVIEW_ASKS_MAX)
+
+    def blocked_without_question(self) -> list[dict[str, Any]]:
+        """`blocked` tasks older than BLOCKED_LIST_AFTER_H that no open question is bound to: nothing in the system will
+        move them. Oldest first."""
+        bound = {tid for q in self.store.questions(["open"]) for tid in (q.get("blocks") or [])}
+        out = []
+        for t in self.store.tasks(["blocked"]):
+            hist = t.get("history") or []
+            since = parse_ts(hist[-1].get("ts")) if hist else parse_ts(t.get("created"))
+            if t["id"] in bound or not since:
+                continue
+            since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+            age_h = (_now() - since).total_seconds() / 3600
+            if age_h >= BLOCKED_LIST_AFTER_H:
+                out.append({"task_id": t["id"], "role": t.get("role"), "title": _short_text(t.get("title"), 90), "blocked_for_h": round(age_h, 1),
+                            "why": _short_text(hist[-1].get("note") if hist else "", 240), "returned_before": int(t.get("review_asks") or 0)})
+        return sorted(out, key=lambda x: -x["blocked_for_h"])[:BLOCKED_LIST_MAX]
+
+    def blocked_block(self) -> str:
+        """The list above as a block of the PO's prompt ("" when the switch is off or nothing lies there)."""
+        if not self.p.escalation_cfg["review_exit"]:
+            return ""
+        items = self.blocked_without_question()
+        if not items:
+            return ""
+        return ("# BLOCKED TASKS NOBODY IS MOVING (no open question is bound to them: without you they lie there for good)\n"
+                "Decide each one now: `return_tasks` [{task_id, what_to_fix}] puts it back to work with your instruction in the role's "
+                f"prompt (at most {REVIEW_ASKS_MAX} times per task; after that the owner is asked); `close_tasks` drops it, with "
+                "`replaced_by` when another task carries the work.\n" + prompts._y(items))
+
+    def apply_task_returns(self, items: list[dict[str, Any]]) -> list[str]:
+        """The PO's `return_tasks` (`cycle.escalation.review_exit`): a blocked task goes back to `ready` with what to fix on
+        its card (`po_fix`, shown to the role). A task returned REVIEW_ASKS_MAX times already is not returned again: the
+        owner gets a question bound to it. Returns the notes for the log."""
+        notes: list[str] = []
+        if not self.p.escalation_cfg["review_exit"]:
+            return notes
+        for it in items or []:
+            tid, fix = str(it.get("task_id") or ""), " ".join(str(it.get("what_to_fix") or "").split())[:PO_FIX_CHARS]
+            t = self.store.task(tid)
+            if not t or t.get("state") != "blocked" or not fix:
+                notes.append(f"{tid}: not returned ({'no such task' if not t else 'it is ' + str(t.get('state')) if t.get('state') != 'blocked' else 'what_to_fix is empty'})")
+                continue
+            asked = int(t.get("review_asks") or 0)
+            if asked >= REVIEW_ASKS_MAX:
+                self.store.ask(from_="po", to="owner", task_id=tid,
+                               question=f"Task {tid} ({_short_text(t.get('title'), 80)}) was sent back to work {asked} times and is blocked again: "
+                                        f"{_short_text((t.get('history') or [{}])[-1].get('note'), 240)}. The PO wants to return it once more with: {fix}. "
+                                        "Return it, close it, or say what to change.")
+                notes.append(f"{tid}: returned {asked} times already — the owner is asked")
+                continue
+            fixes = list(t.get("po_fix") or []) + [{"at": utcnow(), "what_to_fix": fix}]
+            self.store.transition(tid, "ready", "po", f"returned to work by the PO: {fix}"[:500], force=True, blocked_by=None, assignee_run=None,
+                                  review_asks=asked + 1, po_fix=fixes[-PO_FIX_MAX:],
+                                  **({"review_inconclusive": INCONCLUSIVE_LIMIT - 1} if t.get("review_inconclusive") else {}))
+            self.store.event("task.returned", tid, "po", {"what_to_fix": fix[:300], "n": asked + 1})
+            notes.append(f"{tid}: returned to work ({asked + 1} of {REVIEW_ASKS_MAX})")
+        return notes
 
     def note_failed_support(self, t: dict[str, Any], why: str) -> int:
         """`cycle.dependencies.at_merge`: task `t` failed its review, and other tasks were started on it while it was merged
@@ -1410,6 +1495,7 @@ class Cycle:
             self.hand_over_readouts()
             self.settle_replans()
         stuck_md = replan.prompt_block(self.store, self.replan_cfg())
+        stuck_md = "\n\n".join(x for x in (stuck_md, self.blocked_block()) if x)
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])
@@ -1495,6 +1581,8 @@ class Cycle:
             if t and t.get("state") in CLOSABLE_BY_PO:
                 self.store.transition(t["id"], "rejected", "po", f"closed by PO: {c.get('reason', '')[:300]}", force=True)
                 closed_now[t["id"]] = str(c.get("replaced_by") or "").strip()
+        for note in self.apply_task_returns(res.get("return_tasks") or []):
+            log.info("%s: PO return_tasks: %s", self.p.slug, note)
         skipped, held = [], []
         for pr in res.get("promote_tasks") or []:
             t = self.store.task(str(pr.get("task_id")))
@@ -2481,7 +2569,7 @@ class Cycle:
 
     def task_answers(self, t: dict[str, Any]) -> list[dict[str, Any]]:
         """Answered questions this task was stopped on, oldest first — for the role's prompt. Empty while the switch is off."""
-        if not self.p.escalation_cfg["needs_context"]:
+        if not (self.p.escalation_cfg["needs_context"] or self.p.escalation_cfg["review_exit"]):
             return []
         qs = [q for q in self.store.questions(["answered"]) if t["id"] in (q.get("blocks") or []) or q.get("task") == t["id"]]
         return sorted(qs, key=lambda q: str(q.get("answered") or ""))
