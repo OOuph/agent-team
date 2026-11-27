@@ -3,6 +3,11 @@
 # Let's Encrypt certificate, first publish. Run as root on the droplet.
 #
 # Usage: add-site.sh <slug> <host> <repo> [branch] [public_dir]
+#        add-site.sh --redirect <slug> <host> <target-host> [--print]
+#   --redirect  the host only answers 301 to https://<target-host><same path> (http and https), e.g. www -> apex.
+#               Certificate via certbot --webroot /var/www/acme (no nginx plugin needed). No sites.tsv line, no
+#               publish; if <slug> was a published site (a mirror), its sites.tsv line is dropped so the timer stops.
+#               --print writes the vhost to stdout and changes nothing (no root needed; used by the tests).
 #   slug        [a-z0-9-], e.g. foo
 #   host        FQDN, e.g. foo.formachines.ai (DNS A record must already point here)
 #   repo        public https git URL
@@ -37,6 +42,94 @@ PUBLISH="${PUBLISH:-/opt/agent-team/bin/publish.sh}"
 PUBLIC_IP_URL="${PUBLIC_IP_URL:-https://ifconfig.me}"
 
 usage() { sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; }
+
+# ---------------------------------------------------------------- redirect mode (owner 27.11: www -> apex)
+ACME_ROOT="${ACME_ROOT:-/var/www/acme}"
+LE_OPTIONS="${LE_OPTIONS:-/etc/letsencrypt/options-ssl-nginx.conf}"
+LE_DHPARAMS="${LE_DHPARAMS:-/etc/letsencrypt/ssl-dhparams.pem}"
+FQDN_RE='^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$'
+
+redirect_vhost() {   # <host> <target> <cert_dir>: the whole vhost on stdout
+  local host="$1" target="$2" cert="$3"
+  cat <<EOF
+# agent-team redirect vhost: $host -> https://$target (add-site.sh --redirect). Nothing is served from here.
+server {
+    listen 80;
+    listen [::]:80;
+    server_name $host;
+    access_log /var/log/nginx/access.log full;
+    location /.well-known/acme-challenge/ { root $ACME_ROOT; }
+    location / { return 301 https://$target\$request_uri; }
+}
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name $host;
+    access_log /var/log/nginx/access.log full;
+    ssl_certificate     $cert/fullchain.pem;
+    ssl_certificate_key $cert/privkey.pem;
+EOF
+  [ -f "$LE_OPTIONS" ] && echo "    include $LE_OPTIONS;"
+  [ -f "$LE_DHPARAMS" ] && echo "    ssl_dhparam $LE_DHPARAMS;"
+  cat <<EOF
+    location /.well-known/acme-challenge/ { root $ACME_ROOT; }
+    location / { return 301 https://$target\$request_uri; }
+}
+EOF
+}
+
+if [ "${1:-}" = "--redirect" ]; then
+  shift
+  R_PRINT=0
+  if [ "${4:-}" = "--print" ]; then R_PRINT=1; set -- "$1" "$2" "$3"; fi
+  if [ $# -ne 3 ]; then usage >&2; exit 64; fi
+  SLUG="$1"; HOST="$2"; TARGET="$3"
+  [[ "$SLUG" =~ ^[a-z0-9][a-z0-9-]*$ ]] || { echo "ERROR: slug '$SLUG' must match [a-z0-9][a-z0-9-]*" >&2; exit 64; }
+  [[ "$HOST" =~ $FQDN_RE ]] || { echo "ERROR: host '$HOST' is not a valid FQDN" >&2; exit 64; }
+  [[ "$TARGET" =~ $FQDN_RE ]] || { echo "ERROR: target '$TARGET' is not a valid FQDN" >&2; exit 64; }
+  [ "$HOST" != "$TARGET" ] || { echo "ERROR: host and target are the same" >&2; exit 64; }
+  CERT_DIR="$LETSENCRYPT_LIVE/$HOST"
+  if [ "$R_PRINT" = 1 ]; then redirect_vhost "$HOST" "$TARGET" "$CERT_DIR"; exit 0; fi
+  if [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root" >&2; exit 1; fi
+  for bin in nginx certbot getent; do command -v "$bin" >/dev/null 2>&1 || { echo "ERROR: $bin not found" >&2; exit 1; }; done
+  echo "== add-site --redirect $SLUG: $HOST -> https://$TARGET"
+  getent ahosts "$HOST" >/dev/null || { echo "ERROR: $HOST does not resolve; nothing changed" >&2; exit 2; }
+  CONF="$NGINX_AVAILABLE/$SLUG.conf"; CONF_LINK="$NGINX_ENABLED/$SLUG.conf"
+  if [ ! -f "$CERT_DIR/fullchain.pem" ]; then
+    if [ -z "${CERTBOT_EMAIL:-}" ] && [ -f "$ENV_FILE" ]; then
+      CERTBOT_EMAIL="$(sed -n 's/^CERTBOT_EMAIL=[[:space:]]*//p' "$ENV_FILE" | tail -n 1 | sed 's/[[:space:]]*#.*$//; s/[[:space:]]*$//' | tr -d '"'"'" || true)"
+    fi
+    [ -n "${CERTBOT_EMAIL:-}" ] || { echo "ERROR: CERTBOT_EMAIL is empty — set it in $ENV_FILE" >&2; exit 1; }
+    mkdir -p "$ACME_ROOT"
+    echo "a. bootstrap :80 vhost for the ACME challenge"
+    printf 'server {\n    listen 80;\n    listen [::]:80;\n    server_name %s;\n    location /.well-known/acme-challenge/ { root %s; }\n    location / { return 301 https://%s$request_uri; }\n}\n' "$HOST" "$ACME_ROOT" "$TARGET" > "$CONF"
+    ln -sfn "$CONF" "$CONF_LINK"
+    nginx -t && systemctl reload nginx
+    echo "b. certbot certonly --webroot -w $ACME_ROOT -d $HOST"
+    certbot certonly --webroot -w "$ACME_ROOT" -d "$HOST" --non-interactive --agree-tos -m "$CERTBOT_EMAIL" --keep-until-expiring
+    [ -f "$CERT_DIR/fullchain.pem" ] || { echo "ERROR: certbot finished but $CERT_DIR/fullchain.pem is missing" >&2; exit 1; }
+  else
+    echo "cert: $CERT_DIR exists — reusing it"
+  fi
+  echo "c. redirect vhost -> $CONF"
+  backup=""
+  if [ -f "$CONF" ]; then backup="$(mktemp)"; cp -p "$CONF" "$backup"; fi
+  redirect_vhost "$HOST" "$TARGET" "$CERT_DIR" > "$CONF"
+  ln -sfn "$CONF" "$CONF_LINK"
+  if ! nginx -t; then
+    echo "ERROR: nginx -t failed; restoring the previous vhost" >&2
+    if [ -n "$backup" ]; then cp -p "$backup" "$CONF"; else rm -f "$CONF" "$CONF_LINK"; fi
+    exit 1
+  fi
+  systemctl reload nginx
+  [ -n "$backup" ] && rm -f "$backup"
+  if [ -f "$SITES_FILE" ] && awk -F'\t' -v s="$SLUG" '$1 == s {f=1} END {exit !f}' "$SITES_FILE"; then
+    echo "sites.tsv: dropping '$SLUG' — it redirects now, the publish timer must not serve it"
+    tmp="$(mktemp)"; awk -F'\t' -v s="$SLUG" '$1 != s' "$SITES_FILE" > "$tmp" && cat "$tmp" > "$SITES_FILE" && rm -f "$tmp"
+  fi
+  echo "== $HOST now answers 301 -> https://$TARGET (http and https)"
+  exit 0
+fi
 
 if [ $# -lt 3 ] || [ $# -gt 5 ]; then usage >&2; exit 64; fi
 case "$1" in -h|--help) usage; exit 0 ;; esac
