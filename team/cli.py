@@ -433,7 +433,24 @@ def cmd_hold(st: C.Settings, a: argparse.Namespace) -> int:
     command runs under the product's lock, the request is removed (team/drain.py)."""
     from . import drain
     p = _products(st, a.product)[0]
-    argv = [x for x in a.command if x != "--"] if a.command and a.command[0] == "--" else list(a.command or [])
+    argv = list(a.command or [])
+    # argparse hands over everything after the product as the command — the options of `hold` written there included
+    # (27.11 18:08: `team hold ai-battles --by … --why … -- bash x.sh` drained a cycle and then tried to run «--by»)
+    own = {"--by": "by", "--why": "why", "--wait-s": "wait_s"}
+    while argv and argv[0].startswith("--"):
+        head = argv.pop(0)
+        if head == "--":
+            break
+        name, eq, val = head.partition("=")
+        if name not in own:
+            print(f"team hold: unknown option {name} before the command (the command starts after `--`)")
+            return 2
+        if not eq:
+            if not argv:
+                print(f"team hold: {name} needs a value")
+                return 2
+            val = argv.pop(0)
+        setattr(a, own[name], val)
     if not argv:
         print("team hold: no command after `--`")
         return 2

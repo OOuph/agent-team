@@ -18,6 +18,7 @@ from pathlib import Path
 import pytest
 
 import team.store as store_mod
+from team import config as C
 from team.cycle import Cycle
 from team.runner import RunResult
 from team.store import Store
@@ -163,6 +164,11 @@ def test_4_runs_that_fail_each_in_its_own_way(tmp_path: Path, name: str):
         assert bad == []
         assert _state(p, broken)["state"] == "ready" and _state(p, broken)["crashes"] == 1 and _state(p, broken)["not_before"]
     assert _state(p, fine)["state"] not in ("ready", "in_progress")
+    split = [e["subject"] for e in _events(p, "task.budget_split")]
+    if name == "game":
+        assert split == [cap] and [c.name for c in r.cwds["developer"]].count(cap) == 1      # И11: one run at the cap, then the PO splits it
+    else:
+        assert split == []
     for t in (cap, slow, silent):
         assert _state(p, t)["state"] in ("ready", "in_progress", "blocked")      # each has a way on: the next run, or the PO
 
@@ -326,3 +332,94 @@ def test_9_reviews_and_the_po_beside_busy_seats(tmp_path: Path, name: str):
         checks = [a for role, a, b in r.spans if role in ("reviewer", "tester")]
         last_exec_end = max(b for role, a, b in r.spans if role in ("developer", "game-designer", "designer", "analyst"))
         assert len(checks) == 3 and max(checks) < last_exec_end        # every review ran while the seats were still at work
+
+
+
+# ------------------------------------------------------------------ batch 2 (27.11): И7, И11–И14
+
+@BOTH
+def test_10_the_days_cap_is_used_up_with_ten_tasks_ready(tmp_path: Path, name: str):
+    """№19 (24.11): with the cap of the day used up, every cycle walked all 26 ready tasks ready → in_progress → ready."""
+    st = _settings(tmp_path, C._merge(SETTINGS[name], {"budget": {"max_usd_per_product_per_day": 1.0, "max_usd_per_run": 0.5, "min_usd_per_run": 0.3}}))
+    p = _product(st)
+    ids = [_task(p, "developer", f"task {i}") for i in range(10)]
+    r = LaneRunner(cost=None)                                          # every run spends its whole cap of $0.5: two fill the day
+    r.work["developer"] = lambda cwd, n: _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
+    for i in range(2):
+        if i:
+            __import__("time").sleep(1.1)                              # the events carry whole seconds: the second cycle must not share one with the first
+        cyc = Cycle(st, p, r, f"c{i}")
+        res = run_cycle(cyc, ["execute"])
+        cyc.store.close()
+        assert violations(cyc, p, res, r) == []                        # И14 and И5 in both cycles
+    assert len(r.calls) == 2
+    untouched = [t for t in ids if not [h for h in _state(p, t)["history"] if h.get("to") == "in_progress"]]
+    assert len(untouched) >= 5, untouched                              # half of the ten were never walked through in_progress; the rest once at most (И14)
+
+
+@BOTH
+def test_11_a_task_left_in_progress_by_a_cycle_that_is_gone(tmp_path: Path, name: str):
+    """№24 (27.11, T-0572): the cycle that held the task was cut short; the task stayed `in_progress` for a run nobody runs."""
+    st, p = _make(tmp_path, name)
+    orphan = _task(p, "developer", "its cycle is gone")
+    s = Store(p.dir)
+    s.transition(orphan, "claimed", "dispatcher", "old-exec", assignee_run=f"c0-exec-{orphan}")
+    s.transition(orphan, "in_progress", "dispatcher", "started", assignee_run=f"c0-exec-{orphan}")
+    s.close()
+    r = LaneRunner()
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, PHASES)
+    cyc.store.close()
+    bad = violations(cyc, p, res, r)
+    if name == "defaults":
+        # known and kept while `cycle.guards.crash_release` is a switch: nothing releases such a task
+        assert len(bad) == 1 and bad[0].startswith(f"И4: {orphan} is `in_progress` held by c0-exec-")
+        assert "developer" not in r.calls
+    else:
+        assert bad == []
+        assert [e["subject"] for e in _events(p, "task.run_orphaned")] == [orphan]
+        assert r.calls.count("developer") == 1 and _state(p, orphan)["state"] == "released"
+
+
+@BOTH
+def test_12_the_review_gives_up_on_a_task(tmp_path: Path, name: str):
+    """№21: failed twice — the PO's question was bound to nothing, his answer moved no task (T-0119, T-0201, T-0313)."""
+    from test_parallel_lanes import FAIL, _released
+    st, p = _make(tmp_path, name)
+    tid = _released(p)
+    s = Store(p.dir)
+    t = s.task(tid); t["review_fails"] = 1; s.save_task(t)
+    s.close()
+    r = LaneRunner()
+    r.answers["reviewer"] = dict(FAIL); r.answers["tester"] = dict(FAIL)
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, ["review", "execute"])
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []                            # И7 on the game's settings
+    s = Store(p.dir)
+    q = s.questions(["open"])
+    assert s.task(tid)["state"] == "blocked" and len(q) == 1
+    assert (q[0].get("blocks") == [tid]) is (name == "game")
+    s.close()
+
+
+@BOTH
+def test_13_dependencies_that_are_finished_without_a_result_or_go_in_a_circle(tmp_path: Path, name: str):
+    """№28: a dependency that is `done` with a one-word result never counts as met, and nothing said so."""
+    st, p = _make(tmp_path, name)
+    s = Store(p.dir)
+    done = s.create_task(title="done with a stub", type_="defect", problem="p", scope="src/", acceptance=["a"], goal="G1", created_by="po", role="developer", state="ready")
+    s.transition(done["id"], "done", "dispatcher", "closed", force=True, results=[{"status": "done", "summary": "done"}])
+    s.close()
+    on_stub = _task(p, "developer", "waits for a result that will never come", depends_on=[done["id"]])
+    a = _task(p, "designer", "circle a")
+    b = _task(p, "designer", "circle b", depends_on=[a])
+    s = Store(p.dir)
+    ta = s.task(a); ta["depends_on"] = [b]; s.save_task(ta)
+    s.close()
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    res = run_cycle(cyc, PHASES)
+    cyc.store.close()
+    assert violations(cyc, p, res) == []
+    told = sorted(e["subject"] for e in _events(p, "task.dependency_dead"))
+    assert told == (sorted([on_stub, a, b]) if name == "game" else [])

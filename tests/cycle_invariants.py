@@ -13,6 +13,15 @@ whatever the settings:
     (an exception in a lane left the task there for ever)
 И5  the spend of the cycle and of every day is not negative, and the day is not over its cap
     (27.11: «$-345.13» for a cycle that crossed midnight UTC)
+И6  every task still ready after the execute phase has its reason on record (`cycle.guards.idle_reasons`)
+И7  a task its review gave up on, and a task that waits for the owner, has an open question bound to it
+И8  a free seat and a startable task give a run in the same cycle (with refill, unless refill was closed)
+И9  every role with a ready task runs in the first round (checked by scenario 8, from the order of the runs)
+И10 the executors leave the reserve of run slots to the reviews; a main run outside the slots does not wait
+И11 a run that ended at its budget sends the task to be split after the FIRST such run (checked by scenario 4)
+И12 after a drain request was taken no task is started
+И13 a failed review of a task leaves a trace on every task that was started on it
+И14 no task goes ready → in_progress → ready without a run more than once in a cycle
 """
 from __future__ import annotations
 
@@ -32,6 +41,7 @@ GAME_SLOTS = {"developer": 3, "game-designer": 2, "designer": 1, "analyst": 1, "
 GAME_PARALLEL = {"enabled": True, "max_runs": 6, "review_max_runs": 3, "review_reserve": 2, "overlap_roles": ["developer", "game-designer"]}
 NOT_SWITCHES = {("parallel", "enabled")}                          # set by GAME_PARALLEL
 SPEND_EPS = 1e-6
+REVIEW_GAVE_UP = ("failed review", "inconclusive")                # how the note of a task begins that its review gave up on
 
 
 def all_switches_on() -> dict[str, Any]:
@@ -106,6 +116,7 @@ def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = Non
     try:
         tasks = {t["id"]: t for t in s.tasks()}
         events = s.events(limit=100000)
+        started = next((c["started"] for c in s.cycles(limit=500) if c["cycle_id"] == cyc.cycle_id), None)
         moves: dict[str, int] = {}
         for e in events:
             if e["kind"] == "task.transition":
@@ -121,7 +132,7 @@ def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = Non
         for tid, t in sorted(tasks.items()):
             if t.get("state") != "ready":
                 continue
-            dead = cycle_mod.dead_dependencies(s, t)
+            dead = cycle_mod.dead_dependencies(s, t, product.dependencies_cfg["report_stuck"])
             if dead and (tid not in told or tid not in questions):
                 bad.append(f"И3: {tid} is ready and waits for {dead}, which can never be met — and there is no event with a question about it")
         # И4
@@ -163,6 +174,48 @@ def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = Non
                 bad.append(f"И10: {peak} executor runs at once, the reserve for reviews leaves them {limit}")
         if product.parallel.enabled and product.parallel.main_outside and cyc.lanes.gate.max_wait.get("main", 0.0) > 0:
             bad.append(f"И10: a run of the main thread waited {cyc.lanes.gate.max_wait['main']:.1f}s for a slot though it is outside the slots")
+        # this cycle's events, oldest first. The time of an event is kept in whole seconds: a scenario that runs two cycles
+        # of one product must let a second pass between them, or the first one's events are counted here as well
+        mine = [e for e in reversed(events) if started is None or e["ts"] >= started]
+        # И7: a task the review gave up on, and a task that waits for the owner, has an open question bound to it
+        bound = {tid: q for q in s.questions(["open"]) for tid in (q.get("blocks") or [])}
+        for tid, t in sorted(tasks.items()):
+            note = str(((t.get("history") or [{}])[-1]).get("note") or "")
+            if t.get("state") == "waiting_owner" and (tid not in bound or bound[tid].get("to") != "owner"):
+                bad.append(f"И7: {tid} waits for the owner and no open question to the owner is bound to it")
+            if (t.get("state") == "blocked" and product.escalation_cfg["review_exit"] and note.startswith(REVIEW_GAVE_UP) and tid not in bound):
+                bad.append(f"И7: {tid} is blocked after its review gave up and no open question is bound to it: nothing will move it")
+        # И12: after a drain request was taken, no task is started
+        seen_drain = False
+        for e in mine:
+            if e["kind"] == "cycle.drain" and e["subject"] == cyc.cycle_id:
+                seen_drain = True
+            elif seen_drain and e["kind"] == "task.transition" and (e["detail"] or {}).get("to") == "claimed":
+                bad.append(f"И12: {e['subject']} was started after the cycle took a drain request")
+        # И13: a failed review of a task leaves a trace on every task that was started on it (with `dependencies.at_merge`)
+        if product.dependencies_cfg["at_merge"]:
+            failed = {e["subject"] for e in mine if e["kind"] == "task.transition" and e["actor"] == "reviewer"
+                      and str((e["detail"] or {}).get("note") or "").startswith("failed")}
+            for tid, t in sorted(tasks.items()):
+                for dep in [str(x) for x in (t.get("depends_on") or [])]:
+                    if dep in failed and t.get("state") in cycle_mod.SUPPORT_STARTED and dep not in {x.get("task") for x in (t.get("support_failed") or [])}:
+                        bad.append(f"И13: {tid} was started on {dep}, which failed its review in this cycle, and its card says nothing about it")
+        # И14: no task goes ready → in_progress → ready without a run more than once in a cycle
+        back: dict[str, int] = {}
+        runs: dict[str, int] = {}
+        for e in mine:
+            d = e["detail"] or {}
+            if e["kind"] == "task.transition" and d.get("from") == "in_progress" and d.get("to") == "ready":
+                back[e["subject"]] = back.get(e["subject"], 0) + 1
+            elif e["kind"] == "task.run_crashed":
+                runs[e["subject"]] = runs.get(e["subject"], 0) + 1          # the code raised: that was an attempt, not a walk
+            elif e["kind"] == "run":
+                for tid in tasks:
+                    if str(e["subject"]).endswith("-" + tid):
+                        runs[tid] = runs.get(tid, 0) + 1
+        for tid, n in sorted(back.items()):
+            if n - runs.get(tid, 0) > 1:
+                bad.append(f"И14: {tid} went in_progress → ready {n} times in the cycle with {runs.get(tid, 0)} run(s): it is being churned")
         # И5
         if result is not None and float(result.get("spent_usd") or 0.0) < -SPEND_EPS:
             bad.append(f"И5: the cycle reports a spend of {result.get('spent_usd')}")
