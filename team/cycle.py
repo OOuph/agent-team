@@ -46,6 +46,7 @@ from .lanes import LANE_EXECUTE, LANE_REVIEW
 
 # parallel lanes and per-task checkouts (owner 21.11, frictions F21/F29; team/lanes.py)
 CRASH_RETRY_MIN = 15                                      # … and the task is not offered again for this many minutes (0 = at once)
+SUPPORT_WHY_CHARS, SUPPORT_NOTES_MAX = 400, 5            # `note_failed_support`: the reason kept on the card, and how many such lines
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
@@ -344,6 +345,7 @@ class Cycle:
         self._drain_said = False
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
+        self._dep_merged = merged_counts(product.dependencies_cfg)      # `cycle.dependencies.at_merge`: None = a dependency must be accepted
         self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
         self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
         self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
@@ -677,7 +679,7 @@ class Cycle:
             nb = parse_ts(t.get("not_before"))
             if nb and _now() < nb:
                 continue
-            if t.get("state") == "ready" and (self.open_question_blocks(t) or unmet_dependencies(self.store, t)):
+            if t.get("state") == "ready" and (self.open_question_blocks(t) or unmet_dependencies(self.store, t, self._dep_merged)):
                 continue
             out.append(t["id"])
         return out
@@ -1121,6 +1123,7 @@ class Cycle:
         elif verdict == "pass":
             self.store.transition(t["id"], "accepted", "reviewer", v.get("summary", "")[:300], accepted_at=utcnow())
         elif verdict == "fail":
+            self.note_failed_support(t, str(v.get("first_failure") or v.get("summary") or "failed its review"))
             fails = int(t.get("review_fails") or 0) + 1
             if fails >= int(self.st.cycle.get("max_review_fails", 2)):
                 self.store.transition(t["id"], "blocked", "reviewer", f"failed review {fails}×: {v.get('first_failure', '')[:200]}",
@@ -1153,6 +1156,28 @@ class Cycle:
                                             "or close the task with close_tasks; do not treat it as accepted.")
                 else:
                     self.store.transition(t["id"], "accepted", "reviewer", "inconclusive 3×: accepted without external proof", accepted_at=utcnow())
+
+    def note_failed_support(self, t: dict[str, Any], why: str) -> int:
+        """`cycle.dependencies.at_merge`: task `t` failed its review, and other tasks were started on it while it was merged
+        and unreviewed. They are not touched — but each gets a line on its card (`support_failed`, shown to the role in its
+        next run) and an event, so whoever works on it next knows the ground moved. Returns how many were told."""
+        if self._dep_merged is None:
+            return 0
+        n = 0
+        for d in self.store.tasks(list(SUPPORT_STARTED)):
+            if t["id"] not in [str(x) for x in (d.get("depends_on") or [])] or d["id"] == t["id"]:
+                continue
+            cur = self.store.task(d["id"]) or d
+            notes = list(cur.get("support_failed") or [])
+            if any(x.get("task") == t["id"] and x.get("why") == why[:SUPPORT_WHY_CHARS] for x in notes):
+                continue
+            notes.append({"task": t["id"], "at": utcnow(), "why": why[:SUPPORT_WHY_CHARS]})
+            cur["support_failed"] = notes[-SUPPORT_NOTES_MAX:]
+            self.store.save_task(cur)
+            self.store.event(SUPPORT_FAILED_EVENT, cur["id"], "dispatcher", {"support": t["id"], "state": cur.get("state"), "why": why[:200]})
+            log.warning("%s: %s was started on %s, which has now failed its review: %s", self.p.slug, cur["id"], t["id"], why[:160])
+            n += 1
+        return n
 
     # three unproven reviews: back to work with a named reason (owner 26.11, rework slice 2b) ---------------------------
 
@@ -1821,9 +1846,9 @@ class Cycle:
         nb = parse_ts(t.get("not_before"))
         if nb and _now() < nb:
             return f"scheduled for {nb.isoformat(timespec='minutes')} (`not_before`)"
-        if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+        if t.get("state") == "ready" and unmet_dependencies(self.store, t, self._dep_merged):
             dead = dead_dependencies(self.store, t)
-            return (f"waits for {', '.join(str(d) for d in unmet_dependencies(self.store, t))[:120]} (`depends_on`)"
+            return (f"waits for {', '.join(str(d) for d in unmet_dependencies(self.store, t, self._dep_merged))[:120]} (`depends_on`)"
                     + (f" — {', '.join(dead)} rejected or missing: it can never be met" if dead else ""))
         return ""
 
@@ -1947,7 +1972,7 @@ class Cycle:
         nb = parse_ts(t.get("not_before"))
         if nb and _now() < nb:
             return False        # scheduled for later (daily posts): the PO set not_before
-        if t.get("state") == "ready" and unmet_dependencies(self.store, t):
+        if t.get("state") == "ready" and unmet_dependencies(self.store, t, self._dep_merged):
             dead = dead_dependencies(self.store, t)
             if dead:
                 self.report_dead_dependency(t, dead)
@@ -3847,6 +3872,9 @@ def is_stub_result(summary: str) -> bool:
 
 
 DEPENDENCY_DONE = ("accepted", "measured", "done")
+DEPENDENCY_MERGED = "released"                    # `cycle.dependencies.at_merge`: merged into the main branch, its review still to come
+SUPPORT_FAILED_EVENT = "task.support_failed"      # a task this one was started on (merged, not yet accepted) failed its review
+SUPPORT_STARTED = ("claimed", "in_progress", "released", "review", "accepted", "blocked", "waiting_owner")   # … «started» = one of these
 
 
 REPLACED_HOPS = 5                          # how far `replaced_by` is followed from a rejected dependency
@@ -3874,14 +3902,25 @@ def dead_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
     return out
 
 
-def unmet_dependencies(store: Any, t: dict[str, Any]) -> list[str]:
+def merged_counts(cfg: dict[str, Any] | None) -> Any:
+    """`cycle.dependencies` as a test of one dependency: may this task, merged and not yet accepted, count as met?
+    None when the switch is off (the test is then never asked)."""
+    if not cfg or not cfg.get("at_merge"):
+        return None
+    roles = set(cfg.get("roles") or [])
+    return lambda d: d.get("state") == DEPENDENCY_MERGED and (not roles or str(d.get("role") or "developer") in roles)
+
+
+def unmet_dependencies(store: Any, t: dict[str, Any], merged_ok: Any = None) -> list[str]:
     """Ids from `depends_on` that are not finished (accepted/measured/done) with a non-stub last result; unknown ids count
-    as unmet. A rejected dependency with `replaced_by` is judged by its replacement."""
+    as unmet. A rejected dependency with `replaced_by` is judged by its replacement. `merged_ok` (`merged_counts`): a
+    dependency that is merged and waits for its review counts as finished, too."""
     out = []
     for dep in t.get("depends_on") or []:
         d = resolve_dependency(store, str(dep))
         res = (d.get("results") or []) if d else []
-        if not d or d.get("state") not in DEPENDENCY_DONE or not res or is_stub_result(str(res[-1].get("summary") or "")):
+        done = bool(d) and (d.get("state") in DEPENDENCY_DONE or (merged_ok is not None and merged_ok(d)))
+        if not done or not res or is_stub_result(str(res[-1].get("summary") or "")):
             out.append(str(dep))
     return out
 

@@ -23,7 +23,7 @@ from team.runner import RunResult
 from team.store import Store
 
 from cycle_invariants import SETTINGS, all_switches_on, game_like, run_cycle, violations
-from test_parallel_lanes import LaneRunner, _commit, _killed, _product, _settings, _state, _task
+from test_parallel_lanes import DONE, LaneRunner, _commit, _killed, _product, _settings, _state, _task
 
 PHASES = ["review", "execute", "measure"]
 BOTH = pytest.mark.parametrize("name", sorted(SETTINGS))
@@ -49,17 +49,30 @@ def test_1_six_tasks_three_roles_one_waits_for_a_dependency_in_work(tmp_path: Pa
     st, p = _make(tmp_path, name)
     dep = _task(p, "designer", "the dependency, in work in this cycle")
     waits = _task(p, "developer", "waits for the designer", depends_on=[dep])
+    s0 = Store(p.dir)
+    stuck = s0.create_task(title="blocked, nobody moves it in this cycle", type_="defect", problem="p", scope="src/", acceptance=["a"], goal="G1",
+                           created_by="po", role="developer", state="ready")
+    s0.transition(stuck["id"], "blocked", "dispatcher", "no way", force=True)
+    s0.close()
+    waits_long = _task(p, "developer", "waits for the whole cycle", depends_on=[stuck["id"]])
     others = [_task(p, "developer", "dev a"), _task(p, "developer", "dev b"), _task(p, "game-designer", "rules"), _task(p, "analyst", "numbers")]
     r = LaneRunner(sleep=0.2)                                         # the designer is still at work while the other lanes run dry
+    r.answers["designer"] = {**DONE, "summary": "DESIGN.md §12 now describes the tower screen: the layout of the three zones, every state "
+                                               "of the floor card, the copy of every label and what the screen shows while the list loads."}
     cyc = Cycle(st, p, r, "c1")
     res = run_cycle(cyc, PHASES)
     cyc.store.close()
     assert violations(cyc, p, res) == []
-    assert _state(p, waits)["state"] == "ready"                       # its dependency is merged, not accepted: it goes on waiting
+    if name == "game":
+        # `cycle.dependencies.at_merge` is among the switches: the dependency was merged, so the task was taken in this cycle
+        assert _state(p, waits)["state"] != "ready" and any(c.name == waits for c in r.cwds["developer"])
+    else:
+        assert _state(p, waits)["state"] == "ready"                   # its dependency is merged, not accepted: it goes on waiting
+    assert _state(p, waits_long)["state"] == "ready" and cyc.picks.get(waits_long, 0) <= 4      # … and this one waits on both sets
     assert _state(p, dep)["state"] != "ready" and r.calls.count("designer") == 1
     if name == "game":
         assert all(_state(p, t)["state"] != "ready" for t in others)  # with the game's seats nothing startable is left behind
-    assert cyc.picks.get(waits, 0) <= 4
+    assert cyc.picks.get(waits, 0) <= 4 + 1
 
 
 @BOTH
