@@ -138,6 +138,8 @@ cycle:
                                   # an outage or three failed runs in a cycle still do
     refill_while_running: false   # true = past refill_min refill stays open while another execute seat is still at work
     early_execute: false          # true = the seats start on the tasks ready at the START of the cycle, beside collect and the PO
+    retake: false                 # true = a task that became ready again inside the cycle (answered, or failed and returned) may be
+    retake_max: 1                 # taken again in that cycle, this many more times
     chain: false                  # true = `team cycle --due` starts the next cycle right after one that carried a task through, while
                                   # startable work waits (no 5–10 min pause until cron looks again)
     chain_max: 6                  # cycles of one product in one process; then cron and cycle.every_min decide
