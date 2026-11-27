@@ -1215,9 +1215,12 @@ class Cycle:
                 shared = None
             if shared is not None:
                 if full_log is not None:
+                    # the WHOLE output of the shared run, for `team-play unit --grep`: the report in the request is only its
+                    # tail (27.11, Q-0273: the task's log got that tail, and the reviewer could not find the new tests' lines)
                     try:
                         full_log.parent.mkdir(parents=True, exist_ok=True)
-                        full_log.write_text(shared, encoding="utf-8")
+                        whole = self.suite_full_log(shared)
+                        full_log.write_text(whole.read_text(encoding="utf-8", errors="replace") if whole is not None else shared, encoding="utf-8")
                     except OSError as exc:
                         log.warning("full test output not kept in %s: %s", full_log, exc)
                 return shared
@@ -1276,8 +1279,10 @@ class Cycle:
                 with self._suite_mu:
                     self._suite_going = head
                 t0 = time.time()
+                cache.mkdir(parents=True, exist_ok=True)
                 report = run_tests_for_review(self.p.repo_dir, head, self.p.work_dir / self.cycle_id / f"suite-{head[:12]}", self.p.test_cmd,
-                                              lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout())
+                                              lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(),
+                                              full_log=cache / f"{head}.log")
                 rec = {"sha": head, "passed": tests_passed(report), "report": report, "at": utcnow(), "seconds": round(time.time() - t0, 1),
                        "cycle": self.cycle_id, "for": t["id"]}
                 cache.mkdir(parents=True, exist_ok=True)
@@ -1286,6 +1291,7 @@ class Cycle:
                 tmp.replace(f)
                 for old_f in sorted(cache.glob("*.json"), key=lambda x: x.stat().st_mtime)[:-SUITE_CACHE_KEEP]:
                     old_f.unlink(missing_ok=True)
+                    old_f.with_suffix(".log").unlink(missing_ok=True)
                 self.store.event("review.suite_run", head[:12], "dispatcher", {"passed": rec["passed"], "seconds": rec["seconds"], "for": t["id"]})
                 log.info("%s: the suite ran once on the head %s for the reviews of this batch: %s in %.0fs", self.p.slug, head[:12],
                          "green" if rec["passed"] else "RED", rec["seconds"])
@@ -1304,6 +1310,14 @@ class Cycle:
             return None
         self.store.event("review.suite_reused", t["id"], "dispatcher", {"head": head[:12], "sha": sha[:12]})
         return SUITE_NOTE.format(head=head[:12], sha=sha[:12]) + str(rec["report"])
+
+    def suite_full_log(self, shared: str) -> Path | None:
+        """The file with the whole output of the shared run whose report is `shared` (None = it was not kept)."""
+        m = re.search(r"the suite was run once on commit ([0-9a-f]{7,40})", shared[:400])
+        if not m:
+            return None
+        hits = sorted((self.st.data_dir / "cache" / "suite" / self.p.slug).glob(f"{m.group(1)}*.log"))
+        return hits[0] if hits else None
 
     def suite_covering(self, cache: Path, sha: str) -> dict[str, Any] | None:
         """The newest GREEN kept result of the suite whose commit contains `sha` (None = there is none)."""
