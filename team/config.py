@@ -46,6 +46,8 @@ GUARDS_DEFAULTS: dict[str, Any] = {
     "cost_min_runs": 20,          # runs of the role in the window needed for a median (3..10000); fewer = no guard
     "cost_days": 7,               # the window of the median, days (1..90)
     "cost_floor_usd": 1.0,        # the guard never lowers a cap below this (0..100)
+    "crash_release": False,       # true = a task whose lane raised an exception goes back to `ready` (after CRASHES_MAX times: to
+                                  # the PO with a question) instead of staying `in_progress` with a run id nobody holds (27.11)
 }
 _GUARDS_RANGE = {"loop_repeats": (3, 50, int), "cost_factor": (2.0, 100.0, float), "cost_min_runs": (3, 10000, int),
                  "cost_days": (1, 90, int), "cost_floor_usd": (0.0, 100.0, float)}
@@ -496,7 +498,7 @@ class Product:
             for k, v in src.items():
                 if k not in out:
                     continue
-                if k in ("loop", "cost"):
+                if k in ("loop", "cost", "crash_release"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
