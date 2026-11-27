@@ -1384,3 +1384,32 @@ def test_the_execute_phase_sweeps_old_cycle_folders(tmp_path: Path):
     cyc.run(["execute"])
     cyc.store.close()
     assert _heavy(old) == [] and (old / "deploy-T-1.log").exists()
+
+
+def test_review_reserve_keeps_a_slot_for_reviews_while_every_seat_is_busy():
+    """27.11: with refill a seat lane lives as long as the cycle and holds its slot; six seats held all six slots and a
+    review waited 56 minutes. `cycle.parallel.review_reserve` caps the execute lanes below `max_runs`."""
+    from team import lanes
+    cfg = lanes.settings({"parallel": {"enabled": True, "max_runs": 3, "review_max_runs": 2, "review_reserve": 1}}, {}, "t")
+    assert cfg.review_reserve == 1 and "1 kept for reviews" in cfg.describe()
+    assert lanes.settings({"parallel": {"enabled": True, "max_runs": 3}}, {}, "t").review_reserve == 0
+    ls = lanes.Lanes(cfg)
+    release, order = threading.Event(), []
+
+    def seat(name):
+        order.append(name)
+        release.wait(WAIT_S)
+
+    def review():
+        order.append("review")
+
+    for i in range(3):
+        ls.submit("execute", lanes.LANE_EXECUTE, f"exec-{i}", seat, f"exec-{i}")
+    ls.submit("review", lanes.LANE_REVIEW, "review-1", review)
+    deadline = time.monotonic() + WAIT_S
+    while "review" not in order and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert "review" in order and len([x for x in order if x.startswith("exec")]) == 2      # two seats work, the third waits, the review ran
+    release.set()
+    assert ls.join() == []
+    assert len([x for x in order if x.startswith("exec")]) == 3

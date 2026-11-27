@@ -66,3 +66,20 @@ def test_a_task_that_keeps_coming_back_is_not_run_in_a_loop(tmp_path: Path):
     r.work["developer"] = lambda cwd, n: None                         # «done» without a commit → back to `ready` every time
     cyc = Cycle(st, p, r, "c1"); cyc.run(["execute"]); cyc.store.close()
     assert r.calls.count("developer") <= 2                            # the first run and at most `retake_max` more
+
+
+def test_a_task_that_is_ready_but_not_startable_is_picked_again_only_once(tmp_path: Path):
+    """27.11, first live cycle: T-0619 came back `ready` with its question still open; it was picked and refused three
+    times in a minute, because only runs were counted."""
+    st = _settings(tmp_path, ON)
+    p = _product(st)
+    tid = _task(p, "developer", "ready but waits for its question")
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    cyc.execute_prepare()
+    seen = {tid}
+    cyc._handled[tid] = 1                                              # a lane ran it once in this cycle
+    slots = cyc._exec_slots
+    picks = [cyc.next_for_seat("developer", slots, seen) for _ in range(5)]
+    assert [bool(x) for x in picks] == [True, False, False, False, False]
+    assert len(_events(p, "flow.retake")) == 1
+    cyc.store.close()
