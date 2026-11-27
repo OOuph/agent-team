@@ -2246,6 +2246,16 @@ class Cycle:
         log.info("%s: %s: %s needs context (%d point(s)) → %s to the PO, the task waits", self.p.slug, t["id"], role, len(missing), q["id"])
         return q
 
+    def task_refs_block(self, t: dict[str, Any]) -> str:
+        """`cycle.escalation.references`: the text of the observations and questions the task names, for its role's prompt."""
+        if not self.p.escalation_cfg["references"]:
+            return ""
+        try:
+            return prompts.references_block(self.store, t)
+        except Exception as exc:  # noqa: BLE001 — a card that does not read must not cost the task its run
+            log.warning("%s: %s: references not attached: %s", self.p.slug, t.get("id"), str(exc)[:200])
+            return ""
+
     def task_answers(self, t: dict[str, Any]) -> list[dict[str, Any]]:
         """Answered questions this task was stopped on, oldest first — for the role's prompt. Empty while the switch is off."""
         if not self.p.escalation_cfg["needs_context"]:
@@ -2272,7 +2282,7 @@ class Cycle:
         port = playtest.free_port() if (self.p.repo_kind == "service" or self.p.profile == "game") else None
         prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
                                           budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo),
-                                          conflict=conflict, base=self.p.repo_branch, port=port, answers=self.task_answers(t))
+                                          conflict=conflict, base=self.p.repo_branch, port=port, answers=self.task_answers(t), refs=self.task_refs_block(t))
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
@@ -2753,7 +2763,7 @@ class Cycle:
                 gitops.park_on_base(repo, self.p.repo_branch)
             gdd_dir = repo if has_repo else self.p.dir
             read_sha = gitops.head(repo) if has_repo else None     # the base commit whose documents the role is shown
-            prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store, answers=self.task_answers(t))
+            prompt = prompts.game_designer_prompt(self.p, t, gdd_dir, self.store, answers=self.task_answers(t), refs=self.task_refs_block(t))
             partial = prompts.truncated_design_docs(self.p, gdd_dir, t)     # F18: never overwrite a document the role saw only in part
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         work = self.p.work_dir / self.cycle_id / f"gd-{t['id']}"
