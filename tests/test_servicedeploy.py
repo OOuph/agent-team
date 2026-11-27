@@ -509,7 +509,9 @@ def test_install_and_add_service_scripts_parse_and_render(tmp_path: Path):
     assert "NOPASSWD: /opt/agent-team/bin/deploy-service.sh" in sudoers
     # scheme audit 21.11: the rule's comment claimed «no command text comes from the caller», while package.json scripts ran as root
     assert "no command text comes from the caller" not in sudoers and "runuser" in sudoers and "package.json" in sudoers
-    assert [ln for ln in sudoers.splitlines() if ln and not ln.startswith("#")] == ["__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh"]
+    # two rules and nothing else: the deploy, and (owner 27.11) the host names of a registered service
+    assert [ln for ln in sudoers.splitlines() if ln and not ln.startswith("#")] == ["__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh",
+                                                                                   "__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/service-host.sh"]
     tpl = (DEPLOY_DIR / "service.conf.template").read_text()
     assert "proxy_pass http://svc___SLUG_U__;" in tpl and "Upgrade $http_upgrade" in tpl and "/_team/metrics.json" in tpl
     assert "svc___SLUG__" not in tpl   # a slug with "-" must become a valid nginx identifier (F: ai-battles)
