@@ -132,7 +132,8 @@ OK = RunResult(True, {"x": 1}, {"total_cost_usd": 0.1}, 0.1, 3, None, session_id
 
 def test_guards_are_off_by_default_and_bad_values_fall_back(tmp_path: Path):
     st, p = _setup(tmp_path, None)
-    assert p.guards_cfg == {"loop": False, "loop_repeats": 5, "cost": False, "cost_factor": 8.0, "cost_min_runs": 20, "cost_days": 7, "cost_floor_usd": 1.0}
+    assert p.guards_cfg == {"loop": False, "loop_repeats": 5, "cost": False, "cost_factor": 8.0, "cost_min_runs": 20, "cost_days": 7, "cost_floor_usd": 1.0,
+                            "crash_release": False}
     st2, p2 = _setup(tmp_path / "b", {"loop": "yes", "loop_repeats": 1, "cost": True, "cost_factor": "many"})
     g = p2.guards_cfg
     assert g["loop"] is False and g["loop_repeats"] == 5 and g["cost"] is True and g["cost_factor"] == 8.0

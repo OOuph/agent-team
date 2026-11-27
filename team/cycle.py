@@ -43,6 +43,8 @@ from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
 
 # parallel lanes and per-task checkouts (owner 21.11, frictions F21/F29; team/lanes.py)
+CRASH_RETRY_MIN = 15                                      # … and the task is not offered again for this many minutes (0 = at once)
+CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
 WORKTREE_PARKED_STATES = ("blocked", "waiting_owner", "deferred")     # kept for `cycle.parallel.worktree_keep_h` hours, then removed (the branch stays)
@@ -336,6 +338,7 @@ class Cycle:
         self.canary_started: str | None = None                # ISO time the release that ran it began
         self._po_lock = threading.RLock()                      # one PO run at a time (the triage phase and `cut_after_design`)
         self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
+        self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
         self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
@@ -1964,6 +1967,7 @@ class Cycle:
                 if t is None:
                     return
                 self._taken.add(t["id"])
+                self.picks[t["id"]] = self.picks.get(t["id"], 0) + 1      # for the tests' invariants and the canary: how often a lane took it
                 self._seat_running[key] = self._seat_running.get(key, 0) + 1
             ok, verdict = False, False            # an exception below counts as «dealt with»: the task is not offered again this cycle
             self._tl.run_ok = None                # no run of this task yet (`role_run` sets it)
@@ -2321,8 +2325,38 @@ class Cycle:
                 return self.exec_analyst_task(t, run_id)
             self.store.transition(t["id"], "blocked", "dispatcher", f"unknown role {role}", force=True)
             return True
+        except BaseException as exc:
+            self.crash_release(t["id"], run_id, exc)
+            raise
         finally:
             self.store.release(t["id"])
+
+    def crash_release(self, tid: str, run_id: str, exc: BaseException) -> None:
+        """`cycle.guards.crash_release`: the code that carried this task raised. Without the switch the task stays
+        `in_progress` with `assignee_run` set and no lease — and every later cycle answers «a run holds it» (`startable`),
+        for ever and without an event. With it: back to `ready`; after CRASHES_MAX such returns the PO is asked, with the
+        question bound to the task, so his answer puts it back to work."""
+        try:
+            if not self.p.guards_cfg["crash_release"]:
+                return
+            now = self.store.task(tid)
+            if not now or now.get("state") != "in_progress" or now.get("assignee_run") != run_id:
+                return                             # the code got far enough to move the task itself
+            n = int(now.get("crashes") or 0) + 1
+            note = f"the dispatcher's code raised while carrying it ({type(exc).__name__}: {str(exc)[:200]})"
+            self.store.event("task.run_crashed", tid, "dispatcher", {"run": run_id, "error": f"{type(exc).__name__}: {exc}"[:300], "n": n})
+            log.warning("%s: %s: %s — crash %d of %d", self.p.slug, tid, note, n, CRASHES_MAX)
+            if n >= CRASHES_MAX:
+                now["crashes"], now["assignee_run"] = n, None
+                self.store.save_task(now)
+                self.store.ask(from_="dispatcher", to="po", task_id=tid,
+                               question=f"{tid} was started {n} times and each time {note}. Close it, re-cut it, or answer «retry» to try again.")
+            else:
+                # not again in this cycle: the same code would most likely raise again a minute later
+                later = (_now() + timedelta(minutes=CRASH_RETRY_MIN)).isoformat(timespec="seconds") if CRASH_RETRY_MIN else now.get("not_before")
+                self.store.transition(tid, "ready", "dispatcher", note[:300], force=True, assignee_run=None, crashes=n, not_before=later)
+        except Exception as exc2:  # noqa: BLE001 — the original exception is what must reach the caller
+            log.warning("%s: %s: crash_release failed: %s", self.p.slug, tid, exc2)
 
     # a role without what the task needs: a question to the PO instead of a guess (owner 26.11, rework slice 2a) -------
 
