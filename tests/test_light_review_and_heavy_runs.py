@@ -89,7 +89,7 @@ def test_the_review_of_a_document_does_not_wait_for_the_seats(tmp_path: Path):
         _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
 
     def rev(cwd: Path, n: int):
-        done_at["review"] = time.monotonic()
+        done_at.setdefault("review", time.monotonic())                # the first review: the document's (later ones are of the tasks merged in the cycle)
         return dict(PASS)
     r.work.update({"developer": dev, "reviewer": rev})
     cyc = Cycle(st, p, r, "c1")

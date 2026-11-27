@@ -60,6 +60,8 @@ HEAVY_RUNS_PROMPT = ("\n\n# HEAVY RUNS ARE NOT STARTED FROM THIS RUN (the team's
 SUITE_CACHE_KEEP = 30                                     # `cycle.review_tests.once_per_batch`: results of the suite kept per product
 SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main branch that contains this task's commit {sha}; "
               "its result stands for every task merged up to it)\n")
+PARKED_AFTER_H = 24.0                                     # `cycle.queue.remind_parked`: a proposed / deferred task this old is named
+PARKED_LIST_MAX = 15                                      # … at most this many
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
@@ -359,6 +361,8 @@ class Cycle:
         self._drain_said = False
         self._budget_out = ""                                  # `cycle.guards.budget_halt`: why the seats stopped taking tasks ("" = they have not)
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
+        self._review_lock = threading.Lock()                   # `start_reviews`: one caller at a time decides which tasks get a review lane
+        self._review_queued: set[str] = set()                  # tasks that got a review lane in this cycle
         self._suite_lock = threading.Lock()                    # `batch_suite`: one run of the suite on a head at a time
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._dep_merged = merged_counts(product.dependencies_cfg)      # `cycle.dependencies.at_merge`: None = a dependency must be accepted
@@ -990,23 +994,65 @@ class Cycle:
             self.deploy_batch("merged commits left by the previous cycle")      # a cycle that died or was stopped before its batch
         except Exception as exc:  # noqa: BLE001 — the reviews of what is live must not wait for a host that is down
             log.exception("%s: batch deploy at the start of the review phase failed: %s", self.p.slug, exc)
-        for t in self.store.tasks(["released", "review"]):
-            if t.get(DEPLOY_PENDING):
-                # `deploy.batch`: merged, not live yet — the tester plays the live host, so the review waits for the batch
-                log.info("%s: %s is not reviewed now: its commit waits for the batch deploy", self.p.slug, t["id"])
-                continue
-            rel = parse_ts(t.get("released_at"))
-            if rel and _now() - rel < after:
-                continue
-            if self.lanes.busy(t["id"]):
-                # its merge or deploy is in flight in another lane of this cycle: never reviewed before that is over
-                log.info("%s: %s is not reviewed now: another lane of this cycle is still working on it", self.p.slug, t["id"])
-                continue
-            # Parallel cycle: one lane per task — the reviews overlap each other, the PO's triage and the execute phase
-            # (which joins them). Sequential cycle: the review runs here and now, one after another, as before.
-            self.lanes.submit("review", LANE_REVIEW, f"review-{t['id']}", self.review_task, t, task_id=t["id"], outside=self.light_review(t))
+        self.start_reviews(after)
         if not self._in_run:
             self.finish_lanes()                   # called on its own: the reviews are done when the phase returns
+
+    def start_reviews(self, after: timedelta | None = None, quiet: bool = False) -> int:
+        """Queue a review lane for every task that may be reviewed now and has none in this cycle yet. Called by the review
+        phase — and, with `cycle.flow.review_in_cycle`, again inside the cycle (`reviews_in_cycle`). Returns how many lanes
+        were queued."""
+        if after is None:
+            after = timedelta(minutes=int(self.st.cycle.get("review_after_min", 6)))
+        n = 0
+        with self._review_lock:
+            for t in self.store.tasks(["released", "review"]):
+                if t["id"] in self._review_queued:
+                    continue                      # one review per task and cycle: its verdict, whatever it is, belongs to the next one
+                if t.get(DEPLOY_PENDING):
+                    # `deploy.batch`: merged, not live yet — the tester plays the live host, so the review waits for the batch
+                    if not quiet:
+                        log.info("%s: %s is not reviewed now: its commit waits for the batch deploy", self.p.slug, t["id"])
+                    continue
+                rel = parse_ts(t.get("released_at"))
+                if rel and _now() - rel < after:
+                    continue
+                if self.lanes.busy(t["id"]):
+                    # its merge or deploy is in flight in another lane of this cycle: never reviewed before that is over
+                    if not quiet:
+                        log.info("%s: %s is not reviewed now: another lane of this cycle is still working on it", self.p.slug, t["id"])
+                    continue
+                # Parallel cycle: one lane per task — the reviews overlap each other, the PO's triage and the execute phase
+                # (which joins them). Sequential cycle: the review runs here and now, one after another, as before.
+                self._review_queued.add(t["id"])
+                self.lanes.submit("review", LANE_REVIEW, f"review-{t['id']}", self.review_task, t, task_id=t["id"], outside=self.light_review(t))
+                n += 1
+        return n
+
+    def reviews_in_cycle(self, why: str) -> int:
+        """`cycle.flow.review_in_cycle` (27.11): the tasks merged in THIS cycle are queued for their reviews now — after the
+        batch deploy that made them live, and between two tasks of a seat (a product without a batch, or a task whose
+        pause after the merge has passed) — instead of by the review phase of the next cycle. Only in a parallel cycle, never
+        in a dry run, never once a drain request stands. Never raises."""
+        if not (self.flow.review_in_cycle and self.lanes.parallel and self._in_run) or self.dry_run:
+            return 0
+        try:
+            if self.draining():
+                return 0
+            with self._seat_lock:
+                working = any(self._seat_lanes.values())
+            if not working:
+                # the seats are done: a review queued now would hold the cycle for its whole length, and the next cycle —
+                # which starts at once and queues it first thing — would only begin after it
+                return 0
+            n = self.start_reviews(quiet=True)
+            if n:
+                self.store.event("review.in_cycle", self.cycle_id, "dispatcher", {"lanes": n, "why": why[:120]})
+                log.info("%s: %d review(s) queued inside the cycle (%s)", self.p.slug, n, why)
+            return n
+        except Exception as exc:  # noqa: BLE001 — the next cycle's review phase takes them, as before
+            log.warning("%s: reviews inside the cycle not queued: %s", self.p.slug, str(exc)[:200])
+            return 0
 
     def review_task(self, t: dict[str, Any]) -> None:
         if self.draining():
@@ -1312,6 +1358,19 @@ class Cycle:
                 out.append({"task_id": t["id"], "role": t.get("role"), "title": _short_text(t.get("title"), 90), "blocked_for_h": round(age_h, 1),
                             "why": _short_text(hist[-1].get("note") if hist else "", 240), "returned_before": int(t.get("review_asks") or 0)})
         return sorted(out, key=lambda x: -x["blocked_for_h"])[:BLOCKED_LIST_MAX]
+
+    def proposed_block(self) -> str:
+        """`cycle.queue.remind_parked`: `proposed` tasks nobody has promoted for PARKED_AFTER_H hours, as a block of the PO's
+        prompt ("" = the switch is off or there are none). A proposed task leaves that state only by the PO's
+        `promote_tasks` or `close_tasks`; without a reminder it lies there (ai-battles 27.11: T-0623, ten hours)."""
+        if not self.p.queue_cfg["remind_parked"]:
+            return ""
+        items = parked_tasks(self.store, "proposed")
+        if not items:
+            return ""
+        return ("# PROPOSED TASKS NOBODY HAS PROMOTED (they start only when you promote them)\n"
+                "Decide each: `promote_tasks` [{task_id, hypothesis}] when it should be done now, `close_tasks` when it should not. "
+                "Leaving one here is a decision too — say so in the digest in one line.\n" + prompts._y(items))
 
     def blocked_block(self) -> str:
         """The list above as a block of the PO's prompt ("" when the switch is off or nothing lies there)."""
@@ -1621,7 +1680,7 @@ class Cycle:
             self.hand_over_readouts()
             self.settle_replans()
         stuck_md = replan.prompt_block(self.store, self.replan_cfg())
-        stuck_md = "\n\n".join(x for x in (stuck_md, self.blocked_block()) if x)
+        stuck_md = "\n\n".join(x for x in (stuck_md, self.blocked_block(), self.proposed_block()) if x)
         new_obs = self.store.observations("new")
         qs = [q for q in self.store.questions(["open"]) if q.get("to") == "po"]
         active = self.store.tasks(["ready", "claimed", "in_progress", "review", "released"])
@@ -2265,6 +2324,8 @@ class Cycle:
                 return                            # the day's budget is used up: taking a task would only walk it to in_progress and back
             if self.draining():
                 return                            # a drain request: this lane takes nothing more (it may not have taken anything yet)
+            if not first:
+                self.reviews_in_cycle("a seat finished a task")      # `cycle.flow.review_in_cycle`: what may be reviewed now is queued now
             if self.flow.fair_seats and not first:
                 # between two tasks: a seat without a lane gets one, and a lane that waits for a run slot gets this one
                 try:
@@ -3197,6 +3258,14 @@ class Cycle:
             timer.cancel()
 
     def deploy_batch(self, why: str) -> bool:
+        """`_deploy_batch`, and — `cycle.flow.review_in_cycle` — the reviews of what it made live, queued at once (outside
+        the repository lock: a review lane takes that lock for its checkout)."""
+        ok = self._deploy_batch(why)
+        if ok:
+            self.reviews_in_cycle("the batch is live")
+        return ok
+
+    def _deploy_batch(self, why: str) -> bool:
         """`deploy.batch: true`: deploy the last merged commit once for every task merged since the last deploy.
 
         Under `repo_lock`, so no merge moves the branch meanwhile: at the moment of the deploy the commit that goes live
@@ -4485,6 +4554,35 @@ def metrics_md(data: dict[str, Any], balance_cfg: balance.Config | None = None) 
     return "\n".join(lines) + "\n"
 
 
+def parked_tasks(store: Store, state: str, after_h: float | None = None, limit: int | None = None) -> list[dict[str, Any]]:
+    """Tasks that have been in `state` (`proposed`, `deferred`) for at least `after_h` hours, oldest first."""
+    after_h = PARKED_AFTER_H if after_h is None else after_h
+    out = []
+    for t in store.tasks([state]):
+        hist = t.get("history") or []
+        since = parse_ts(hist[-1].get("ts")) if hist else parse_ts(t.get("created"))
+        if not since:
+            continue
+        since = since if since.tzinfo else since.replace(tzinfo=timezone.utc)
+        age_h = (_now() - since).total_seconds() / 3600
+        if age_h >= after_h:
+            out.append({"task_id": t["id"], "role": t.get("role"), "title": _short_text(t.get("title"), 90), "for_h": round(age_h, 1),
+                        "why": _short_text(hist[-1].get("note") if hist else "", 200)})
+    return sorted(out, key=lambda x: -x["for_h"])[:limit or PARKED_LIST_MAX]
+
+
+def parked_digest_lines(p: Product, store: Store) -> list[str]:
+    """`cycle.queue.remind_parked`: the `deferred` tasks, for the owner's daily digest. They were put on hold by his word
+    and only he (or the operator) returns them — the PO is not asked. [] when the switch is off or there are none."""
+    if not p.queue_cfg["remind_parked"]:
+        return []
+    items = parked_tasks(store, "deferred")
+    if not items:
+        return []
+    return ["", f"На паузе по слову владельца ({len(items)}); вернуть может только владелец или оператор:"] + [
+        f"- {x['task_id']} ({x['role']}), {x['for_h'] / 24:.0f} дн.: {x['title']} — {x['why'] or 'причина не записана'}" for x in items]
+
+
 def daily_digest(p: Product, store: Store, day: str) -> str:
     from .store import summary
     s = summary(store)
@@ -4505,4 +4603,5 @@ def daily_digest(p: Product, store: Store, day: str) -> str:
              "PO: " + po_txt[:1200], "", "Аналитик: " + an_txt[:1200]]
     if owner_q:
         lines += ["", "❓ Владельцу:"] + [f"- {q['id']}: {q['question'][:300]}" for q in owner_q[:5]]
+    lines += parked_digest_lines(p, store)
     return "\n".join(lines) + "\n"

@@ -331,7 +331,9 @@ def test_9_reviews_and_the_po_beside_busy_seats(tmp_path: Path, name: str):
     if name == "game":
         checks = [a for role, a, b in r.spans if role in ("reviewer", "tester")]
         last_exec_end = max(b for role, a, b in r.spans if role in ("developer", "game-designer", "designer", "analyst"))
-        assert len(checks) == 3 and max(checks) < last_exec_end        # every review ran while the seats were still at work
+        # the three tasks merged before the cycle were reviewed while the seats were still at work (with `review_in_cycle`
+        # the tasks merged IN the cycle are reviewed in it as well: more than three reviews)
+        assert len(checks) >= 3 and sorted(checks)[2] < last_exec_end
 
 
 
@@ -378,7 +380,7 @@ def test_11_a_task_left_in_progress_by_a_cycle_that_is_gone(tmp_path: Path, name
     else:
         assert bad == []
         assert [e["subject"] for e in _events(p, "task.run_orphaned")] == [orphan]
-        assert r.calls.count("developer") == 1 and _state(p, orphan)["state"] == "released"
+        assert r.calls.count("developer") == 1 and _state(p, orphan)["state"] in ("released", "accepted", "done")
 
 
 @BOTH
@@ -423,3 +425,33 @@ def test_13_dependencies_that_are_finished_without_a_result_or_go_in_a_circle(tm
     assert violations(cyc, p, res) == []
     told = sorted(e["subject"] for e in _events(p, "task.dependency_dead"))
     assert told == (sorted([on_stub, a, b]) if name == "game" else [])
+
+
+
+# ------------------------------------------------------------------ load, pack 2 (27–28.11): the review inside the cycle
+
+@BOTH
+def test_14_a_task_merged_in_the_cycle_is_reviewed_in_the_same_cycle(tmp_path: Path, name: str):
+    """27.11: 27 of the 60 minutes from «merged» to «accepted» were the wait for the review phase of the NEXT cycle.
+    Two developer tasks; the first is merged while the second still runs — its review must not wait for the next cycle."""
+    st, p = _make(tmp_path, name)
+    first, second = _task(p, "developer", "merged early"), _task(p, "developer", "still running")
+    r = LaneRunner()
+    import time as _t
+
+    def dev(cwd: Path, n: int):
+        if cwd.name == second:
+            _t.sleep(1.0)
+        _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
+    r.work["developer"] = dev
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, ["review", "execute"])
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []
+    if name == "game":
+        assert _state(p, first)["state"] == "accepted" and _state(p, second)["state"] == "accepted"      # both, in the cycle that merged them
+        assert sum(e["detail"]["lanes"] for e in _events(p, "review.in_cycle")) == 2
+        reviews = [a for role, a, b in r.spans if role in ("reviewer", "tester")]
+        assert len(reviews) == 2                                       # one review per task and cycle
+    else:
+        assert _state(p, first)["state"] == "released" and "reviewer" not in r.calls and _events(p, "review.in_cycle") == []

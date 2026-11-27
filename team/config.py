@@ -29,6 +29,8 @@ QUEUE_DEFAULTS: dict[str, Any] = {
     "target_ready": 6,            # ready tasks of a role with seats below which the PO is woken (1..50)
     "max_per_run": 6,             # Ready tasks the PO may propose in one run while `ahead` is on (1..12; off: cycle.max_ready)
     "wake_every_min": 30,         # the PO is not woken for a low queue more often than this (5..1440)
+    "remind_parked": False,       # true = `proposed` tasks older than a day are listed for the PO («promote or close»), and the
+                                  # daily digest names the `deferred` ones for the owner (the PO may not raise those) (27–28.11)
     "cut_on_design": False,       # true = the PO runs as soon as a design document is merged inside the execute phase (27.11)
 }
 _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
@@ -598,7 +600,7 @@ class Product:
                     log.warning("%s: cycle.queue=%r is not a mapping — ignored", where, src)
                 continue
             for k, v in src.items():
-                if k in ("ahead", "cut_on_design"):
+                if k in ("ahead", "cut_on_design", "remind_parked"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
