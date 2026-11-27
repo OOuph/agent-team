@@ -333,6 +333,11 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._exec_ready = False                               # `execute_prepare` ran in this cycle
+        self._exec_slots: dict[str, int] = {}                  # seats of this cycle (`execute_slots`)
+        self._exec_used: dict[str, int] = {}                   # tasks each seat carried through in this cycle
+        self._exec_seen: set[str] = set()                      # tasks a lane of this cycle has dealt with: not offered again in a later pass
+        self._seat_lanes: dict[str, int] = {}                  # live lanes per seat (guarded by `_seat_lock`)
         self._refill_failures = 0                              # failed runs of this cycle that did not close refill (guarded by `_seat_lock`)
         self._not_started: list[dict[str, str]] = []           # tasks a lane of this cycle looked at and quietly did not start, with the reason
         self._role_median: dict[str, float | None] = {}       # role → median spend of a run (`cost_guard_cap`), read once per cycle
@@ -532,6 +537,11 @@ class Cycle:
         log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
         self._in_run = True
         try:
+            if "execute" in (phases or PHASES):
+                try:
+                    self.start_early_execute()    # `cycle.flow.early_execute`: the seats begin beside collect and triage
+                except Exception as exc:  # noqa: BLE001 — the phases go on in their order; the execute phase starts the seats itself
+                    log.exception("%s: early start of the seats failed: %s", self.p.slug, exc)
             for ph in phases or PHASES:
                 try:
                     getattr(self, f"phase_{ph}")()
@@ -660,10 +670,7 @@ class Cycle:
     # collect: stale claims, metrics snapshot, personas ------------------------------------------------
 
     def phase_collect(self) -> None:
-        for c in self.store.stale_claims():
-            t = self.store.task(c["task_id"])
-            if t and t.get("state") in ("claimed", "in_progress"):
-                self.store.transition(t["id"], "ready", "dispatcher", f"lease of {c['run_id']} expired", force=True)
+        self.release_stale_claims()
         self.fetch_metrics()
         self.collect_feedback()
         self.collect_critic()
@@ -1534,15 +1541,12 @@ class Cycle:
                 log.exception("%s: batch deploy at the end of the execute phase failed: %s", self.p.slug, exc)
                 self.store.event("phase.error", "execute", "dispatcher", f"batch deploy: {exc}"[:500])
 
-    def _phase_execute(self) -> None:
-        """Start the tasks of this cycle — one per seat, picked exactly as before — and wait for everything in flight.
-
-        Sequential cycle (`cycle.parallel.enabled: false`): the loop below visits the candidates in order and runs each
-        task before it looks at the next one. Parallel cycle: the same candidates in the same order, split by seat —
-        every seat is a lane that works through its own tasks one after another, so the seats overlap each other and
-        the reviews started by `phase_review`; then everything is joined. A later pass starts what became startable
-        meanwhile and still has a free seat: a task the review of this cycle sent back, a task whose `depends_on` was
-        finished by another lane."""
+    def execute_prepare(self) -> None:
+        """What the execute phase does once before any seat starts: sweeps, the roles of the ready tasks, the refill
+        window, the seats' shared counts. Called by an early start and by the phase itself; the second call is a no-op."""
+        if self._exec_ready:
+            return
+        self._exec_ready = True
         try:
             self.sweep_worktrees()
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
@@ -1555,14 +1559,92 @@ class Cycle:
             self.normalize_roles()                    # `artist` → `designer`; a role without a seat is said aloud
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the cycle its execute phase
             log.warning("%s: roles of the ready tasks not checked: %s", self.p.slug, str(exc)[:200])
-        slots = self.execute_slots()
-        used: dict[str, int] = {}
+        self._exec_slots = self.execute_slots()
         if self.lanes.parallel and self.flow.refill and not self.dry_run:
             # owner 25.11 (team/flow.py): a seat that finishes takes the next task until the phase is `refill_min` old
             self._refill_deadline = time.monotonic() + self.flow.refill_min * 60
             self._refill_last = time.monotonic() + self.flow.refill_max_min * 60
             log.info("%s: execute: refill is on — a freed seat takes the next task for %g min, up to %g min while reviews hold the cycle",
                      self.p.slug, self.flow.refill_min, self.flow.refill_max_min)
+
+    def start_seat_lanes(self, wave: int) -> int:
+        """Start the seat lanes for what is startable now and return how many were started (nothing is joined here). A
+        seat never gets more lanes than it has places, counting the lanes of an earlier call that are still at work."""
+        slots, used, seen = self._exec_slots, self._exec_used, self._exec_seen
+        with self._seat_lock:
+            if not any(self._seat_lanes.values()):
+                self._taken.clear()               # no seat lane is running: a task that waited for a dependency may be offered again
+        groups: dict[str, list[dict[str, Any]]] = {}
+        for t in self.execute_candidates():
+            key = self.seat_key(str(t.get("role") or "developer"), slots)
+            if key is None or t["id"] in seen or self.lanes.busy(t["id"]):
+                continue
+            with self._seat_lock:
+                if t["id"] in self._taken:
+                    continue
+            if used.get(key, 0) >= slots[key] and not self.refill_open():
+                continue        # the seat's places for this cycle are used (refill: «places at once», no such count)
+            groups.setdefault(key, []).append(t)
+        started = 0
+        for key, tasks in groups.items():
+            # one lane per seat: the tasks of a role run one after another; only a role named in
+            # `cycle.parallel.overlap_roles` gets a lane per place of its seat
+            with self._seat_lock:
+                live = self._seat_lanes.get(key, 0)
+                n = max(0, (min(slots[key], len(tasks)) if key in self.par.overlap_roles else 1) - live)
+                self._seat_lanes[key] = live + n
+            feed = _Feed(tasks)
+            for i in range(n):
+                self.lanes.submit("execute", LANE_EXECUTE, f"exec-{key}" + (f"-{live + i + 1}" if (live + n) > 1 else ""), self.seat_lane_counted,
+                                  key, feed, slots, used, seen)
+            started += n
+        in_flight = self.lanes.pending()          # the new seat lanes and whatever `phase_review` started
+        log.log(logging.INFO if in_flight else logging.DEBUG, "%s: execute pass %d: %d seat lane(s) (%s), %d lane(s) in flight with the reviews",
+                self.p.slug, wave, started, ", ".join(f"{k}: {len(v)} task(s)" for k, v in groups.items()) or "nothing to start", in_flight)
+        return started
+
+    def seat_lane_counted(self, key: str, *args: Any) -> None:
+        """`seat_lane`, counted as a live lane of its seat for as long as it runs."""
+        try:
+            self.seat_lane(key, *args)
+        finally:
+            with self._seat_lock:
+                self._seat_lanes[key] = max(0, self._seat_lanes.get(key, 0) - 1)
+
+    def start_early_execute(self) -> int:
+        """`cycle.flow.early_execute` (27.11): at the very start of the cycle the seats take the tasks that are ready
+        already — beside collect and the PO's triage, which used to keep them empty for the first 8 minutes. Only in a
+        parallel cycle with refill (a seat then goes on to what the PO cuts meanwhile); never in a dry run. The stale
+        leases are released first, as collect would do. The execute phase later starts whatever seat is still free and
+        joins everything. Returns the number of lanes started."""
+        if not (self.flow.early_execute and self.flow.refill and self.lanes.parallel) or self.dry_run:
+            return 0
+        self.release_stale_claims()
+        self.execute_prepare()
+        n = self.start_seat_lanes(0)
+        if n:
+            self.store.event("execute.early", self.cycle_id, "dispatcher", {"lanes": n})
+            log.info("%s: execute started early: %d seat lane(s) work beside collect and triage", self.p.slug, n)
+        return n
+
+    def release_stale_claims(self) -> None:
+        """A task whose lease expired goes back to `ready` (the first step of collect; also before an early start)."""
+        for c in self.store.stale_claims():
+            t = self.store.task(c["task_id"])
+            if t and t.get("state") in ("claimed", "in_progress"):
+                self.store.transition(t["id"], "ready", "dispatcher", f"lease of {c['run_id']} expired", force=True)
+
+    def _phase_execute(self) -> None:
+        """Start the tasks of this cycle — one per seat, picked exactly as before — and wait for everything in flight.
+
+        Sequential cycle (`cycle.parallel.enabled: false`): the loop below visits the candidates in order and runs each
+        task before it looks at the next one. Parallel cycle: the same candidates in the same order, split by seat —
+        every seat is a lane that works through its own tasks one after another, so the seats overlap each other and
+        the reviews started by `phase_review`; then everything is joined. A later pass starts what became startable
+        meanwhile and still has a free seat: a task the review of this cycle sent back, a task whose `depends_on` was
+        finished by another lane."""
+        self.execute_prepare()
+        slots, used = self._exec_slots, self._exec_used
         if not self.lanes.parallel:
             for t in self.execute_candidates():
                 if all(used.get(k, 0) >= v for k, v in slots.items()):
@@ -1580,30 +1662,9 @@ class Cycle:
                 else:
                     self._not_done.add(t["id"])
             return
-        seen: set[str] = set()                    # tasks a lane of this cycle has dealt with: not offered again in a later pass
         for wave in range(1, EXECUTE_WAVES_MAX + 1):
-            with self._seat_lock:
-                self._taken.clear()               # no seat lane is running here: a task that waited for a dependency may be offered again
-            groups: dict[str, list[dict[str, Any]]] = {}
-            for t in self.execute_candidates():
-                key = self.seat_key(str(t.get("role") or "developer"), slots)
-                if key is None or t["id"] in seen or self.lanes.busy(t["id"]):
-                    continue
-                if used.get(key, 0) >= slots[key] and not self.refill_open():
-                    continue        # the seat's places for this cycle are used (refill: «places at once», no such count)
-                groups.setdefault(key, []).append(t)
-            started = 0
-            for key, tasks in groups.items():
-                # one lane per seat: the tasks of a role run one after another; only a role named in
-                # `cycle.parallel.overlap_roles` gets a lane per place of its seat
-                n = min(slots[key], len(tasks)) if key in self.par.overlap_roles else 1
-                feed = _Feed(tasks)
-                for i in range(n):
-                    self.lanes.submit("execute", LANE_EXECUTE, f"exec-{key}" + (f"-{i + 1}" if n > 1 else ""), self.seat_lane, key, feed, slots, used, seen)
-                started += n
-            in_flight = self.lanes.pending()      # the new seat lanes and whatever `phase_review` started
-            log.log(logging.INFO if in_flight else logging.DEBUG, "%s: execute pass %d: %d seat lane(s) (%s), %d lane(s) in flight with the reviews",
-                    self.p.slug, wave, started, ", ".join(f"{k}: {len(v)} task(s)" for k, v in groups.items()) or "nothing to start", in_flight)
+            self.start_seat_lanes(wave)
+            in_flight = self.lanes.pending()
             self.finish_lanes()
             if not in_flight:
                 break               # nothing ran in this pass, so nothing can have become startable
