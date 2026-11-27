@@ -51,6 +51,9 @@ GUARDS_DEFAULTS: dict[str, Any] = {
     "cost_min_runs": 20,          # runs of the role in the window needed for a median (3..10000); fewer = no guard
     "cost_days": 7,               # the window of the median, days (1..90)
     "cost_floor_usd": 1.0,        # the guard never lowers a cap below this (0..100)
+    "idle_reasons": False,        # true = at the end of the execute phase every task that is still `ready` gets its reason on record
+                                  # (one event `execute.left` per cycle) — not only when the cycle executed nothing (26.11: a task of
+                                  # a role without a seat lay three hours and nothing said why)
     "crash_release": False,       # true = a task whose lane raised an exception goes back to `ready` (after CRASHES_MAX times: to
                                   # the PO with a question) instead of staying `in_progress` with a run id nobody holds (27.11)
 }
@@ -505,7 +508,7 @@ class Product:
             for k, v in src.items():
                 if k not in out:
                     continue
-                if k in ("loop", "cost", "crash_release"):
+                if k in ("loop", "cost", "crash_release", "idle_reasons"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:

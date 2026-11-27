@@ -51,6 +51,7 @@ SUPPORT_WHY_CHARS, SUPPORT_NOTES_MAX = 400, 5            # `note_failed_support`
 REVIEW_ASKS_MAX = 2                                       # `cycle.escalation.review_exit`: times the PO may send a task back after its review gave up; then the owner is asked
 BLOCKED_LIST_AFTER_H = 2.0                                # … and a task `blocked` this long with no open question bound to it is listed for the PO
 BLOCKED_LIST_MAX = 12                                     # … at most this many, oldest first
+LEFT_EVENT_MAX = 80                                       # `record_left`: tasks named in one `execute.left` event
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
@@ -1699,6 +1700,40 @@ class Cycle:
                                     "actual": f"work happens in {repo}; nothing is pushed until repo.url is set", "fingerprint": f"local-repo-{self.p.slug}"})
         return True
 
+    def left_reason(self, t: dict[str, Any], slots: dict[str, int]) -> str:
+        """Why a task that is `ready` at the end of the execute phase was not carried through — always some words."""
+        role = str(t.get("role") or "developer")
+        key = self.seat_key(role, slots)
+        if key is None:
+            return f"role {role} has no seat in execute_slots"
+        if role in PENDING_ROLES:
+            return f"role {role} has no execute path yet"
+        why = self.why_not_startable(t)
+        if why:
+            return why
+        if self.draining():
+            return "a drain request stands: nothing new was started"
+        if t["id"] in self._not_done:
+            return "a lane of this cycle took it and did not carry it through (see its history)"
+        if not self.flow.refill and self._exec_used.get(key, 0) >= slots.get(key, 0):
+            return f"the {key} seat's {slots.get(key, 0)} place(s) of this cycle were used (cycle.flow.refill is off)"
+        if self._refill_closed:
+            return f"refill closed: {self._refill_closed}"[:200]
+        return f"the {key} seat was at work until the phase ended"
+
+    def record_left(self) -> int:
+        """`cycle.guards.idle_reasons`: one event `execute.left` with every task still `ready` and its reason. Returns
+        how many tasks it names (0 = off, a dry run, or nothing is left)."""
+        if not self.p.guards_cfg["idle_reasons"] or self.dry_run:
+            return 0
+        slots = self._exec_slots or self.execute_slots()
+        left = [{"task": t["id"], "role": str(t.get("role") or "developer"), "why": self.left_reason(t, slots)} for t in self.store.tasks(["ready"])]
+        if left:
+            self.store.event("execute.left", self.cycle_id, "dispatcher", {"n": len(left), "tasks": left[:LEFT_EVENT_MAX]})
+            log.info("%s: %d task(s) still ready after the execute phase: %s", self.p.slug, len(left),
+                     "; ".join(f"{x['task']}: {x['why']}" for x in left[:8])[:900])
+        return len(left)
+
     def pending_role(self, t: dict[str, Any]) -> bool:
         """True for a task whose role has no execute path yet (PENDING_ROLES); the first time an event is written."""
         role = str(t.get("role") or "developer")
@@ -1744,6 +1779,10 @@ class Cycle:
                     log.info("%s: execute started nothing: %s", self.p.slug, "; ".join(f"{x['task']} ({x['role']}): {x['why']}" for x in self._not_started[:10]))
                 except Exception as exc:  # noqa: BLE001
                     log.warning("%s: execute.idle not recorded: %s", self.p.slug, str(exc)[:200])
+            try:
+                self.record_left()
+            except Exception as exc:  # noqa: BLE001 — a record for the reader, never a reason to fail the phase
+                log.warning("%s: execute.left not recorded: %s", self.p.slug, str(exc)[:200])
             try:
                 self.deploy_batch("end of the execute phase")
             except Exception as exc:  # noqa: BLE001 — the merged tasks stay pending; the next cycle deploys them first
