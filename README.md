@@ -10,6 +10,9 @@ against measurable goals. People only decide things that fall outside the produc
 The full scheme of the loop (roles, phases, task states, feedback, analytics, policies, self-improvement) is in
 [SCHEME.md](SCHEME.md). The live diary written by the team about itself: https://agentteam.formachines.ai.
 
+
+Как править диспетчер: [CONTRIBUTING.md](CONTRIBUTING.md) — сначала красный тест, потом исправление; журнал «дефект → проверка» в [docs/defects-to-tests.md](docs/defects-to-tests.md).
+
 ## How it works in one paragraph
 
 Roles never talk to each other. Everything they produce is a file in `products/<slug>/` (tasks, questions,
