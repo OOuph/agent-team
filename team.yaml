@@ -114,6 +114,7 @@ cycle:
     target_ready: 6
     max_per_run: 6                # … and may propose this many Ready tasks in one run (off: max_ready, three)
     wake_every_min: 30            # not woken for a low queue more often than this
+    cut_on_design: false          # true = the PO runs as soon as a design document is merged inside the execute phase
   analyst_prompt:                 # 26.11, rework slice 10: recently accepted tasks in the analyst's prompt
     compact_tasks: false          # true = a card per task (id, title, type, goal, accepted_at, one line of the last result)
   measure:                        # owner 26.11, rework slice 11: the day is measured, not every task
