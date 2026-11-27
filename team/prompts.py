@@ -420,6 +420,49 @@ def budget_block(budget_s: int | None, continuation: dict[str, Any] | None = Non
 ANSWERS_MAX = 5                            # answered questions of one task shown to its role (newest last)
 
 
+REF_RE = re.compile(r"\b(OBS-\d{3,6}|Q-\d{3,6})\b")
+REFS_MAX = 6                               # observations and questions of one task shown to its role
+REF_CHARS = 1800                           # of one of them
+REFS_TOTAL_CHARS = 7000                    # of the whole block
+
+
+def task_refs(task: dict[str, Any] | None) -> list[str]:
+    """Ids of observations and questions a task names — in its title, problem, scope, acceptance, negative cases, its
+    `observations` list and its `links` — in order, without repeats."""
+    t = task or {}
+    text = " ".join(str(x) for x in (t.get("title"), t.get("problem"), t.get("scope"), t.get("acceptance"), t.get("negative_cases"),
+                                     t.get("observations"), t.get("links")) if x)
+    return list(dict.fromkeys(REF_RE.findall(text)))[:REFS_MAX]
+
+
+def references_block(store: Store, task: dict[str, Any] | None) -> str:
+    """`# WHAT THIS TASK REFERS TO` (`cycle.escalation.references`, 27.11): the text of the observations and questions the
+    task names. A role cannot open the store; before this it asked for the text and the task waited a cycle for the
+    answer (ai-battles T-0624 and observation OBS-2063). "" when the task names none."""
+    ids = task_refs(task)
+    if not ids:
+        return ""
+    obs = {o.get("id"): o for o in store.observations()} if any(i.startswith("OBS-") for i in ids) else {}
+    qs = {q.get("id"): q for q in store.questions()} if any(i.startswith("Q-") for i in ids) else {}
+    parts, left = [], REFS_TOTAL_CHARS
+    for i in ids:
+        if i.startswith("OBS-"):
+            o = obs.get(i)
+            body = _y({k: o.get(k) for k in ("title", "source", "observed_at", "classification", "actual", "expected", "url") if o.get(k)}) if o else ""
+        else:
+            q = qs.get(i)
+            body = _y({k: q.get(k) for k in ("from", "to", "question", "answer", "answered_by") if q.get(k)}) if q else ""
+        if not body:
+            body = "(not found in the product's records: the task names it, nobody can show it — say so in `missing` if you need it)\n"
+        body = _tail(body, min(REF_CHARS, max(200, left)))
+        parts.append(f"--- {i} ---\n{body}")
+        left -= len(body)
+        if left <= 0:
+            break
+    return ("\n\n# WHAT THIS TASK REFERS TO (the observations and questions it names, as recorded — read them, do not ask for them)\n"
+            + "\n".join(parts))
+
+
 def answers_block(answers: list[dict[str, Any]] | None) -> str:
     """`# ANSWERS TO THIS TASK'S QUESTIONS` (rework slice 2a): what the PO or the owner answered to the questions this task
     was stopped on — before 26.11 the answer restarted the task and the role never saw it. Empty without answers."""
@@ -461,7 +504,7 @@ def conflict_block(conflict: dict[str, Any] | None, base: str = "main") -> str:
 def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, branch: str, previous: list[dict[str, Any]],
                      review: dict[str, Any] | None, role: str = "developer", *, budget_s: int | None = None,
                      continuation: dict[str, Any] | None = None, conflict: dict[str, Any] | None = None, base: str = "main",
-                     port: int | None = None, answers: list[dict[str, Any]] | None = None) -> str:
+                     port: int | None = None, answers: list[dict[str, Any]] | None = None, refs: str = "") -> str:
     previous = [{k: v for k, v in r.items() if k != "profile_md"} for r in previous]     # the profile is shown once, in the continuation block
     readme = ""
     seen: set[Path] = set()
@@ -498,7 +541,7 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
                f"`PORT={port}` for the server and `BASE_URL=http://127.0.0.1:{port}` for the tests. Another role's run may be using the "
                "repository's default port at this very moment. Stop what you started before you report.\n" if port else "")
             + "\n" + tests +
-            "# TASK\n" + _y(_task_brief(task)) + answers_block(answers) + prev + rev
+            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers) + prev + rev
             + conflict_block(conflict, base)
             + budget_block(budget_s, continuation)
             + "\n\n# VISION\n" + product.vision()
@@ -604,7 +647,7 @@ def standing_block(product: Product, store: Store) -> str:
 
 
 def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, store: Store,
-                         answers: list[dict[str, Any]] | None = None) -> str:
+                         answers: list[dict[str, Any]] | None = None, refs: str = "") -> str:
     """The game designer's prompt: VISION, the task, the current GAME-DESIGN.md and balance tables, game metrics, what
     testers and the PO observed. No shell: everything travels here (owner 20.11)."""
     gdd_limit, table_limit = _design_limits(product)
@@ -636,7 +679,7 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
             f"e.g. `{GDD_FILE}`, `{BALANCE_DIR}/ships.json`); `balance_changes` say what changed and how the effect will be read in the "
             "metrics; `proposed_tasks` are suggestions for the PO (not tasks yet); `open_questions` only for what changes the genre, "
             "the audience or money (the owner decides those).\n\n"
-            "# TASK\n" + _y(_task_brief(task)) + answers_block(answers)
+            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers)
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
             + ("\n\n# BALANCE TABLES" + tables if tables else "")
