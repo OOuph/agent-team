@@ -13,7 +13,7 @@
     "required": ["question_id", "kind", "answer"],
     "properties": {
      "question_id": {"type": "string"},
-     "kind": {"type": "string", "enum": ["decided", "unavailable", "info"]},
+     "kind": {"type": "string", "enum": ["decided", "unavailable", "info", "owner_only"], "description": "owner_only (only when the prompt offers it): the question is about the owner's own recorded words; it stays open for him"},
      "answer": {"type": "string", "maxLength": 1200},
      "not_before": {"type": "string", "maxLength": 40, "description": "ISO 8601 UTC; only for 'wait until <moment>' answers"}
     }

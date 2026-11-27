@@ -470,6 +470,15 @@ class Store:
 
     # ------------------------------------------------------------ observations and reviews
 
+    @_locked
+    def mark_question(self, qid: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Write extra fields on a question without answering it (the deputy's «this one is the owner's»)."""
+        p = self._path("Q", qid)
+        q = yaml.safe_load(p.read_text(encoding="utf-8"))
+        q.update(fields)
+        _write(p, q)
+        return q
+
     def observations(self, status: str | None = None) -> list[dict[str, Any]]:
         obs = self._load_all("observations")
         return [o for o in obs if o.get("status") == status] if status else obs
