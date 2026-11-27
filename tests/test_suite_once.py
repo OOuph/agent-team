@@ -148,3 +148,31 @@ def test_a_green_run_on_an_earlier_commit_stands_after_the_head_has_moved(tmp_pa
     assert _state(p, old["id"])["state"] == "accepted" and _state(p, new["id"])["state"] == "accepted"
     earlier = [e for e in _events(p, "review.suite_reused") if e["detail"].get("earlier")]
     assert old["id"] in [e["subject"] for e in earlier] and new["id"] not in [e["subject"] for e in earlier]
+
+
+
+def test_the_tasks_unit_log_holds_the_whole_output_of_the_shared_run(tmp_path: Path, monkeypatch):
+    """27.11, Q-0273 (review of T-0671): with the shared run the task's unit log got only the tail of the output that goes
+    into the request, so `team-play unit --grep` could not find the lines of the new tests."""
+    from team import cycle as cycle_mod
+    monkeypatch.setattr(cycle_mod, "REVIEW_TEST_OUTPUT_CHARS", 200)                    # the request shows a short tail
+    count = tmp_path / "suite-runs.txt"
+    monkeypatch.setenv("SUITE_COUNT_FILE", str(count))
+    st = _settings(tmp_path, ON)
+    p = _product(st)
+    raw = (p.dir / "product.yaml").read_text(encoding="utf-8").replace(
+        "  kind: service\n", "  kind: service\n  test_cmd: 'echo FIRST-LINE-new-test-passes; for i in $(seq 1 400); do echo filler line $i; done; echo LAST-LINE'\n")
+    (p.dir / "product.yaml").write_text(raw, encoding="utf-8")
+    p = C.load_product(st, p.dir)
+    _commit(p.repo_dir, "src/part.ts", "part\n", "task")
+    s = Store(p.dir)
+    t = s.create_task(title="merged task", type_="defect", problem="p", scope="src/", acceptance=["works"], goal="G1", created_by="po",
+                      role="developer", state="ready")
+    s.transition(t["id"], "released", "dispatcher", "merged", force=True, released_at="2020-01-01T00:00:00+00:00",
+                 released_sha=gitops.head(p.repo_dir), results=[{"status": "done", "summary": LONG}])
+    s.close()
+    r = LaneRunner(); _honest_reviewer(r)
+    cyc = Cycle(st, p, r, "c1"); run_cycle(cyc, ["review"]); cyc.store.close()
+    assert "filler line 5\n" not in r.prompts["reviewer"][0] and "filler line 400" in r.prompts["reviewer"][0]      # the request: the tail
+    unit_log = (p.dir / "reviews" / t["id"] / cycle_mod.UNIT_LOG_NAME).read_text(encoding="utf-8")
+    assert "\nFIRST-LINE-new-test-passes\n" in unit_log and "filler line 5\n" in unit_log and "LAST-LINE" in unit_log   # the log: all of it
