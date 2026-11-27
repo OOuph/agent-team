@@ -77,6 +77,9 @@ DEFAULTS: dict[str, Any] = {
     "enabled": True,              # false = strictly sequential cycle (no thread is started)
     "max_runs": 3,                # lanes (role runs with their preparation) at once inside one product's cycle
     "review_max_runs": None,      # of them reviews / play-tests at most; None = max_runs - 1 (at least 1)
+    "main_outside": False,        # true = a run of the cycle's own thread (the PO, the deputy, the analyst) takes no run slot and
+                                  # waits for none. 27.11: with the seats started early all six slots were taken before the PO
+                                  # needed one, and it waited 499–601 s in three cycles; it is one light run
     "review_reserve": 0,          # run slots the execute lanes never take, so a waiting review always finds one (0..max_runs-1).
                                   # 27.11: with refill a seat lane lives as long as the cycle and holds its slot all that time —
                                   # six seats held all six slots and reviews waited up to 56 minutes
@@ -101,6 +104,7 @@ class Config:
     max_runs: int = 3
     review_max_runs: int = 2
     review_reserve: int = 0
+    main_outside: bool = False
     overlap_roles: tuple[str, ...] = ()
     max_merge_conflicts: int = 2
     worktree_keep_h: float = 72.0
@@ -161,7 +165,11 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
             keep = DEFAULTS[key]
         hours[key] = float(keep)
     reserve = _int(raw.get("review_reserve", 0), 0, 0, max(0, max_runs - 1), pre + "review_reserve")
-    cfg = Config(enabled=enabled, max_runs=max_runs, review_max_runs=review, review_reserve=reserve, overlap_roles=tuple(str(r) for r in roles),
+    main_outside = raw.get("main_outside", False)
+    if not isinstance(main_outside, bool):
+        log.warning("%smain_outside=%r is not true/false — false in use", pre, main_outside)
+        main_outside = False
+    cfg = Config(enabled=enabled, max_runs=max_runs, review_max_runs=review, review_reserve=reserve, main_outside=main_outside, overlap_roles=tuple(str(r) for r in roles),
                  max_merge_conflicts=_int(raw["max_merge_conflicts"], int(DEFAULTS["max_merge_conflicts"]), 1, 20, pre + "max_merge_conflicts"),
                  worktree_keep_h=hours["worktree_keep_h"], workdir_keep_h=hours["workdir_keep_h"])
     log.debug("%s: lanes: %s", slug, cfg.describe())
@@ -351,6 +359,7 @@ class Lanes:
                  on_working: Callable[[str, str | None], Any] | None = None):
         self.cfg, self.slug = cfg, slug
         self.parallel = bool(cfg.enabled)
+        self.main_outside = bool(cfg.main_outside)
         limits = {LANE_REVIEW: cfg.review_max_runs}
         if cfg.review_reserve > 0:                 # the execute lanes leave this many slots to the reviews
             limits[LANE_EXECUTE] = max(1, cfg.max_runs - cfg.review_reserve)
@@ -487,6 +496,11 @@ class Lanes:
         """A gate slot for a role run made outside a lane (the PO beside running reviews). Inside a lane the lane's own
         slot covers the run; a sequential cycle has no gate."""
         if not self.parallel or getattr(_ctx, "slot", False):
+            yield
+            return
+        if self.main_outside:                      # `cycle.parallel.main_outside`: beside the lanes, not in their count
+            log.debug("%s: run %s goes beside the lanes, outside the run slots (%d of %d at work)", self.slug, label or "main",
+                      self.gate.at_work(), self.gate.max_runs)
             yield
             return
         with self.gate.slot(LANE_MAIN, label or "main"):
