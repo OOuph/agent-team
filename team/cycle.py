@@ -333,6 +333,7 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
         self._exec_ready = False                               # `execute_prepare` ran in this cycle
         self._exec_slots: dict[str, int] = {}                  # seats of this cycle (`execute_slots`)
         self._exec_used: dict[str, int] = {}                   # tasks each seat carried through in this cycle
@@ -1622,6 +1623,7 @@ class Cycle:
         self.release_stale_claims()
         self.execute_prepare()
         n = self.start_seat_lanes(0)
+        self._early_lanes = n
         if n:
             self.store.event("execute.early", self.cycle_id, "dispatcher", {"lanes": n})
             log.info("%s: execute started early: %d seat lane(s) work beside collect and triage", self.p.slug, n)
@@ -1644,6 +1646,9 @@ class Cycle:
         meanwhile and still has a free seat: a task the review of this cycle sent back, a task whose `depends_on` was
         finished by another lane."""
         self.execute_prepare()
+        if not self._early_lanes:                     # no early start in this cycle: the phase counts from nothing, as it always did
+            self._exec_used, self._exec_seen = {}, set()
+        self._early_lanes = 0                         # … and so does a later call of the phase on the same cycle
         slots, used = self._exec_slots, self._exec_used
         if not self.lanes.parallel:
             for t in self.execute_candidates():
