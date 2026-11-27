@@ -156,7 +156,8 @@ SCHEMAS = Path(__file__).parent / "schemas"
 REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
                        "ANTHROPIC_API_KEY", "GSC_")
-REVIEW_TEST_TIMEOUT_S = 900
+REVIEW_TEST_TIMEOUT_S = 900                               # the tests before a review, one command; product.yaml `review: {tests_timeout_s: N}` overrides
+REVIEW_TEST_TIMEOUT_RANGE = (60, 7200)                    # … within these seconds
 GD_CHECKOUT_TOOLS = ["Read", "Glob", "Grep"]      # the game designer with `cycle.game_designer.checkout`: reads, never writes
 GD_CHECKOUT_TURNS = 24                     # turns of such a run (8 without tools)
 GD_CHECKOUT_PROMPT = (
@@ -233,7 +234,7 @@ def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
 
 
 def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None, full_log: Path | None = None,
-                         prepare: Any = None) -> str:
+                         prepare: Any = None, timeout_s: int | None = None) -> str:
     """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
     environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
     `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files. `lock`: the
@@ -262,10 +263,10 @@ def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "
     out, full = [], []
     for c in cmds:
         try:
-            cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=REVIEW_TEST_TIMEOUT_S, env=env)
+            cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=timeout_s or REVIEW_TEST_TIMEOUT_S, env=env)
             text, code = (cp.stdout + "\n" + cp.stderr).strip(), cp.returncode
         except subprocess.TimeoutExpired:
-            text, code = f"timed out after {REVIEW_TEST_TIMEOUT_S} s", "timeout"
+            text, code = f"timed out after {timeout_s or REVIEW_TEST_TIMEOUT_S} s", "timeout"
         full.append(f"$ {c}\nexit code: {code}\n{text}")
         if len(text) > REVIEW_TEST_OUTPUT_CHARS:
             text = "… [head cut]\n" + text[-REVIEW_TEST_OUTPUT_CHARS:]
@@ -1017,7 +1018,7 @@ class Cycle:
                         raise DocsOnly()
                     # the whole output is kept beside the review's evidence: this run, not the one in `start_playtest`, is
                     # the one a game task gets (26.11: `team-play unit` found nothing on the first live reviews)
-                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
+                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(),
                                                  full_log=self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
                 except DocsOnly:
                     tests = DOCS_ONLY_TESTS_NOTE
@@ -1314,6 +1315,20 @@ class Cycle:
         log.info("%s: %s: unproven 3× [%s] → back to work (%d of %d)", self.p.slug, t["id"], reason, used + 1, REVIEW_RETURN_MAX)
         return True
 
+    def review_tests_timeout(self) -> int:
+        """product.yaml `review: {tests_timeout_s: N}`: how long one command of the tests before a review (and before a
+        merge) may run. 27.11, ai-battles: `npm run build && npm test` was cut at 900 s twice on a server loaded to 28–31 on
+        8 cores (Q-0260). A value outside REVIEW_TEST_TIMEOUT_RANGE or not a number: the default, with a warning."""
+        raw = (self.p.raw.get("review") or {}) if isinstance(self.p.raw.get("review"), dict) else {}
+        v = raw.get("tests_timeout_s")
+        if v is None:
+            return REVIEW_TEST_TIMEOUT_S
+        lo, hi = REVIEW_TEST_TIMEOUT_RANGE
+        if isinstance(v, bool) or not isinstance(v, int) or not lo <= v <= hi:
+            log.warning("%s: review.tests_timeout_s=%r is not a whole number in %d..%d — %d in use", self.p.slug, v, lo, hi, REVIEW_TEST_TIMEOUT_S)
+            return REVIEW_TEST_TIMEOUT_S
+        return v
+
     def inconclusive_policy(self) -> str:
         """What the third `inconclusive` verdict of a released task does. product.yaml `review: {inconclusive: accept | ask}`;
         without the key: `ask` for the game profile (blocked + a PO question, owner 22.11), `accept` for every other
@@ -1341,7 +1356,7 @@ class Cycle:
         unit_log = out_dir / UNIT_LOG_NAME
         if not tests:
             try:
-                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, full_log=unit_log)
+                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(), full_log=unit_log)
             except Exception as e:  # noqa: BLE001
                 tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         try:
@@ -3238,7 +3253,7 @@ class Cycle:
             # minutes); documents (.md) are merged as before.
             data = [str(f["path"]) for f in files if str(f["path"]).lower().endswith(DESIGN_TEST_SUFFIXES)]
             if data and self.p.test_cmd and not self.dry_run:
-                report = run_tests_for_review(repo, result["commit"], work / "tests-pre-merge", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules)
+                report = run_tests_for_review(repo, result["commit"], work / "tests-pre-merge", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout())
                 if not tests_passed(report):
                     tail = _short_text(report[-DESIGN_TESTS_TAIL_CHARS:], DESIGN_TESTS_TAIL_CHARS)
                     log.warning("%s: %s: tests fail with the game designer's data change %s: not merged", self.p.slug, t["id"], data)
