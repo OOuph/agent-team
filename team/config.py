@@ -32,6 +32,11 @@ QUEUE_DEFAULTS: dict[str, Any] = {
     "cut_on_design": False,       # true = the PO runs as soon as a design document is merged inside the execute phase (27.11)
 }
 _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
+DEPENDENCIES_DEFAULTS: dict[str, Any] = {
+    "at_merge": False,            # true = a dependency is met once it is MERGED (`released`), not only once it is accepted. 27.11,
+                                  # ai-battles: reviews take an hour, all 23 tasks with a dependency waited for it (median 54 min)
+    "roles": [],                  # … only for dependencies whose own role is in this list; [] = every role
+}
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
 GAME_DESIGNER_DEFAULTS: dict[str, bool] = {"checkout": False}   # `cycle.game_designer`, see DEFAULTS
@@ -95,6 +100,8 @@ DEFAULTS: dict[str, Any] = {
               "visible": dict(VISIBLE_DEFAULTS),
               # the PO cuts tasks ahead (owner 26.11, rework slice 9); off by default, product.yaml `cycle: {queue: {...}}`
               "queue": dict(QUEUE_DEFAULTS),
+              # when a dependency counts as met (owner 27.11): product.yaml `cycle: {dependencies: {at_merge: true, roles: [...]}}`
+              "dependencies": dict(DEPENDENCIES_DEFAULTS),
               # the analyst's prompt (26.11, rework slice 10): `compact_tasks` true = recently accepted tasks as a card (id, title,
               # type, goal, accepted_at, one line of the last result) instead of their full text; off by default
               "analyst_prompt": dict(ANALYST_PROMPT_DEFAULTS),
@@ -518,6 +525,29 @@ class Product:
     def visible_cfg(self) -> dict[str, bool]:
         """`cycle.visible` (rework slice 5): {review_before_merge, redesign_gate}, off by default."""
         return self.switches("visible", VISIBLE_DEFAULTS)
+
+    @property
+    def dependencies_cfg(self) -> dict[str, Any]:
+        """`cycle.dependencies`: team.yaml first, this product's block on top; a wrong value keeps the default."""
+        out = {"at_merge": False, "roles": []}
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get("dependencies")), (f"{self.slug} product.yaml", own.get("dependencies") if isinstance(own, dict) else None)):
+            if not isinstance(src, dict):
+                if src is not None:
+                    log.warning("%s: cycle.dependencies=%r is not a mapping — ignored", where, src)
+                continue
+            for k, v in src.items():
+                if k == "at_merge":
+                    if isinstance(v, bool):
+                        out[k] = v
+                    else:
+                        log.warning("%s: cycle.dependencies.at_merge=%r is not true/false — %s in use", where, v, out[k])
+                elif k == "roles":
+                    if isinstance(v, list) and all(isinstance(x, str) for x in v):
+                        out[k] = [x.strip() for x in v if x.strip()]
+                    else:
+                        log.warning("%s: cycle.dependencies.roles=%r is not a list of role names — %s in use", where, v, out[k])
+        return out
 
     @property
     def queue_cfg(self) -> dict[str, Any]:

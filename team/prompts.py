@@ -463,6 +463,18 @@ def references_block(store: Store, task: dict[str, Any] | None) -> str:
             + "\n".join(parts))
 
 
+def support_block(task: dict[str, Any] | None) -> str:
+    """`# A TASK THIS ONE STANDS ON FAILED ITS REVIEW` (`cycle.dependencies.at_merge`, 27.11): this task was started when
+    its dependency was merged and not yet reviewed, and the review then failed. Empty when nothing of the kind is on the card."""
+    notes = (task or {}).get("support_failed") or []
+    if not notes:
+        return ""
+    return ("\n\n# A TASK THIS ONE STANDS ON FAILED ITS REVIEW (опора получила незачёт)\n"
+            "It is being reworked; the main branch still holds its first version. Check what of your work leans on the part named "
+            "below, do not build further on it, and say in your result what must be looked at again once it is fixed.\n"
+            + _y([{"task": n.get("task"), "at": n.get("at"), "why": n.get("why")} for n in notes]))
+
+
 def answers_block(answers: list[dict[str, Any]] | None) -> str:
     """`# ANSWERS TO THIS TASK'S QUESTIONS` (rework slice 2a): what the PO or the owner answered to the questions this task
     was stopped on — before 26.11 the answer restarted the task and the role never saw it. Empty without answers."""
@@ -541,7 +553,7 @@ def developer_prompt(product: Product, task: dict[str, Any], repo_dir: Path, bra
                f"`PORT={port}` for the server and `BASE_URL=http://127.0.0.1:{port}` for the tests. Another role's run may be using the "
                "repository's default port at this very moment. Stop what you started before you report.\n" if port else "")
             + "\n" + tests +
-            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers) + prev + rev
+            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers) + support_block(task) + prev + rev
             + conflict_block(conflict, base)
             + budget_block(budget_s, continuation)
             + "\n\n# VISION\n" + product.vision()
@@ -679,7 +691,7 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
             f"e.g. `{GDD_FILE}`, `{BALANCE_DIR}/ships.json`); `balance_changes` say what changed and how the effect will be read in the "
             "metrics; `proposed_tasks` are suggestions for the PO (not tasks yet); `open_questions` only for what changes the genre, "
             "the audience or money (the owner decides those).\n\n"
-            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers)
+            "# TASK\n" + _y(_task_brief(task)) + refs + answers_block(answers) + support_block(task)
             + "\n\n# VISION\n" + product.vision()
             + "\n\n# CURRENT GAME-DESIGN.md\n" + (gdd or "(none yet — write v1)")
             + ("\n\n# BALANCE TABLES" + tables if tables else "")
