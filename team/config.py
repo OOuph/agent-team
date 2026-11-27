@@ -56,7 +56,8 @@ NODE_CACHE_DEFAULTS: dict[str, bool] = {"enabled": False}   # `cycle.node_cache`
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 # `cycle.heavy_runs` (27.11): commands a role's run must not start on the team's server — load tests, simulations of hundreds of
 # battles. `deny`: Claude Code permission rules, e.g. "Bash(npx tsx tests/load/*)"; `roles`: whose runs ([] = every role).
-HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "roles": []}
+# `queue`: rules denied as typed but allowed through `team-heavy <command>` — one such run at a time on the server, at `nice`.
+HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800}
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
     "loop_repeats": 5,            # … after this many identical calls in a row (3..50)
@@ -571,15 +572,15 @@ class Product:
         return out
 
     @property
-    def heavy_runs_cfg(self) -> dict[str, list[str]]:
+    def heavy_runs_cfg(self) -> dict[str, Any]:
         """`cycle.heavy_runs`: this product's block replaces team.yaml's, list by list; anything that is not a list of
         strings is ignored with a warning."""
-        out: dict[str, list[str]] = {"deny": [], "roles": []}
+        out: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("heavy_runs")), (f"{self.slug} product.yaml", own.get("heavy_runs") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
                 continue
-            for k in ("deny", "roles"):
+            for k in ("deny", "queue", "roles"):
                 v = src.get(k)
                 if v is None:
                     continue
@@ -587,6 +588,14 @@ class Product:
                     out[k] = [x.strip() for x in v]
                 else:
                     log.warning("%s: cycle.heavy_runs.%s=%r is not a list of strings — ignored", where, k, v)
+            for k, lo, hi in (("nice", 0, 19), ("wait_s", 0, 86400)):
+                v = src.get(k)
+                if v is None:
+                    continue
+                if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
+                    out[k] = v
+                else:
+                    log.warning("%s: cycle.heavy_runs.%s=%r is not a whole number in %d..%d — %s in use", where, k, v, lo, hi, out[k])
         return out
 
     @property

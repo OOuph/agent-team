@@ -13,6 +13,7 @@ team = "team.cli:main"
 team-publish = "team.publish:main"
 team-fetch = "team.fetch:main"
 team-play = "team.play:main"
+team-heavy = "team.heavy:main"
 
 [build-system]
 requires = ["setuptools>=68"]
