@@ -85,8 +85,22 @@ def run_cycle(cyc: Any, phases: list[str] | None = None, limit_s: float = CYCLE_
     return box["res"]
 
 
-def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = None) -> list[str]:
-    """What the finished cycle broke; [] = nothing. Opens its own store: the cycle's may be closed already."""
+EXEC_ROLES = ("developer", "designer", "game-designer", "analyst", "marketer")
+
+
+def peak_at_once(runner: Any, roles: tuple[str, ...]) -> int:
+    """The most runs of `roles` the stand-in runner had going at one moment (from its spans)."""
+    marks = sorted([(a, 1) for r, a, b in runner.spans if r in roles] + [(b, -1) for r, a, b in runner.spans if r in roles], key=lambda x: (x[0], x[1]))
+    now = peak = 0
+    for _, d in marks:
+        now += d
+        peak = max(peak, now)
+    return peak
+
+
+def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = None, runner: Any = None) -> list[str]:
+    """What the finished cycle broke; [] = nothing. Opens its own store: the cycle's may be closed already. `runner` (the
+    stand-in runner of the scenario): the rules about run slots are checked from its spans, too."""
     bad: list[str] = []
     s = Store(product.dir)
     try:
@@ -120,6 +134,35 @@ def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = Non
             if (t.get("state") == "in_progress" and t.get("assignee_run") and not t.get("last_review")
                     and (t.get("results") or [{}])[-1].get("status") != "partial"):
                 bad.append(f"И4: {tid} is `in_progress` held by {t.get('assignee_run')} with no lease: every later cycle will say «a run holds it»")
+        executed = result is not None and "execute" in (result.get("phases") or [])
+        # И6: every task still ready has its reason on record (needs `cycle.guards.idle_reasons`)
+        if executed and product.guards_cfg["idle_reasons"] and not cyc.dry_run:
+            left = [e for e in events if e["kind"] == "execute.left" and e["subject"] == cyc.cycle_id]
+            named = {x["task"]: x.get("why") for e in left for x in (e["detail"] or {}).get("tasks") or []}
+            for tid, t in sorted(tasks.items()):
+                if t.get("state") == "ready" and not str(named.get(tid) or "").strip():
+                    bad.append(f"И6: {tid} is still ready after the execute phase and no reason is on record for it")
+        # И8: a free seat and a startable task give a run in this cycle (with refill; unless refill was closed)
+        if executed and product.flow.refill and product.parallel.enabled and not cyc._refill_closed and not cyc.dry_run:
+            slots = cyc._exec_slots or {}
+            open_q = {q["id"] for q in s.questions(["open"])}
+            for tid, t in sorted(tasks.items()):
+                if t.get("state") != "ready" or tid in cyc._not_done or cyc.seat_key(str(t.get("role") or "developer"), slots) is None:
+                    continue
+                nb = cycle_mod.parse_ts(t.get("not_before"))
+                if nb and cycle_mod._now() < nb:
+                    continue
+                if (t.get("blocked_by") in open_q) or cycle_mod.unmet_dependencies(s, t, cyc._dep_merged):
+                    continue
+                bad.append(f"И8: {tid} is startable, refill was open to the end, and no lane took it in this cycle")
+        # И10: the execute lanes leave the reserve to the reviews; a run of the main thread does not wait when it is outside the slots
+        if runner is not None and product.parallel.enabled and product.parallel.review_reserve > 0:
+            limit = product.parallel.max_runs - product.parallel.review_reserve
+            peak = peak_at_once(runner, EXEC_ROLES)
+            if peak > limit:
+                bad.append(f"И10: {peak} executor runs at once, the reserve for reviews leaves them {limit}")
+        if product.parallel.enabled and product.parallel.main_outside and cyc.lanes.gate.max_wait.get("main", 0.0) > 0:
+            bad.append(f"И10: a run of the main thread waited {cyc.lanes.gate.max_wait['main']:.1f}s for a slot though it is outside the slots")
         # И5
         if result is not None and float(result.get("spent_usd") or 0.0) < -SPEND_EPS:
             bad.append(f"И5: the cycle reports a spend of {result.get('spent_usd')}")

@@ -23,7 +23,7 @@ from team.runner import RunResult
 from team.store import Store
 
 from cycle_invariants import SETTINGS, all_switches_on, game_like, run_cycle, violations
-from test_parallel_lanes import DONE, LaneRunner, _commit, _killed, _product, _settings, _state, _task
+from test_parallel_lanes import DONE, LaneRunner, _commit, _events, _killed, _product, _settings, _state, _task
 
 PHASES = ["review", "execute", "measure"]
 BOTH = pytest.mark.parametrize("name", sorted(SETTINGS))
@@ -215,3 +215,114 @@ def test_5_a_cycle_across_midnight_utc(tmp_path: Path, name: str, monkeypatch):
     cyc.store.close()
     assert violations(cyc, p, res) == []
     assert res["spent_usd"] > 0
+
+
+# ------------------------------------------------------------------ batch 1 of the audit's defects (27.11): И6, И8, И9, И10
+
+LONG = "The work is in the repository; the report names every file that changed and how each acceptance criterion can be checked by hand."
+
+
+@BOTH
+def test_6_a_role_without_a_seat_and_a_role_alias(tmp_path: Path, name: str):
+    """№2 (26.11): a task for a role that has no seat lay three hours and nothing said why."""
+    st, p = _make(tmp_path, name)
+    alias = _task(p, "artist", "for the designer under its other name")
+    lost = _task(p, "sound", "for a role nobody seats")
+    r = LaneRunner()
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, PHASES)
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []
+    assert _state(p, alias)["state"] != "ready" and r.calls.count("designer") == 1       # the alias is the designer's task
+    assert _state(p, lost)["state"] == "ready"
+    if name == "game":
+        left = [x for e in _events(p, "execute.left") for x in e["detail"]["tasks"]]
+        assert [x["task"] for x in left] == [lost] and "has no seat" in left[0]["why"]
+
+
+@BOTH
+def test_7_an_answer_in_mid_cycle_and_a_free_seat(tmp_path: Path, name: str):
+    """№8 (27.11, T-0624): answered at 08:58, its seat free from 09:10, taken by the next cycle near 09:50."""
+    st, p = _make(tmp_path, name)
+    asks, other = _task(p, "developer", "asks first"), _task(p, "designer", "runs meanwhile")
+    r = LaneRunner()
+
+    def dev(cwd: Path, n: int):
+        if r.cwds["developer"].count(cwd) == 1 and cwd.name == asks and not getattr(dev, "asked", False):
+            dev.asked = True
+            return {"status": "needs_context", "summary": "s", "changes": [], "how_to_verify": [], "self_check": [], "missing": ["the text of OBS-2063"],
+                    "question": "what does OBS-2063 say?"}
+        _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
+
+    def des(cwd: Path, n: int):
+        s = Store(p.dir)                                               # while the designer works, the question is answered
+        for _ in range(100):
+            qs = s.questions(["open"])
+            if qs:
+                for q in qs:
+                    s.answer(q["id"], "OBS-2063: the label is cut on a narrow screen", "po")
+                break
+            import time as _t
+            _t.sleep(0.05)
+        s.close()
+        _commit(cwd, "DESIGN.md", "design\n")
+    r.work.update({"developer": dev, "designer": des})
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, PHASES)
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []
+    runs = [c.name for c in r.cwds["developer"]].count(asks)
+    if name == "game":
+        assert runs == 2 and _state(p, asks)["state"] != "ready"       # taken again in the same cycle, with the answer
+        assert "the label is cut on a narrow screen" in r.prompts["developer"][-1]
+    else:
+        assert runs == 1                                               # by default: the next cycle
+
+
+def _game_backlog(p, devs: int = 6, gds: int = 4) -> None:
+    for i in range(devs):
+        _task(p, "developer", f"dev {i}")
+    for i in range(gds):
+        _task(p, "game-designer", f"rules {i}")
+    _task(p, "designer", "the one designer task")
+    _task(p, "analyst", "the one analyst task")
+
+
+def test_8_every_role_with_a_ready_task_runs_in_the_first_round(tmp_path: Path):
+    """№10 (27.11): three developers and two game designers took the slots; the one designer waited for the whole cycle.
+    The game's seats 3+2+1+1+1, six run slots, two kept for the reviews: four executors at once."""
+    st, p = _make(tmp_path, "game")
+    _game_backlog(p)
+    r = LaneRunner(wait_peak=4)                                        # no run returns before four are going at once
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, ["execute"])
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == [] and not r.waited_out
+    first = [role for role, _, _ in sorted(r.spans, key=lambda x: x[1])][:4]
+    assert sorted(first) == ["analyst", "designer", "developer", "game-designer"], first      # И9: one of each role before a second of any
+
+
+@BOTH
+def test_9_reviews_and_the_po_beside_busy_seats(tmp_path: Path, name: str):
+    """№15, №16 (27.11): six seat lanes held all six slots — reviews waited 10–56 minutes, the PO 499–601 s."""
+    st, p = _make(tmp_path, name)
+    s = Store(p.dir)
+    released = []
+    for i in range(3):
+        t = s.create_task(title=f"merged {i}", type_="defect", problem="p", scope="src/", acceptance=["works"], goal="G1", created_by="po",
+                          role="developer", state="ready")
+        s.transition(t["id"], "released", "dispatcher", "merged", force=True, released_at="2020-01-01T00:00:00+00:00",
+                     released_sha=__import__("team.gitops", fromlist=["head"]).head(p.repo_dir), results=[{"status": "done", "summary": LONG}])
+        released.append(t["id"])
+    s.close()
+    _game_backlog(p)
+    r = LaneRunner(sleep=0.15)
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, ["review", "triage", "execute"])
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []                            # И10: executors within their share; the PO did not wait
+    assert all(_state(p, t)["state"] == "accepted" for t in released)
+    if name == "game":
+        checks = [a for role, a, b in r.spans if role in ("reviewer", "tester")]
+        last_exec_end = max(b for role, a, b in r.spans if role in ("developer", "game-designer", "designer", "analyst"))
+        assert len(checks) == 3 and max(checks) < last_exec_end        # every review ran while the seats were still at work
