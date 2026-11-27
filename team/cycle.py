@@ -37,6 +37,7 @@ from . import runprofile                                  # own lines: the impor
 from .runner import KILLED_LOOP, killed_kind
 from . import canary as canary_mod
 from . import nodecache
+from . import testworkers
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -335,6 +336,7 @@ class Cycle:
         self.canary_started: str | None = None                # ISO time the release that ran it began
         self._po_lock = threading.RLock()                      # one PO run at a time (the triage phase and `cut_after_design`)
         self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
+        self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
         self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
         self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
@@ -541,6 +543,10 @@ class Cycle:
         t0 = time.time()
         log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
         self._in_run = True
+        with testworkers.applied(testworkers.env_for(self.st.raw.get("cycle"), self.p.raw, self.par.max_runs, self.p.slug), self.p.slug):
+            return self._run_phases(phases, t0)
+
+    def _run_phases(self, phases: list[str] | None, t0: float) -> dict[str, Any]:
         try:
             if "execute" in (phases or PHASES):
                 try:
@@ -1625,6 +1631,23 @@ class Cycle:
             log.info("%s: execute: refill is on — a freed seat takes the next task for %g min, up to %g min while reviews hold the cycle",
                      self.p.slug, self.flow.refill_min, self.flow.refill_max_min)
 
+    def start_idle_seats(self) -> int:
+        """`cycle.flow.fair_seats`: called by a seat lane between two tasks. A seat that has a startable task now and no
+        lane (its first task of the cycle was created or became ready after the pass began — 27.11, T-0646: created 11:08,
+        its seat started by the next pass at 11:48) gets its lane at once. Only while refill is open: the same window in
+        which the working seats take new tasks. Returns the number of lanes started."""
+        if not (self.flow.fair_seats and self.refill_open()):
+            return 0
+        if not self._start_lock.acquire(blocking=False):
+            return 0                              # another lane is doing exactly this right now
+        try:
+            n = self.start_seat_lanes(-1)
+        finally:
+            self._start_lock.release()
+        if n:
+            self.store.event("flow.seat_started", self.cycle_id, "dispatcher", {"lanes": n})
+        return n
+
     def start_seat_lanes(self, wave: int) -> int:
         """Start the seat lanes for what is startable now and return how many were started (nothing is joined here). A
         seat never gets more lanes than it has places, counting the lanes of an earlier call that are still at work."""
@@ -1644,6 +1667,7 @@ class Cycle:
                 continue        # the seat's places for this cycle are used (refill: «places at once», no such count)
             groups.setdefault(key, []).append(t)
         started = 0
+        todo: list[tuple[int, str, str, _Feed]] = []      # (the lane's number in its seat, seat, label, feed)
         for key, tasks in groups.items():
             # one lane per seat: the tasks of a role run one after another; only a role named in
             # `cycle.parallel.overlap_roles` gets a lane per place of its seat
@@ -1653,10 +1677,20 @@ class Cycle:
                 self._seat_lanes[key] = live + n
             feed = _Feed(tasks)
             for i in range(n):
-                self.lanes.submit("execute", LANE_EXECUTE, f"exec-{key}" + (f"-{live + i + 1}" if (live + n) > 1 else ""), self.seat_lane_counted,
-                                  key, feed, slots, used, seen)
+                todo.append((live + i, key, f"exec-{key}" + (f"-{live + i + 1}" if (live + n) > 1 else ""), feed))
             started += n
+        if self.flow.fair_seats:
+            # the run slots are handed out in the order the lanes are queued: the first lane of every seat before the second
+            # lane of any (27.11: three developers and two game designers took the slots, the one designer waited behind them)
+            todo.sort(key=lambda x: x[0])                 # stable: inside a round the seats keep the order of their tasks
+        for _, key, label, feed in todo:
+            self.lanes.submit("execute", LANE_EXECUTE, label, self.seat_lane_counted, key, feed, slots, used, seen)
         in_flight = self.lanes.pending()          # the new seat lanes and whatever `phase_review` started
+        if wave < 0:                              # `start_idle_seats`, between two tasks of a lane: a line only when a seat was started
+            if started:
+                log.info("%s: execute, mid-cycle: %d seat lane(s) started for a seat that had none (%s)", self.p.slug, started,
+                         ", ".join(sorted({k for _, k, _, _ in todo})))
+            return started
         log.log(logging.INFO if in_flight else logging.DEBUG, "%s: execute pass %d: %d seat lane(s) (%s), %d lane(s) in flight with the reviews",
                 self.p.slug, wave, started, ", ".join(f"{k}: {len(v)} task(s)" for k, v in groups.items()) or "nothing to start", in_flight)
         return started
@@ -1903,7 +1937,16 @@ class Cycle:
         are used — the body of the sequential loop for one seat. Several lanes of one seat (`overlap_roles`) share the
         feed and the count; a task being executed holds a place, so the seat is never over-filled."""
         healthy = True                            # refill: this lane's last task was carried through and its run went well
+        first = True
         while True:
+            if self.flow.fair_seats and not first:
+                # between two tasks: a seat without a lane gets one, and a lane that waits for a run slot gets this one
+                try:
+                    self.start_idle_seats()
+                except Exception as exc:  # noqa: BLE001 — this lane's own work goes on
+                    log.warning("%s: starting the idle seats failed: %s", self.p.slug, exc)
+                self.lanes.yield_slot(LANE_EXECUTE)
+            first = False
             with self._seat_lock:
                 # Refill (`cycle.flow.refill`, team/flow.py): the seat's count of tasks per cycle does not end the lane
                 # while the refill window is open — the number of lanes of the seat is what bounds the work at once.

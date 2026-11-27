@@ -54,6 +54,9 @@ DEFAULTS: dict[str, Any] = {
     "retake": False,              # true = a task that became `ready` again inside the cycle (its question was answered, its run
                                   # failed) may be taken again in that cycle while refill is open (27.11)
     "retake_max": 1,              # … this many more times per task and cycle (0..3)
+    "fair_seats": False,          # true = every seat with a startable task gets a run slot in turn: the first lane of each seat
+                                  # is queued before the second lane of any, a seat lane gives its slot to a waiting one between
+                                  # two tasks, and a seat that got its first task in mid-cycle gets its lane then (needs refill; 27.11)
     "chain": False,               # `team cycle --due` starts the next cycle right after a cycle that did work, while work waits
     "chain_max": 6,               # cycles of one product in one `team cycle --due` process (1..50; 1 = no chaining)
     "chain_pause_s": 5,           # seconds without any lock between two chained cycles: the window of a waiting operator script
@@ -74,6 +77,7 @@ class Config:
     early_execute: bool = False
     retake: bool = False
     retake_max: int = 1
+    fair_seats: bool = False
     chain: bool = False
     chain_max: int = 6
     chain_pause_s: float = 5.0
@@ -137,6 +141,7 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
                  early_execute=_bool(raw["early_execute"], False, pre + "early_execute"),
                  retake=_bool(raw["retake"], False, pre + "retake"),
                  retake_max=int(_num(raw["retake_max"], 1, 0, 3, pre + "retake_max", whole=True)),
+                 fair_seats=_bool(raw["fair_seats"], False, pre + "fair_seats"),
                  chain=_bool(raw["chain"], bool(DEFAULTS["chain"]), pre + "chain"),
                  chain_max=int(_num(raw["chain_max"], int(DEFAULTS["chain_max"]), 1, 50, pre + "chain_max", whole=True)),
                  chain_pause_s=_num(raw["chain_pause_s"], float(DEFAULTS["chain_pause_s"]), 0, 600, pre + "chain_pause_s"),
