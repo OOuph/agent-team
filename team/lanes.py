@@ -209,6 +209,7 @@ class RunGate:
         self._seq = itertools.count()
         self.peak = 0                              # the most lanes that worked at once (for the cycle's summary line)
         self.waited_s = 0.0                        # seconds lanes spent waiting for a slot, in total
+        self.max_wait: dict[str, float] = {}       # kind → the longest wait of one lane for its slot (team/firstcycle.py)
 
     def _may_go(self, ticket: tuple[int, int, str]) -> bool:
         if sum(self._running.values()) >= self.max_runs:
@@ -232,6 +233,7 @@ class RunGate:
             self.peak = max(self.peak, now)
             waited = time.monotonic() - t0
             self.waited_s += waited
+            self.max_wait[kind] = max(self.max_wait.get(kind, 0.0), waited)
             self._cv.notify_all()                  # the next ticket in line may be free to go as well
         log.log(logging.INFO if waited >= SLOT_WAIT_LOG_S else logging.DEBUG, "lane %s (%s): slot taken after %.1fs, %d of %d at work",
                 label or "-", kind, waited, now, self.max_runs)

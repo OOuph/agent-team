@@ -38,6 +38,7 @@ from .runner import KILLED_LOOP, killed_kind
 from . import canary as canary_mod
 from . import nodecache
 from . import testworkers
+from . import firstcycle
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -577,7 +578,12 @@ class Cycle:
         log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs%s%s", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent,
                  time.time() - t0, f", {self.lanes.started} lane(s), up to {peak} at once" if self.lanes.started else "",
                  f", {self.n_executed} task(s) executed, {self.n_refilled} of them by refill" if self.n_refilled else "")
-        return {"phases": self.phases_done, "runs": self.n_runs, "spent_usd": round(spent, 4)}
+        result = {"phases": self.phases_done, "runs": self.n_runs, "spent_usd": round(spent, 4)}
+        try:
+            firstcycle.check(self, result)        # the first cycle of this product on a new commit of the dispatcher: say what is off
+        except Exception as exc:  # noqa: BLE001 — the check reports on the cycle, it never fails it
+            log.warning("%s: first cycle check failed: %s", self.p.slug, exc)
+        return result
 
     # ------------------------------------------------------------ continuous work of the seats (team/flow.py)
 
