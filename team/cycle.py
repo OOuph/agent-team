@@ -335,6 +335,7 @@ class Cycle:
         self.canary_started: str | None = None                # ISO time the release that ran it began
         self._po_lock = threading.RLock()                      # one PO run at a time (the triage phase and `cut_after_design`)
         self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
+        self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
         self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
         self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
         self._exec_ready = False                               # `execute_prepare` ran in this cycle
@@ -613,6 +614,7 @@ class Cycle:
                 continue
             if self.seat_key(str(t.get("role") or "developer"), slots) == key:
                 if t["id"] in seen:
+                    self._retaken[t["id"]] = self._retaken.get(t["id"], 0) + 1       # counted when PICKED, not when run: see `retake_ok`
                     self.store.event("flow.retake", t["id"], "dispatcher", {"n": self._handled.get(t["id"], 0)})
                     log.info("%s: %s is ready again inside the cycle: taken once more (run %d of this cycle)", self.p.slug, t["id"],
                              self._handled.get(t["id"], 0) + 1)
@@ -623,7 +625,10 @@ class Cycle:
         """`cycle.flow.retake` (27.11): may a task a lane of this cycle has already dealt with be taken again? Only when it
         is `ready` now — its question was answered, or its run failed and it came back — and it ran fewer than
         1 + `retake_max` times in this cycle. Without the switch: never, as before («one handling per task and cycle»)."""
-        return bool(self.flow.retake and t.get("state") == "ready" and 0 < self._handled.get(t["id"], 0) <= self.flow.retake_max)
+        # The count is of picks. 27.11, first live cycle: T-0619 was `ready` again but not startable (its question was still
+        # open), so it was picked, refused, and picked again three times in a minute — a count of RUNS never grew.
+        return bool(self.flow.retake and t.get("state") == "ready" and self._handled.get(t["id"], 0) > 0
+                    and self._retaken.get(t["id"], 0) < self.flow.retake_max)
 
     def work_waiting(self) -> list[str]:
         """Tasks an execute phase starting now could take: ready or in progress, the role has a seat, not scheduled for

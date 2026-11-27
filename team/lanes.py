@@ -77,6 +77,9 @@ DEFAULTS: dict[str, Any] = {
     "enabled": True,              # false = strictly sequential cycle (no thread is started)
     "max_runs": 3,                # lanes (role runs with their preparation) at once inside one product's cycle
     "review_max_runs": None,      # of them reviews / play-tests at most; None = max_runs - 1 (at least 1)
+    "review_reserve": 0,          # run slots the execute lanes never take, so a waiting review always finds one (0..max_runs-1).
+                                  # 27.11: with refill a seat lane lives as long as the cycle and holds its slot all that time —
+                                  # six seats held all six slots and reviews waited up to 56 minutes
     "overlap_roles": [],          # roles whose several seats (execute_slots.<role> > 1) work at once; [] = one task of a role at a time
     "max_merge_conflicts": 2,     # merge conflicts in a row on one task before it is blocked with a question to the PO
     "worktree_keep_h": 72,        # a blocked / deferred / waiting_owner task keeps its checkout this many hours (the branch stays for ever)
@@ -97,6 +100,7 @@ class Config:
     enabled: bool = True
     max_runs: int = 3
     review_max_runs: int = 2
+    review_reserve: int = 0
     overlap_roles: tuple[str, ...] = ()
     max_merge_conflicts: int = 2
     worktree_keep_h: float = 72.0
@@ -106,7 +110,8 @@ class Config:
         if not self.enabled:
             return "sequential (cycle.parallel.enabled: false)"
         extra = f", several seats at once for {', '.join(self.overlap_roles)}" if self.overlap_roles else ""
-        return f"parallel, up to {self.max_runs} runs at once (reviews ≤ {self.review_max_runs}){extra}"
+        res = f", {self.review_reserve} kept for reviews" if self.review_reserve else ""
+        return f"parallel, up to {self.max_runs} runs at once (reviews ≤ {self.review_max_runs}{res}){extra}"
 
 
 def _int(v: Any, default: int, lo: int, hi: int, where: str) -> int:
@@ -155,7 +160,8 @@ def settings(team_cycle: dict[str, Any] | None, product_raw: dict[str, Any] | No
             log.warning("%s%s=%r is not a number of hours — %s in use", pre, key, keep, DEFAULTS[key])
             keep = DEFAULTS[key]
         hours[key] = float(keep)
-    cfg = Config(enabled=enabled, max_runs=max_runs, review_max_runs=review, overlap_roles=tuple(str(r) for r in roles),
+    reserve = _int(raw.get("review_reserve", 0), 0, 0, max(0, max_runs - 1), pre + "review_reserve")
+    cfg = Config(enabled=enabled, max_runs=max_runs, review_max_runs=review, review_reserve=reserve, overlap_roles=tuple(str(r) for r in roles),
                  max_merge_conflicts=_int(raw["max_merge_conflicts"], int(DEFAULTS["max_merge_conflicts"]), 1, 20, pre + "max_merge_conflicts"),
                  worktree_keep_h=hours["worktree_keep_h"], workdir_keep_h=hours["workdir_keep_h"])
     log.debug("%s: lanes: %s", slug, cfg.describe())
@@ -319,7 +325,10 @@ class Lanes:
                  on_working: Callable[[str, str | None], Any] | None = None):
         self.cfg, self.slug = cfg, slug
         self.parallel = bool(cfg.enabled)
-        self.gate = RunGate(cfg.max_runs, {LANE_REVIEW: cfg.review_max_runs})
+        limits = {LANE_REVIEW: cfg.review_max_runs}
+        if cfg.review_reserve > 0:                 # the execute lanes leave this many slots to the reviews
+            limits[LANE_EXECUTE] = max(1, cfg.max_runs - cfg.review_reserve)
+        self.gate = RunGate(cfg.max_runs, limits)
         self.repo_lock = threading.RLock()         # invariant 5
         self.host = HostLock()                     # invariant 6
         self._on_lane_exit = on_lane_exit          # e.g. close the thread's SQLite connection
