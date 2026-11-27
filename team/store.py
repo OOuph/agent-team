@@ -255,6 +255,14 @@ class Store:
                         (datetime.now(timezone.utc).strftime("%Y-%m-%d"), run_id, role, float(usd), int(reported), utcnow()))
         self.db.commit()
 
+    def spent_by_cycle(self, cycle_id: str) -> float:
+        """What the runs of one cycle spent: the rows of `spend` whose run id is `<cycle_id>-<label>`, whatever day they
+        were booked on. A cycle that crosses midnight UTC has runs on both days (27.11: the difference of two
+        `spent_today()` readings gave «$-345.13» for ai-battles 20261126T2350)."""
+        esc = str(cycle_id).replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        row = self.db.execute("SELECT COALESCE(SUM(usd), 0) FROM spend WHERE run_id LIKE ? ESCAPE '\\'", (esc + "-%",)).fetchone()
+        return round(float(row[0] or 0.0), 6)
+
     def spent_today(self) -> float:
         day = datetime.now(timezone.utc).strftime("%Y-%m-%d")
         r = self.db.execute("SELECT COALESCE(SUM(usd),0) FROM spend WHERE day=?", (day,)).fetchone()
