@@ -54,6 +54,10 @@ REVIEW_TESTS_DEFAULTS: dict[str, bool] = {
 }   # `cycle.review_tests`, see DEFAULTS
 NODE_CACHE_DEFAULTS: dict[str, bool] = {"enabled": False}   # `cycle.node_cache`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
+# `cycle.test_budget` (28.11): how often a role's run may run the product's WHOLE test suite. ai-battles 27.11: 247 runs of the
+# suite inside developer runs, 2.6 per run, ~1000 CPU seconds each — a third of an 8-core server. `full_runs`: 0 = no rule (as
+# before); N = the role is told to run the tests of what it touched while it works and the whole suite at most N times, at the end.
+TEST_BUDGET_DEFAULTS: dict[str, Any] = {"full_runs": 0, "roles": ["developer", "designer"]}
 # `cycle.heavy_runs` (27.11): commands a role's run must not start on the team's server — load tests, simulations of hundreds of
 # battles. `deny`: Claude Code permission rules, e.g. "Bash(npx tsx tests/load/*)"; `roles`: whose runs ([] = every role).
 # `queue`: rules denied as typed but allowed through `team-heavy <command>` — one such run at a time on the server, at `nice`.
@@ -137,6 +141,7 @@ DEFAULTS: dict[str, Any] = {
               # without running the tests and without a play-test server; off by default
               "review_tests": dict(REVIEW_TESTS_DEFAULTS),
               "heavy_runs": dict(HEAVY_RUNS_DEFAULTS),
+              "test_budget": dict(TEST_BUDGET_DEFAULTS),
               # a ready node_modules per lock file (27.11, team/nodecache.py): `enabled` true = a checkout without node_modules gets
               # a copy from the cache and the commands run without their `npm ci`; off by default
               "node_cache": dict(NODE_CACHE_DEFAULTS)},
@@ -569,6 +574,28 @@ class Product:
                         out[k] = [x.strip() for x in v if x.strip()]
                     else:
                         log.warning("%s: cycle.dependencies.roles=%r is not a list of role names — %s in use", where, v, out[k])
+        return out
+
+    @property
+    def test_budget_cfg(self) -> dict[str, Any]:
+        """`cycle.test_budget`: team.yaml first, this product's block on top; a wrong value keeps the default."""
+        out: dict[str, Any] = {"full_runs": 0, "roles": list(TEST_BUDGET_DEFAULTS["roles"])}
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get("test_budget")), (f"{self.slug} product.yaml", own.get("test_budget") if isinstance(own, dict) else None)):
+            if not isinstance(src, dict):
+                continue
+            v = src.get("full_runs")
+            if v is not None:
+                if isinstance(v, int) and not isinstance(v, bool) and 0 <= v <= 10:
+                    out["full_runs"] = v
+                else:
+                    log.warning("%s: cycle.test_budget.full_runs=%r is not a whole number in 0..10 — %s in use", where, v, out["full_runs"])
+            r = src.get("roles")
+            if r is not None:
+                if isinstance(r, list) and all(isinstance(x, str) and x.strip() for x in r):
+                    out["roles"] = [x.strip() for x in r]
+                else:
+                    log.warning("%s: cycle.test_budget.roles=%r is not a list of role names — ignored", where, r)
         return out
 
     @property

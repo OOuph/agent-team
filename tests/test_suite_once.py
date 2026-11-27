@@ -122,3 +122,29 @@ def test_a_commit_that_is_not_in_the_head_gets_its_own_run(tmp_path: Path, monke
     r = LaneRunner(); _honest_reviewer(r)
     cyc = Cycle(st, p, r, "c1"); run_cycle(cyc, ["review"]); cyc.store.close()
     assert sorted(_suite_runs(count)) == sorted(shas)                  # the head for the first, its own commit for the second
+
+
+def test_a_green_run_on_an_earlier_commit_stands_after_the_head_has_moved(tmp_path: Path, monkeypatch):
+    """28.11, the first live cycle with the switch: the second review found the head moved by a merge and ran the whole
+    suite again (692 s), though a green run on a commit that held its task was fifteen minutes old."""
+    st, p, ids, shas, count = _setup(tmp_path, ON, monkeypatch)
+    r = LaneRunner(); _honest_reviewer(r)
+    cyc = Cycle(st, p, r, "c1"); run_cycle(cyc, ["review"]); cyc.store.close()
+    assert _suite_runs(count) == [shas[-1]]
+    _commit(p.repo_dir, "src/later.ts", "merged later\n", "another task merged meanwhile")      # the head moves
+    s = Store(p.dir)
+    old = s.create_task(title="its commit is in the green run", type_="defect", problem="p", scope="src/", acceptance=["works"], goal="G1",
+                        created_by="po", role="developer", state="ready")
+    s.transition(old["id"], "released", "dispatcher", "merged", force=True, released_at="2020-01-01T00:00:00+00:00", released_sha=shas[0],
+                 results=[{"status": "done", "summary": LONG}])
+    new = s.create_task(title="its commit is the new head", type_="defect", problem="p", scope="src/", acceptance=["works"], goal="G1",
+                        created_by="po", role="developer", state="ready")
+    s.transition(new["id"], "released", "dispatcher", "merged", force=True, released_at="2020-01-01T00:00:00+00:00",
+                 released_sha=gitops.head(p.repo_dir), results=[{"status": "done", "summary": LONG}])
+    s.close()
+    cyc2 = Cycle(st, p, r, "c2"); run_cycle(cyc2, ["review"]); cyc2.store.close()
+    runs = _suite_runs(count)
+    assert runs == [shas[-1], gitops.head(p.repo_dir)]                 # one new run, for the task the old one does not contain
+    assert _state(p, old["id"])["state"] == "accepted" and _state(p, new["id"])["state"] == "accepted"
+    earlier = [e for e in _events(p, "review.suite_reused") if e["detail"].get("earlier")]
+    assert old["id"] in [e["subject"] for e in earlier] and new["id"] not in [e["subject"] for e in earlier]
