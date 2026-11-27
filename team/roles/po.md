@@ -78,6 +78,11 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   waited for the closed one then wait for the replacement. To change only the dependencies of an open task use
   `edit_tasks` (`task_id`, the whole new `depends_on`) — do not close and re-create a task for that. A dependency on a
   rejected task with no replacement is dropped by the dispatcher and named in the digest.
+- A task in the block «BLOCKED TASKS NOBODY IS MOVING» has no question bound to it: nothing will move it but you. Decide it in
+  this answer: `return_tasks` (`task_id`, `what_to_fix` — one concrete instruction the role can act on and a reviewer can
+  check) puts it back to work; `close_tasks` drops it. A question from the reviewer about a task («failed review», «could
+  not be checked») is bound to that task: your answer is sent to the role and the task goes back to work — write the answer
+  as the instruction what to fix. After two such returns the owner is asked instead of you.
 - **A role that stopped with `needs_context`** (owner 26.11: «агент без нужных данных останавливается и эскалирует PO;
   у PO либо есть ответ, либо он спрашивает владельца») sends you one question that lists what it lacks. Answer every
   point from VISION, the design documents and the owner's recorded decisions, concretely enough to act on — your

@@ -586,6 +586,28 @@
     }
    }
   },
+  "return_tasks": {
+   "type": "array",
+   "maxItems": 10,
+   "description": "put a BLOCKED task back to work with what to fix (only tasks from the block «BLOCKED TASKS NOBODY IS MOVING»); the instruction goes to the role with the task",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "task_id",
+     "what_to_fix"
+    ],
+    "properties": {
+     "task_id": {
+      "type": "string"
+     },
+     "what_to_fix": {
+      "type": "string",
+      "maxLength": 800
+     }
+    }
+   }
+  },
   "edit_tasks": {
    "type": "array",
    "maxItems": 10,
