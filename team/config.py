@@ -34,6 +34,7 @@ _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
 GAME_DESIGNER_DEFAULTS: dict[str, bool] = {"checkout": False}   # `cycle.game_designer`, see DEFAULTS
+REVIEW_TESTS_DEFAULTS: dict[str, bool] = {"skip_for_docs": False}   # `cycle.review_tests`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -99,7 +100,10 @@ DEFAULTS: dict[str, Any] = {
               "measure": dict(MEASURE_DEFAULTS),
               # the game designer's run (26.11, rework slice 12): `checkout` true = a read-only checkout of the base branch is
               # its working folder and it has Read / Glob / Grep; off = no tools, an empty folder, documents in the prompt only
-              "game_designer": dict(GAME_DESIGNER_DEFAULTS)},
+              "game_designer": dict(GAME_DESIGNER_DEFAULTS),
+              # the test step before a review (27.11): `skip_for_docs` true = a commit that changes documents only is reviewed
+              # without running the tests and without a play-test server; off by default
+              "review_tests": dict(REVIEW_TESTS_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -546,6 +550,11 @@ class Product:
     def game_designer_cfg(self) -> dict[str, bool]:
         """`cycle.game_designer` (rework slice 12): {checkout}, off by default."""
         return self.switches("game_designer", GAME_DESIGNER_DEFAULTS)
+
+    @property
+    def review_tests_cfg(self) -> dict[str, bool]:
+        """`cycle.review_tests` (27.11): {skip_for_docs}, off by default."""
+        return self.switches("review_tests", REVIEW_TESTS_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
