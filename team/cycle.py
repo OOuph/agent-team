@@ -36,6 +36,7 @@ from .store import Store, parse_ts, utcnow
 from . import runprofile                                  # own lines: the import lists above are edited by other branches
 from .runner import KILLED_LOOP, killed_kind
 from . import canary as canary_mod
+from . import nodecache
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -220,7 +221,8 @@ def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
     return gone
 
 
-def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None, full_log: Path | None = None) -> str:
+def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None, full_log: Path | None = None,
+                         prepare: Any = None) -> str:
     """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
     environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
     `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files. `lock`: the
@@ -236,7 +238,8 @@ def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "
     gitops.git(dest, "checkout", "--quiet", "--detach", sha)
     gitops.git(dest, "remote", "remove", "origin", check=False)
     if test_cmd:
-        cmds = [test_cmd]
+        # `prepare(dest)` (27.11, team/nodecache.py): True = the copy got a ready node_modules, so the command runs without its install
+        cmds = [nodecache.strip_install(test_cmd) if prepare is not None and prepare(dest) else test_cmd]
     else:
         dirs = sorted({p.relative_to(dest).parts[0] for p in dest.rglob("test_*.py")
                        if ".git" not in p.parts and len(p.relative_to(dest).parts) > 1})
@@ -936,7 +939,7 @@ class Cycle:
                         raise DocsOnly()
                     # the whole output is kept beside the review's evidence: this run, not the one in `start_playtest`, is
                     # the one a game task gets (26.11: `team-play unit` found nothing on the first live reviews)
-                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock,
+                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
                                                  full_log=self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
                 except DocsOnly:
                     tests = DOCS_ONLY_TESTS_NOTE
@@ -1156,11 +1159,12 @@ class Cycle:
         unit_log = out_dir / UNIT_LOG_NAME
         if not tests:
             try:
-                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, full_log=unit_log)
+                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, full_log=unit_log)
             except Exception as e:  # noqa: BLE001
                 tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         try:
-            server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock, **({"force_local": True} if force_local else {}))
+            server = playtest.start(self.p, self.p.repo_dir, sha, work, lock=self.repo_lock, **({"force_local": True} if force_local else {}),
+                                    **({"prepare": self.seed_node_modules} if self.p.node_cache_cfg["enabled"] else {}))
         except (playtest.PlaytestError, gitops.GitError, OSError) as exc:
             reason = str(exc)[:1500]
             log.warning("%s: play-test server for %s not started: %s", self.p.slug, t["id"], reason[:200])
@@ -1921,6 +1925,15 @@ class Cycle:
             self.store.event("workdir.swept", self.p.slug, "dispatcher", {"folders": len(swept), "removed": removed, "freed_mb": round(freed_mb)})
         return swept
 
+    def seed_node_modules(self, checkout: Path) -> bool:
+        """`cycle.node_cache.enabled`: give the checkout the node_modules of its lock file from the cache (built on the first
+        use: `repo.install_cmd`, else `npm ci`). True = it is there and the commands may skip their install. Never raises."""
+        if not self.p.node_cache_cfg["enabled"] or self.dry_run:
+            return False
+        env = {k: v for k, v in os.environ.items() if not k.startswith(SECRET_ENV_PREFIXES)}
+        return nodecache.seed(self.st.data_dir / "cache" / "node_modules", self.p.slug, Path(checkout),
+                              str((self.p.raw.get("repo") or {}).get("install_cmd") or ""), env)
+
     def task_checkout(self, t: dict[str, Any], start_point: str | None = None) -> tuple[Path, str]:
         """The task's own checkout and its branch (created, reused, or taken over from the layout before 21.11, where
         `task/<id>` was checked out in the clone itself). Under the repository lock: it fetches and may move the clone."""
@@ -1928,6 +1941,7 @@ class Cycle:
         with self.repo_lock:
             fresh = not wt.exists()
             branch = gitops.start_task_worktree(self.p.repo_dir, wt, t["id"], self.p.repo_branch, start_point=start_point)
+        self.seed_node_modules(wt)                    # 27.11: a ready node_modules instead of the role's own `npm ci` (no-op when off or present)
         if fresh:
             self.store.event("worktree.created", t["id"], "dispatcher", {"path": str(wt), "branch": branch,
                                                                          "ahead": gitops.commits_ahead(wt, self.p.repo_branch)})
@@ -2752,7 +2766,7 @@ class Cycle:
             # minutes); documents (.md) are merged as before.
             data = [str(f["path"]) for f in files if str(f["path"]).lower().endswith(DESIGN_TEST_SUFFIXES)]
             if data and self.p.test_cmd and not self.dry_run:
-                report = run_tests_for_review(repo, result["commit"], work / "tests-pre-merge", self.p.test_cmd, lock=self.repo_lock)
+                report = run_tests_for_review(repo, result["commit"], work / "tests-pre-merge", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules)
                 if not tests_passed(report):
                     tail = _short_text(report[-DESIGN_TESTS_TAIL_CHARS:], DESIGN_TESTS_TAIL_CHARS)
                     log.warning("%s: %s: tests fail with the game designer's data change %s: not merged", self.p.slug, t["id"], data)

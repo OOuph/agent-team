@@ -35,6 +35,7 @@ ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.a
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
 GAME_DESIGNER_DEFAULTS: dict[str, bool] = {"checkout": False}   # `cycle.game_designer`, see DEFAULTS
 REVIEW_TESTS_DEFAULTS: dict[str, bool] = {"skip_for_docs": False}   # `cycle.review_tests`, see DEFAULTS
+NODE_CACHE_DEFAULTS: dict[str, bool] = {"enabled": False}   # `cycle.node_cache`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
@@ -103,7 +104,10 @@ DEFAULTS: dict[str, Any] = {
               "game_designer": dict(GAME_DESIGNER_DEFAULTS),
               # the test step before a review (27.11): `skip_for_docs` true = a commit that changes documents only is reviewed
               # without running the tests and without a play-test server; off by default
-              "review_tests": dict(REVIEW_TESTS_DEFAULTS)},
+              "review_tests": dict(REVIEW_TESTS_DEFAULTS),
+              # a ready node_modules per lock file (27.11, team/nodecache.py): `enabled` true = a checkout without node_modules gets
+              # a copy from the cache and the commands run without their `npm ci`; off by default
+              "node_cache": dict(NODE_CACHE_DEFAULTS)},
     "publish": {"disclosure": {"default": "AI agent - formachines.ai"}, "max_posts_per_channel_per_day": 2,
                 "channel_caps": {}, "dry_run": False},
     "deploy": {"mode": "git_pull", "droplet_host": "root@68.183.2.193"},
@@ -555,6 +559,11 @@ class Product:
     def review_tests_cfg(self) -> dict[str, bool]:
         """`cycle.review_tests` (27.11): {skip_for_docs}, off by default."""
         return self.switches("review_tests", REVIEW_TESTS_DEFAULTS)
+
+    @property
+    def node_cache_cfg(self) -> dict[str, bool]:
+        """`cycle.node_cache` (27.11): {enabled}, off by default."""
+        return self.switches("node_cache", NODE_CACHE_DEFAULTS)
 
     # --- cadence (owner 20.11, friction F12): how often the product's cycle runs --------------------------------------
 
