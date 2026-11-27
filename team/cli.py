@@ -371,6 +371,43 @@ def _move_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) ->
         time.sleep(min(MOVE_POLL_S, max(0.05, deadline - time.monotonic())))
 
 
+def _prio_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) -> int:
+    """`team task <product> prio --id T-… --priority P1 [--by …] [--note …] [--wait-s N]`: change the priority of a task
+    beside a running cycle. 27.11: the operator raised ten tasks by editing their files — a lane that holds its own copy
+    of a task writes it back and the edit is gone, and a half-written file can be read in between. Here: one short section
+    under the store lock, refused (exit 75) while a lane of the running cycle works on this very task, with a line in the
+    task's history and an event."""
+    from . import locks
+    if not a.id or not a.priority:
+        print("team task prio: --id and --priority (P0..P3) are needed", file=sys.stderr)
+        return 2
+    deadline = time.monotonic() + max(0.0, float(a.wait_s or 0.0))
+    while True:
+        with s.lock:
+            t = s.task(a.id)
+            if t is None:
+                print(f"{a.id}: not found", file=sys.stderr)
+                return 2
+            lane = s.working_lane(a.id) if locks.product_busy(st, p.slug) else None
+            if lane is None:
+                old = t.get("priority")
+                if old == a.priority:
+                    print(f"{a.id} is {old} already")
+                    return 0
+                t["priority"] = a.priority
+                t.setdefault("history", []).append({"ts": datetime.now(timezone.utc).isoformat(timespec="seconds"), "actor": a.by, "from": t.get("state"),
+                                                    "to": t.get("state"), "note": f"priority {old} → {a.priority}" + (f": {a.note}" if a.note else "")})
+                s.save_task(t)
+                s.event("task.priority", a.id, a.by, {"from": old, "to": a.priority, "note": (a.note or "")[:200]})
+                log.info("task prio %s %s: %s → %s by %s", p.slug, a.id, old, a.priority, a.by)
+                print(f"{a.id}: {old} → {a.priority}")
+                return 0
+        if time.monotonic() >= deadline:
+            print(f"{a.id}: not changed — lane {lane} of the running cycle is working on it; try again when it ends, or add --wait-s N", file=sys.stderr)
+            return locks.EX_TEMPFAIL
+        time.sleep(min(MOVE_POLL_S, max(0.05, deadline - time.monotonic())))
+
+
 def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
@@ -384,10 +421,12 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
             return 2
         a.role = role
         t = s.create_task(title=a.title, type_=a.type, problem=a.problem or a.title, scope=a.scope or "", acceptance=a.acceptance or [],
-                          goal=a.goal or "G1", created_by=a.by, priority=a.priority, role=a.role, state="ready" if a.ready else "proposed")
+                          goal=a.goal or "G1", created_by=a.by, priority=a.priority or "P2", role=a.role, state="ready" if a.ready else "proposed")
         print(t["id"])
     elif a.action == "move":
         rc = _move_task(st, p, s, a)
+    elif a.action == "prio":
+        rc = _prio_task(st, p, s, a)
     elif a.action == "show":
         t = s.task(a.id)
         print(yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=110) if t else "not found")
@@ -610,10 +649,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true"); s.add_argument("--due", action="store_true"); s.set_defaults(fn=cmd_cycle)
     s = sub.add_parser("status"); s.add_argument("product", nargs="?", default="all"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("tasks"); s.add_argument("product"); s.add_argument("--state", choices=TASK_STATES); s.set_defaults(fn=cmd_tasks)
-    s = sub.add_parser("task"); s.add_argument("product"); s.add_argument("action", choices=["new", "move", "show"])
+    s = sub.add_parser("task"); s.add_argument("product"); s.add_argument("action", choices=["new", "move", "show", "prio"])
     s.add_argument("--id"); s.add_argument("--to", choices=TASK_STATES); s.add_argument("--note"); s.add_argument("--force", action="store_true")
     s.add_argument("--title"); s.add_argument("--type", default="feature"); s.add_argument("--problem"); s.add_argument("--scope")
-    s.add_argument("--acceptance", action="append"); s.add_argument("--goal"); s.add_argument("--priority", default="P2")
+    s.add_argument("--acceptance", action="append"); s.add_argument("--goal"); s.add_argument("--priority", choices=["P0", "P1", "P2", "P3"])
     s.add_argument("--role", default="developer"); s.add_argument("--ready", action="store_true"); s.add_argument("--by", default="owner")
     s.add_argument("--wait-s", dest="wait_s", type=float, default=0.0)      # move: wait this long for a lane of the running cycle to let go of the task
     s.set_defaults(fn=cmd_task)
