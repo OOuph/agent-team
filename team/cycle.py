@@ -333,6 +333,8 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._po_lock = threading.RLock()                      # one PO run at a time (the triage phase and `cut_after_design`)
+        self._cuts = 0                                         # PO runs made inside this execute phase for merged documents
         self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
         self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
         self._exec_ready = False                               # `execute_prepare` ran in this cycle
@@ -1293,17 +1295,49 @@ class Cycle:
             created.append(standing.create_task(self.p, self.store, d, cycle_id=self.cycle_id)["id"])
         return created
 
-    def phase_triage(self) -> None:
+    CUT_MAX_PER_CYCLE = 2                 # `cycle.queue.cut_on_design`: PO runs inside one execute phase for merged documents
+
+    def cut_after_design(self, t: dict[str, Any]) -> None:
+        """`cycle.queue.cut_on_design` (27.11): a design document was merged inside the execute phase — the PO runs now, in
+        this lane, instead of in the triage of the next cycle; what it cuts is `ready` at once and a seat with refill takes
+        it in this cycle. At most CUT_MAX_PER_CYCLE such runs per cycle; never raises."""
+        if not self.p.queue_cfg["cut_on_design"] or self.dry_run:
+            return
+        if str(t.get("type") or "") != "design" and str(t.get("role") or "") not in ("game-designer", "designer"):
+            return
+        if t.get("state") not in ("released", "accepted"):
+            return
+        with self._seat_lock:
+            if self._cuts >= self.CUT_MAX_PER_CYCLE:
+                return
+            self._cuts += 1
+        try:
+            before = {x["id"] for x in self.store.tasks()}
+            self.phase_triage(cut_for=t)
+            created = len({x["id"] for x in self.store.tasks()} - before)
+            self.store.event("triage.cut", t["id"], "dispatcher", {"created": created})
+            log.info("%s: %s (a design document) was merged: the PO ran at once and created %d task(s)", self.p.slug, t["id"], created)
+        except Exception as exc:  # noqa: BLE001 — the next cycle's triage reads the same observations
+            log.exception("%s: PO run after the merged document %s failed: %s", self.p.slug, t["id"], exc)
+
+    def phase_triage(self, cut_for: dict[str, Any] | None = None) -> None:
+        """The PO's run. `cut_for`: a design task merged a moment ago (`cut_after_design`) — the run is not skipped, the
+        prompt names the document, and the steps that belong to the start of a cycle are left out. One PO run at a time."""
+        with self._po_lock:
+            self._triage(cut_for)
+
+    def _triage(self, cut_for: dict[str, Any] | None = None) -> None:
         from . import deputy
-        try:
-            self.create_standing_tasks()          # before the PO reads the backlog: it sees the new tasks, not a gap to fill
-        except Exception as exc:  # noqa: BLE001 — a bad `standing:` entry must not cost the product its triage
-            log.exception("%s: standing directions failed: %s", self.p.slug, exc)
-            self.store.event("standing.error", self.p.slug, "dispatcher", str(exc)[:300])
-        try:
-            deputy.run_for_product(self)          # owner away: answer owner questions by mandate before the PO reads them
-        except Exception as exc:  # noqa: BLE001
-            log.exception("%s: deputy failed: %s", self.p.slug, exc)
+        if cut_for is None:
+            try:
+                self.create_standing_tasks()      # before the PO reads the backlog: it sees the new tasks, not a gap to fill
+            except Exception as exc:  # noqa: BLE001 — a bad `standing:` entry must not cost the product its triage
+                log.exception("%s: standing directions failed: %s", self.p.slug, exc)
+                self.store.event("standing.error", self.p.slug, "dispatcher", str(exc)[:300])
+            try:
+                deputy.run_for_product(self)      # owner away: answer owner questions by mandate before the PO reads them
+            except Exception as exc:  # noqa: BLE001
+                log.exception("%s: deputy failed: %s", self.p.slug, exc)
         with self.store.lock:                     # review lanes may be writing tasks beside the triage
             self.hand_over_readouts()
             self.settle_replans()
@@ -1318,7 +1352,7 @@ class Cycle:
         queue = self.ready_queue() if qcfg["ahead"] else {}
         low = {r: n for r, (n, seats) in queue.items() if n < int(qcfg["target_ready"])}
         queue_wake = bool(low) and not idle and self.queue_wake_due()
-        if not new_obs and not qs and not idle and not dev_wake and not stuck_md and not queue_wake:
+        if cut_for is None and not new_obs and not qs and not idle and not dev_wake and not stuck_md and not queue_wake:
             log.info("%s: triage skipped (nothing new, team busy)", self.p.slug)
             return
         max_ready = int(qcfg["max_per_run"]) if qcfg["ahead"] else int(self.st.cycle.get("max_ready", 3))
@@ -1330,7 +1364,13 @@ class Cycle:
                           f"of the owner's approved plan now, in the order they should be done — up to {max_ready} in this run. Each must be able to "
                           "run beside the others (different files or screens; name `depends_on` where the order matters). Do not invent work to "
                           "fill the queue: when nothing more is certainly needed, propose fewer and say so in the digest.")
-        if queue_wake:
+        if cut_for is not None:
+            changes = ", ".join(str(c) for c in ((cut_for.get("results") or [{}])[-1].get("changes") or [])[:8])
+            queue_md = ((queue_md + "\n\n") if queue_md else "") + (
+                f"# JUST MERGED\nThe design task {cut_for['id']} «{_short_text(cut_for.get('title'), 100)}» was merged a moment ago"
+                + (f" ({changes})" if changes else "") + ". Its proposals are among NEW OBSERVATIONS. Cut the tasks it calls for NOW, in the "
+                "order they depend on each other: the seats are working and take them in this cycle. Decide the other observations as usual.")
+        if queue_wake and cut_for is None:
             self.mark_queue_wake()
             self.store.event("queue.low", self.cycle_id, "dispatcher", {"low": low, "target": qcfg["target_ready"]})
             log.info("%s: the ready queue is low (%s; target %s): the PO is woken to cut ahead", self.p.slug,
@@ -1350,7 +1390,8 @@ class Cycle:
         po_schema = schema("po-decision")
         if max_ready > int(po_schema["properties"]["ready_tasks"].get("maxItems") or 0):
             po_schema["properties"]["ready_tasks"]["maxItems"] = max_ready      # the schema's own limit is the default of three
-        rr = self.role_run("po", prompt, "po-decision", cwd=work, label="po", cap=2.0, allowed_tools=[], max_turns=8, schema_obj=po_schema)
+        label = "po" if cut_for is None else f"po-after-{cut_for['id']}"
+        rr = self.role_run("po", prompt, "po-decision", cwd=work, label=label, cap=2.0, allowed_tools=[], max_turns=8, schema_obj=po_schema)
         if rr is not None:                                       # a run profile written while the PO ran is shown to it next time
             self.store.event(runprofile.PO_SEEN_EVENT, self.cycle_id, "dispatcher", {"upto": seen_upto})
         if rr is None or not (rr.ok and rr.structured):
@@ -1893,6 +1934,8 @@ class Cycle:
                             verdict = self.startable(t)
                             if verdict:
                                 ok = bool(self.execute_task(t))
+                                if ok:
+                                    self.cut_after_design(self.store.task(t["id"]) or t)
                             else:
                                 why = self.why_not_startable(t)
                                 if why:           # the quiet refusals: until 26.11 the lane ended here without a word

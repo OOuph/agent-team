@@ -29,6 +29,7 @@ QUEUE_DEFAULTS: dict[str, Any] = {
     "target_ready": 6,            # ready tasks of a role with seats below which the PO is woken (1..50)
     "max_per_run": 6,             # Ready tasks the PO may propose in one run while `ahead` is on (1..12; off: cycle.max_ready)
     "wake_every_min": 30,         # the PO is not woken for a low queue more often than this (5..1440)
+    "cut_on_design": False,       # true = the PO runs as soon as a design document is merged inside the execute phase (27.11)
 }
 _QUEUE_RANGE = {"target_ready": (1, 50), "max_per_run": (1, 12), "wake_every_min": (5, 1440)}
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
@@ -527,11 +528,11 @@ class Product:
                     log.warning("%s: cycle.queue=%r is not a mapping — ignored", where, src)
                 continue
             for k, v in src.items():
-                if k == "ahead":
+                if k in ("ahead", "cut_on_design"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
-                        log.warning("%s: cycle.queue.ahead=%r is not true/false — %s in use", where, v, out[k])
+                        log.warning("%s: cycle.queue.%s=%r is not true/false — %s in use", where, k, v, out[k])
                 elif k in _QUEUE_RANGE:
                     lo, hi = _QUEUE_RANGE[k]
                     if isinstance(v, int) and not isinstance(v, bool) and lo <= v <= hi:
