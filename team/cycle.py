@@ -333,6 +333,7 @@ class Cycle:
         self._refill_closed: str | None = None                # why refill ended early in this cycle (logged once)
         self.canary_report: Path | None = None                # the report of this cycle's canary run (team/canary.py)
         self.canary_started: str | None = None                # ISO time the release that ran it began
+        self._handled: dict[str, int] = {}                     # task → times a lane of this cycle ran it (`cycle.flow.retake`; under `_seat_lock`)
         self._early_lanes = 0                                  # seat lanes started before the first phase (`start_early_execute`)
         self._exec_ready = False                               # `execute_prepare` ran in this cycle
         self._exec_slots: dict[str, int] = {}                  # seats of this cycle (`execute_slots`)
@@ -606,11 +607,21 @@ class Cycle:
         another lane unblocked included — in the order of `execute_candidates`. Never a task a lane of this cycle has
         taken or is working on. Called under `_seat_lock`."""
         for t in self.execute_candidates():
-            if t["id"] in seen or t["id"] in self._taken or self.lanes.busy(t["id"]):
+            if (t["id"] in seen and not self.retake_ok(t)) or t["id"] in self._taken or self.lanes.busy(t["id"]):
                 continue
             if self.seat_key(str(t.get("role") or "developer"), slots) == key:
+                if t["id"] in seen:
+                    self.store.event("flow.retake", t["id"], "dispatcher", {"n": self._handled.get(t["id"], 0)})
+                    log.info("%s: %s is ready again inside the cycle: taken once more (run %d of this cycle)", self.p.slug, t["id"],
+                             self._handled.get(t["id"], 0) + 1)
                 return t
         return None
+
+    def retake_ok(self, t: dict[str, Any]) -> bool:
+        """`cycle.flow.retake` (27.11): may a task a lane of this cycle has already dealt with be taken again? Only when it
+        is `ready` now — its question was answered, or its run failed and it came back — and it ran fewer than
+        1 + `retake_max` times in this cycle. Without the switch: never, as before («one handling per task and cycle»)."""
+        return bool(self.flow.retake and t.get("state") == "ready" and 0 < self._handled.get(t["id"], 0) <= self.flow.retake_max)
 
     def work_waiting(self) -> list[str]:
         """Tasks an execute phase starting now could take: ready or in progress, the role has a seat, not scheduled for
@@ -1578,7 +1589,7 @@ class Cycle:
         groups: dict[str, list[dict[str, Any]]] = {}
         for t in self.execute_candidates():
             key = self.seat_key(str(t.get("role") or "developer"), slots)
-            if key is None or t["id"] in seen or self.lanes.busy(t["id"]):
+            if key is None or (t["id"] in seen and not self.retake_ok(t)) or self.lanes.busy(t["id"]):
                 continue
             with self._seat_lock:
                 if t["id"] in self._taken:
@@ -1901,6 +1912,10 @@ class Cycle:
                         self._not_done.add(t["id"])
                     if verdict is not None:      # None = waits for a dependency: a later pass of this cycle may start it
                         seen.add(t["id"])
+                    if verdict:
+                        self._handled[t["id"]] = self._handled.get(t["id"], 0) + 1
+                    if self.flow.retake:
+                        self._taken.discard(t["id"])     # no lane holds it now; `seen` and `retake_ok` decide whether it may run again
                 if verdict and not healthy:
                     started = run_ok is not None
                     err = getattr(self._tl, "run_error", None)
