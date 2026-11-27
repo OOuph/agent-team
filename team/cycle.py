@@ -515,7 +515,6 @@ class Cycle:
             self.store.event("cycle.stopped", self.cycle_id, "dispatcher", reason)
             return {"stopped": reason}
         t0 = time.time()
-        spent0 = self.store.spent_today()
         log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
         self._in_run = True
         try:
@@ -534,7 +533,7 @@ class Cycle:
             self.finish_lanes()
             self._in_run = False
         self.phases_done = [ph for ph in self.phases_done if ph not in self._failed_phases]      # a phase whose lane raised did not finish
-        spent = self.store.spent_today() - spent0
+        spent = self.store.spent_by_cycle(self.cycle_id)        # the cycle's own runs, not a difference of two days' totals
         self.store.cycle_finish(self.cycle_id, self.phases_done, round(spent, 4))
         peak = self.lanes.gate.peak
         log.info("%s cycle %s: phases %s, runs %d, spent $%.2f, %.0fs%s%s", self.p.slug, self.cycle_id, self.phases_done, self.n_runs, spent,
