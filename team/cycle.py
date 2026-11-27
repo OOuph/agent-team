@@ -152,6 +152,15 @@ GD_CHECKOUT_PROMPT = (
     "Glob and Grep: open the files the task names before you write — the documents above are only the ones the dispatcher always "
     "attaches. Files the task names that exist here: {named}. You still change nothing yourself: return complete documents in "
     "`files`, as before. Return `missing` only for what is neither in the prompt nor in this checkout.\n")
+DOC_SUFFIXES = (".md", ".txt")             # `cycle.review_tests.skip_for_docs`: a commit of only such files is a document change
+DOCS_ONLY_TESTS_NOTE = ("(not run: this commit changes documents only — " + ", ".join(DOC_SUFFIXES) + " files; judge the criteria by reading "
+                        "the documents in the checkout)")
+
+
+class DocsOnly(Exception):
+    """Raised inside `review_task` to step over the test run of a document-only commit."""
+
+
 REVIEW_TEST_OUTPUT_CHARS = 6000
 UNIT_LOG_NAME = "unit-tests.log"           # the whole output of the dispatcher's test run, in the review folder (`team-play unit`)
 TESTER_BASH_SLACK_S = 120   # over team-play's lock wait + run limits, for its own start and the teardown
@@ -914,13 +923,23 @@ class Cycle:
                 t["repo_only"] = True                # T-0017: nothing on the live site to check → read-only checkout (also: no site at all yet, game profile before deploy)
                 self.store.save_task(t)
         pre_merge = bool(t.get(PRE_MERGE))            # rework slice 5: the commit is on the task branch only — nothing of it is live
-        if (t.get("repo_only") or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
+        # 27.11: a commit that changes documents only needs no test run and no play-test server (ai-battles T-0602: 6.5 minutes
+        # of `npm ci` and unit tests for one GDD text, 9 seconds of the reviewer); the reviewer reads the checkout
+        docs_only = bool(sha) and self.p.review_tests_cfg["skip_for_docs"] and self.docs_only_change(str(sha), pre_merge)
+        if docs_only:
+            self.store.event("review.tests_skipped", t["id"], "dispatcher", {"sha": str(sha)[:12]})
+            log.info("%s: %s: the reviewed commit changes documents only — no test run, no play-test", self.p.slug, t["id"])
+        if (t.get("repo_only") or docs_only or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
             try:
                 try:
+                    if docs_only:
+                        raise DocsOnly()
                     # the whole output is kept beside the review's evidence: this run, not the one in `start_playtest`, is
                     # the one a game task gets (26.11: `team-play unit` found nothing on the first live reviews)
                     tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock,
                                                  full_log=self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
+                except DocsOnly:
+                    tests = DOCS_ONLY_TESTS_NOTE
                 except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
                     tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
                 tests_out = tests
@@ -933,7 +952,7 @@ class Cycle:
                 work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         role, schema_name, cap, turns = "reviewer", "review-verdict", 1.0, 30
         server = None
-        if self.playtest_due(t) and sha:
+        if self.playtest_due(t) and sha and not docs_only:
             server, prompt, tools, env = self.start_playtest(t, result, sha, prompt, tests_out, force_local=pre_merge)
             if server is not None:
                 role, schema_name, cap, turns = "tester", "test-report", TESTER_CAP_USD, TESTER_MAX_TURNS
@@ -983,6 +1002,22 @@ class Cycle:
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the review its verdict
             log.warning("%s: %s: review working directories not removed: %s", self.p.slug, task_id, str(exc)[:300])
         return gone
+
+    def docs_only_change(self, sha: str, pre_merge: bool) -> bool:
+        """Does the reviewed commit change documents only (`DOC_SUFFIXES`)? A merged task: the merge commit against its
+        first parent; a task reviewed before the merge: its branch head against the base branch. Any doubt — no files,
+        an unknown commit, a git error — is «no»: the tests run."""
+        try:
+            repo = self.p.repo_dir
+            if pre_merge:
+                ref = f"origin/{self.p.repo_branch}" if gitops.has_remote(repo) else self.p.repo_branch
+                out = gitops.git(repo, "diff", "--name-only", f"{ref}...{sha}")
+            else:
+                out = gitops.git(repo, "diff", "--name-only", f"{sha}^1", sha)
+        except (gitops.GitError, OSError):
+            return False
+        files = [ln.strip() for ln in out.splitlines() if ln.strip()]
+        return bool(files) and all(f.lower().endswith(DOC_SUFFIXES) for f in files)
 
     def apply_review(self, t: dict[str, Any], rr: RunResult) -> str | None:
         """The verdict of a finished review run → the store. `t` is the task as it is NOW (read after the run).
