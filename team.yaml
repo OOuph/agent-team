@@ -135,6 +135,7 @@ cycle:
     refill_keep_on_failure: false # true = a run that failed for its own reason (its cap, the time limit) does not close refill;
                                   # an outage or three failed runs in a cycle still do
     refill_while_running: false   # true = past refill_min refill stays open while another execute seat is still at work
+    early_execute: false          # true = the seats start on the tasks ready at the START of the cycle, beside collect and the PO
     chain: false                  # true = `team cycle --due` starts the next cycle right after one that carried a task through, while
                                   # startable work waits (no 5–10 min pause until cron looks again)
     chain_max: 6                  # cycles of one product in one process; then cron and cycle.every_min decide
