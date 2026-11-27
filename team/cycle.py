@@ -52,6 +52,14 @@ REVIEW_ASKS_MAX = 2                                       # `cycle.escalation.re
 BLOCKED_LIST_AFTER_H = 2.0                                # … and a task `blocked` this long with no open question bound to it is listed for the PO
 BLOCKED_LIST_MAX = 12                                     # … at most this many, oldest first
 LEFT_EVENT_MAX = 80                                       # `record_left`: tasks named in one `execute.left` event
+HEAVY_RUNS_PROMPT = ("\n\n# HEAVY RUNS ARE NOT STARTED FROM THIS RUN (the team's server is shared with every other run)\n"
+                     "These commands are denied to you here; do not look for another way to start the same work:\n{rules}\n"
+                     "If the task cannot be finished without such a run — a load test, a simulation of hundreds of battles — finish "
+                     "everything else, then report `needs_context` (or `partial`) and name the exact command, how long it runs and what "
+                     "its output must show: the operator starts it when the server is free and the result comes back to this task.\n")
+SUITE_CACHE_KEEP = 30                                     # `cycle.review_tests.once_per_batch`: results of the suite kept per product
+SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main branch that contains this task's commit {sha}; "
+              "its result stands for every task merged up to it)\n")
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
@@ -351,6 +359,7 @@ class Cycle:
         self._drain_said = False
         self._budget_out = ""                                  # `cycle.guards.budget_halt`: why the seats stopped taking tasks ("" = they have not)
         self.picks: dict[str, int] = {}                        # task → times a seat lane took it in this cycle (under `_seat_lock`)
+        self._suite_lock = threading.Lock()                    # `batch_suite`: one run of the suite on a head at a time
         self._start_lock = threading.Lock()                    # `start_idle_seats`: one lane at a time looks for a seat without a lane
         self._dep_merged = merged_counts(product.dependencies_cfg)      # `cycle.dependencies.at_merge`: None = a dependency must be accepted
         self._retaken: dict[str, int] = {}                     # task → times it was picked again in this cycle (`retake_ok`; under `_seat_lock`)
@@ -420,6 +429,13 @@ class Cycle:
 
     # ------------------------------------------------------------ one role run
 
+    def heavy_deny(self, role: str) -> list[str]:
+        """`cycle.heavy_runs`: the permission rules this role's run is started with as denied ([] = none)."""
+        cfg = self.p.heavy_runs_cfg
+        if not cfg["deny"] or (cfg["roles"] and role not in cfg["roles"]):
+            return []
+        return list(cfg["deny"])
+
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
                  max_turns: int | None = None, model: str | None = None, schema_obj: dict[str, Any] | None = None) -> RunResult | None:
@@ -476,6 +492,9 @@ class Cycle:
         rr: RunResult | None = None
         cost = 0.0
         try:
+            deny = self.heavy_deny(role)
+            if deny:
+                prompt += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in deny))
             rd = self.run_dir / label
             rd.mkdir(parents=True, exist_ok=True)
             (rd / "prompt.md").write_text(prompt, encoding="utf-8")
@@ -489,7 +508,7 @@ class Cycle:
                          limits["source"]["timeout_s"], limits["inactivity_s"], limits["source"]["inactivity_s"])
                 rr = self.runner.run(role, prompt, schema_obj or (schema(schema_name) if schema_name else None), max_usd=cap, cwd=cwd, model=str(model) if model else None,
                                      allowed_tools=allowed_tools, env_extra=env, run_dir=rd, run_id=run_id, max_turns=max_turns,
-                                     timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]),
+                                     timeout_s=int(limits["timeout_s"]), inactivity_s=int(limits["inactivity_s"]), **({"disallowed_tools": deny} if deny else {}),
                                      **({"loop_repeats": int(guards["loop_repeats"])} if guards["loop"] else {}))
         finally:
             with self._budget_lock:                                       # the spend is booked and the reservation dropped in one step
@@ -985,7 +1004,7 @@ class Cycle:
                 continue
             # Parallel cycle: one lane per task — the reviews overlap each other, the PO's triage and the execute phase
             # (which joins them). Sequential cycle: the review runs here and now, one after another, as before.
-            self.lanes.submit("review", LANE_REVIEW, f"review-{t['id']}", self.review_task, t, task_id=t["id"])
+            self.lanes.submit("review", LANE_REVIEW, f"review-{t['id']}", self.review_task, t, task_id=t["id"], outside=self.light_review(t))
         if not self._in_run:
             self.finish_lanes()                   # called on its own: the reviews are done when the phase returns
 
@@ -1018,8 +1037,7 @@ class Cycle:
                         raise DocsOnly()
                     # the whole output is kept beside the review's evidence: this run, not the one in `start_playtest`, is
                     # the one a game task gets (26.11: `team-play unit` found nothing on the first live reviews)
-                    tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(),
-                                                 full_log=self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
+                    tests = self.review_tests(t, sha, work / "tests-run", self.p.dir / "reviews" / t["id"] / UNIT_LOG_NAME)
                 except DocsOnly:
                     tests = DOCS_ONLY_TESTS_NOTE
                 except Exception as e:  # noqa: BLE001 — the review still runs on the checkout, with the reason
@@ -1084,6 +1102,91 @@ class Cycle:
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the review its verdict
             log.warning("%s: %s: review working directories not removed: %s", self.p.slug, task_id, str(exc)[:300])
         return gone
+
+    def light_review(self, t: dict[str, Any]) -> bool:
+        """`cycle.review_tests.docs_outside_slots`: is this review a read of documents only — no tests, no server — so that
+        it may go beside the lanes without a run slot? Only with `skip_for_docs` (that is what makes it light)."""
+        cfg = self.p.review_tests_cfg
+        sha = t.get("released_sha")
+        if not (cfg["docs_outside_slots"] and cfg["skip_for_docs"] and sha) or self.dry_run:
+            return False
+        try:
+            return self.docs_only_change(str(sha), bool(t.get(PRE_MERGE)))
+        except Exception:  # noqa: BLE001 — any doubt: a slot, as before
+            return False
+
+    def review_tests(self, t: dict[str, Any], sha: str, dest: Path, full_log: Path | None = None) -> str:
+        """The tests before the review of task `t` at commit `sha`. As always: the repository's tests on that commit, in a
+        clone of their own. `cycle.review_tests.once_per_batch`: for a MERGED task, the result of the one run on the head
+        of the main branch, when that head contains `sha` and the run was green."""
+        if self.p.review_tests_cfg["once_per_batch"] and not t.get(PRE_MERGE) and not self.dry_run:
+            try:
+                shared = self.batch_suite(t, str(sha))
+            except Exception as exc:  # noqa: BLE001 — the task then gets its own run, as before
+                log.warning("%s: %s: the shared test run failed (%s) — the task gets its own", self.p.slug, t["id"], str(exc)[:200])
+                shared = None
+            if shared is not None:
+                if full_log is not None:
+                    try:
+                        full_log.parent.mkdir(parents=True, exist_ok=True)
+                        full_log.write_text(shared, encoding="utf-8")
+                    except OSError as exc:
+                        log.warning("full test output not kept in %s: %s", full_log, exc)
+                return shared
+        return run_tests_for_review(self.p.repo_dir, sha, dest, self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
+                                    timeout_s=self.review_tests_timeout(), full_log=full_log)
+
+    def batch_suite(self, t: dict[str, Any], sha: str) -> str | None:
+        """The report of the suite run on the head of the main branch, for a task whose commit is in that head — or None:
+        the commit is not in the head, or the head is RED. One run per head, whichever review asks first; the others wait
+        for it instead of each running the suite (they hold their slots meanwhile, but not the processor). The result is
+        kept on disk by commit, so the next cycle of a chain does not run it again.
+
+        A red head: nobody takes the shared result. Every task of the batch gets its own run on its own commit, exactly as
+        before the switch — the task whose commit turns the suite red is the one whose review reads the failures and sends
+        it back to its author; the tasks merged before it pass on their own green runs. The PO gets one observation per
+        red head."""
+        with self.repo_lock:
+            head = gitops.head(self.p.repo_dir)
+            inside = bool(head) and gitops.is_ancestor(self.p.repo_dir, sha, head)
+        if not inside:
+            return None
+        cache = self.st.data_dir / "cache" / "suite" / self.p.slug
+        f = cache / f"{head}.json"
+        with self._suite_lock:
+            rec = None
+            if f.exists():
+                try:
+                    rec = json.loads(f.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    rec = None
+            if rec is None:
+                t0 = time.time()
+                report = run_tests_for_review(self.p.repo_dir, head, self.p.work_dir / self.cycle_id / f"suite-{head[:12]}", self.p.test_cmd,
+                                              lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout())
+                rec = {"sha": head, "passed": tests_passed(report), "report": report, "at": utcnow(), "seconds": round(time.time() - t0, 1),
+                       "cycle": self.cycle_id, "for": t["id"]}
+                cache.mkdir(parents=True, exist_ok=True)
+                tmp = f.with_suffix(".tmp")
+                tmp.write_text(json.dumps(rec, ensure_ascii=False), encoding="utf-8")
+                tmp.replace(f)
+                for old_f in sorted(cache.glob("*.json"), key=lambda x: x.stat().st_mtime)[:-SUITE_CACHE_KEEP]:
+                    old_f.unlink(missing_ok=True)
+                self.store.event("review.suite_run", head[:12], "dispatcher", {"passed": rec["passed"], "seconds": rec["seconds"], "for": t["id"]})
+                log.info("%s: the suite ran once on the head %s for the reviews of this batch: %s in %.0fs", self.p.slug, head[:12],
+                         "green" if rec["passed"] else "RED", rec["seconds"])
+                if not rec["passed"]:
+                    self.store.add_observation({
+                        "title": f"The test suite is red on the main branch at {head[:10]}", "classification": "defect", "source": "dispatcher",
+                        "actual": "Every task merged up to this commit is now tested on its own commit, so its review names the one that broke "
+                                  "the suite and sends it back. Tail of the run:\n" + str(rec["report"])[-1200:],
+                        "fingerprint": f"suite-red-{head[:12]}", "run_id": f"{self.cycle_id}-suite"})
+        if not rec.get("passed"):
+            self.store.event("review.suite_red", t["id"], "dispatcher", {"head": head[:12]})
+            log.info("%s: %s: the suite is red on the head %s — the task is tested on its own commit %s", self.p.slug, t["id"], head[:12], sha[:12])
+            return None
+        self.store.event("review.suite_reused", t["id"], "dispatcher", {"head": head[:12], "sha": sha[:12]})
+        return SUITE_NOTE.format(head=head[:12], sha=sha[:12]) + str(rec["report"])
 
     def docs_only_change(self, sha: str, pre_merge: bool) -> bool:
         """Does the reviewed commit change documents only (`DOC_SUFFIXES`)? A merged task: the merge commit against its
@@ -1356,7 +1459,7 @@ class Cycle:
         unit_log = out_dir / UNIT_LOG_NAME
         if not tests:
             try:
-                tests = run_tests_for_review(self.p.repo_dir, sha, work / "tests-run", self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(), full_log=unit_log)
+                tests = self.review_tests(t, sha, work / "tests-run", unit_log)
             except Exception as e:  # noqa: BLE001
                 tests = f"(the dispatcher could not run the tests: {str(e)[:300]})"
         try:

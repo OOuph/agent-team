@@ -42,9 +42,19 @@ DEPENDENCIES_DEFAULTS: dict[str, Any] = {
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
 GAME_DESIGNER_DEFAULTS: dict[str, bool] = {"checkout": False}   # `cycle.game_designer`, see DEFAULTS
-REVIEW_TESTS_DEFAULTS: dict[str, bool] = {"skip_for_docs": False}   # `cycle.review_tests`, see DEFAULTS
+REVIEW_TESTS_DEFAULTS: dict[str, bool] = {
+    "skip_for_docs": False,
+    "once_per_batch": False,      # true = the test suite runs once on the head of the main branch and every review of a merged
+                                  # task whose commit is in that head takes its result (27.11: ~113 of 360 suite runs a day, each
+                                  # ~1000 CPU seconds, on a server at load 28–31 on 8 cores). A red head: every task gets its own run
+    "docs_outside_slots": False,  # true = the review of a commit that changes documents only takes no run slot (it is a 12-second
+                                  # read; 27.11 such reviews waited 19 minutes for a slot)
+}   # `cycle.review_tests`, see DEFAULTS
 NODE_CACHE_DEFAULTS: dict[str, bool] = {"enabled": False}   # `cycle.node_cache`, see DEFAULTS
 # `cycle.guards` (rework slice 4): what stops a run that goes wrong, beside the time limit and the inactivity watchdog
+# `cycle.heavy_runs` (27.11): commands a role's run must not start on the team's server — load tests, simulations of hundreds of
+# battles. `deny`: Claude Code permission rules, e.g. "Bash(npx tsx tests/load/*)"; `roles`: whose runs ([] = every role).
+HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "roles": []}
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
     "loop_repeats": 5,            # … after this many identical calls in a row (3..50)
@@ -123,6 +133,7 @@ DEFAULTS: dict[str, Any] = {
               # the test step before a review (27.11): `skip_for_docs` true = a commit that changes documents only is reviewed
               # without running the tests and without a play-test server; off by default
               "review_tests": dict(REVIEW_TESTS_DEFAULTS),
+              "heavy_runs": dict(HEAVY_RUNS_DEFAULTS),
               # a ready node_modules per lock file (27.11, team/nodecache.py): `enabled` true = a checkout without node_modules gets
               # a copy from the cache and the commands run without their `npm ci`; off by default
               "node_cache": dict(NODE_CACHE_DEFAULTS)},
@@ -555,6 +566,25 @@ class Product:
                         out[k] = [x.strip() for x in v if x.strip()]
                     else:
                         log.warning("%s: cycle.dependencies.roles=%r is not a list of role names — %s in use", where, v, out[k])
+        return out
+
+    @property
+    def heavy_runs_cfg(self) -> dict[str, list[str]]:
+        """`cycle.heavy_runs`: this product's block replaces team.yaml's, list by list; anything that is not a list of
+        strings is ignored with a warning."""
+        out: dict[str, list[str]] = {"deny": [], "roles": []}
+        own = self.raw.get("cycle")
+        for where, src in (("team.yaml", self.st.cycle.get("heavy_runs")), (f"{self.slug} product.yaml", own.get("heavy_runs") if isinstance(own, dict) else None)):
+            if not isinstance(src, dict):
+                continue
+            for k in ("deny", "roles"):
+                v = src.get(k)
+                if v is None:
+                    continue
+                if isinstance(v, list) and all(isinstance(x, str) and x.strip() for x in v):
+                    out[k] = [x.strip() for x in v]
+                else:
+                    log.warning("%s: cycle.heavy_runs.%s=%r is not a list of strings — ignored", where, k, v)
         return out
 
     @property

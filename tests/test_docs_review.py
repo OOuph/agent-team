@@ -67,7 +67,7 @@ def _count_tests(monkeypatch) -> list:
 
 def test_off_the_tests_run_for_a_document_as_before(tmp_path: Path, monkeypatch):
     st, p, tid = _setup(tmp_path, False, {"design/gdd/21-3.md": "# Rulings\n"})
-    assert C.DEFAULTS["cycle"]["review_tests"] == {"skip_for_docs": False}
+    assert C.DEFAULTS["cycle"]["review_tests"] == {"skip_for_docs": False, "once_per_batch": False, "docs_outside_slots": False}
     ran = _count_tests(monkeypatch)
     r = Reviewer()
     c = Cycle(st, p, r, "c1"); c.run(["review"]); c.store.close()
