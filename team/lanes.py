@@ -65,7 +65,7 @@ import logging
 import threading
 import time
 from concurrent.futures import Future, ThreadPoolExecutor
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterator
 
@@ -415,7 +415,8 @@ class Lanes:
 
     # -- submit and join -------------------------------------------------------------------------------------------
 
-    def submit(self, phase: str, kind: str, label: str, fn: Callable[..., Any], *args: Any, task_id: str | None = None) -> None:
+    def submit(self, phase: str, kind: str, label: str, fn: Callable[..., Any], *args: Any, task_id: str | None = None,
+               outside: bool = False) -> None:
         """Run `fn(*args)` as a lane of `phase`. Sequential cycle: called here and now, exceptions propagate to the
         caller as they always did. Parallel cycle: a thread; the exception, if any, comes back from `join`."""
         if not self.parallel:
@@ -432,17 +433,19 @@ class Lanes:
             if self._pool is None:
                 self._pool = ThreadPoolExecutor(max_workers=LANE_THREADS_MAX, thread_name_prefix=f"{THREAD_PREFIX}-{self.slug}")
             self.started += 1
-            fut = self._pool.submit(self._run_lane, kind, label, task_id, fn, args)
+            fut = self._pool.submit(self._run_lane, kind, label, task_id, fn, args, outside)
             self._lanes.append(_Lane(phase, label, fut))
         log.debug("%s: lane %s (%s, phase %s) submitted", self.slug, label, kind, phase)
 
-    def _run_lane(self, kind: str, label: str, task_id: str | None, fn: Callable[..., Any], args: tuple[Any, ...]) -> None:
+    def _run_lane(self, kind: str, label: str, task_id: str | None, fn: Callable[..., Any], args: tuple[Any, ...],
+                  outside: bool = False) -> None:
+        """`outside`: the lane takes no run slot and waits for none (a light piece of work: the review of a document)."""
         _ctx.label, _ctx.slot = label, False
         t0 = time.monotonic()
         try:
-            with self.gate.slot(kind, label):
+            with (nullcontext() if outside else self.gate.slot(kind, label)):
                 _ctx.slot = True
-                log.info("%s: lane %s started", self.slug, label)
+                log.info("%s: lane %s started%s", self.slug, label, " (outside the run slots)" if outside else "")
                 fn(*args)
         finally:
             _ctx.slot = False
