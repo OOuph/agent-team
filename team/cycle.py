@@ -2246,6 +2246,26 @@ class Cycle:
         log.info("%s: %s: %s needs context (%d point(s)) → %s to the PO, the task waits", self.p.slug, t["id"], role, len(missing), q["id"])
         return q
 
+    def budget_split(self, t: dict[str, Any], role: str, rr: RunResult, run_id: str) -> bool:
+        """`cycle.escalation.budget_split` (27.11): a run that ended at its budget (`error_max_budget_usd`) will end
+        there again with the same task — ai-battles T-0610 did, three times, before the attempts ran out. After the
+        FIRST such run the task is blocked with a question to the PO, as after «the same partial twice»: split it or
+        narrow it. It is not started again until the PO answers. True = handled."""
+        if not self.p.escalation_cfg["budget_split"] or not over_budget(rr):
+            return False
+        cost = rr.cost_usd if rr.cost_usd is not None else 0.0
+        self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": f"run failed: {rr.error} after ${cost:.2f}"[:400]})
+        self.store.ask(from_="dispatcher", to="po", task_id=t["id"], blocks=[t["id"]], question=(
+            f"Task {t['id']} ({_short_text(t.get('title'), 80)}) hit the run budget on its first {role} run: ${cost:.2f} spent and no result. "
+            "The same task with the same scope will not fit a second run either. Split it into parts that each fit one run — name the "
+            "document or the files each part writes, in the order they depend on each other — or narrow its scope; then close this one "
+            "(`close_tasks` with `replaced_by`). Do not answer «try again»."))
+        self.store.transition(t["id"], "blocked", "dispatcher", f"hit the run budget (${cost:.2f}, {rr.error}): the PO splits it", force=True,
+                              assignee_run=None)
+        self.store.event("task.budget_split", t["id"], "dispatcher", {"role": role, "cost": round(cost, 2), "run": run_id})
+        log.warning("%s: %s hit the run budget ($%.2f) on its first %s run: blocked, the PO splits it", self.p.slug, t["id"], cost, role)
+        return True
+
     def task_refs_block(self, t: dict[str, Any]) -> str:
         """`cycle.escalation.references`: the text of the observations and questions the task names, for its role's prompt."""
         if not self.p.escalation_cfg["references"]:
@@ -2293,6 +2313,8 @@ class Cycle:
         if not (rr.ok and rr.structured):
             if self.continue_interrupted(t, rr, run_id, repo, role):
                 return True                                 # owner 21.11: stopped by a limit → wip commit, the next cycle continues
+            if self.budget_split(t, role, rr, run_id):
+                return True                                 # 27.11: over its budget once → the PO splits it, no second identical run
             attempts = int(t.get("attempts") or 0) + 1
             note = f"run failed: {rr.error}"
             self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": note[:400]})
@@ -2790,6 +2812,8 @@ class Cycle:
             self.store.transition(t["id"], "ready", "dispatcher", "no run (budget or dry-run)", force=True, assignee_run=None)
             return False
         if not (rr.ok and rr.structured):
+            if self.budget_split(t, "game-designer", rr, run_id):
+                return True
             attempts = int(t.get("attempts") or 0) + 1
             self.store.add_result(t["id"], {"run_id": run_id, "status": "error", "summary": f"run failed: {rr.error}"[:400]})
             self.store.transition(t["id"], "blocked" if attempts >= 3 else "ready", "dispatcher", f"run failed: {rr.error}"[:300], force=True,
