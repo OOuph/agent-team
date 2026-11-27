@@ -30,10 +30,10 @@ REQUIRE_ROOT="${REQUIRE_ROOT:-1}"
 
 echo "== agent-team service install from $SRC_DIR (user $SVC_USER)"
 if [ "$REQUIRE_ROOT" = 1 ] && [ "$(id -u)" -ne 0 ]; then echo "ERROR: run as root" >&2; exit 1; fi
-for f in deploy-service.sh add-service.sh move-host.sh svc-run.sh git-credential-dispatcher agent-team-svc@.service service.conf.template agent-team-deploy.sudoers services.conf.example; do
+for f in deploy-service.sh add-service.sh move-host.sh service-host.sh svc-run.sh git-credential-dispatcher agent-team-svc@.service service.conf.template agent-team-deploy.sudoers services.conf.example; do
   [ -f "$SRC_DIR/$f" ] || { echo "ERROR: $SRC_DIR/$f missing" >&2; exit 1; }
 done
-for f in deploy-service.sh add-service.sh move-host.sh svc-run.sh git-credential-dispatcher; do bash -n "$SRC_DIR/$f"; done
+for f in deploy-service.sh add-service.sh move-host.sh service-host.sh svc-run.sh git-credential-dispatcher; do bash -n "$SRC_DIR/$f"; done
 
 echo "-- checking dependencies"
 missing=""
@@ -60,7 +60,7 @@ if [ "$REQUIRE_ROOT" = 1 ]; then
 fi
 
 echo "-- scripts -> $BIN_DIR"
-for f in deploy-service.sh add-service.sh move-host.sh svc-run.sh; do
+for f in deploy-service.sh add-service.sh move-host.sh service-host.sh svc-run.sh; do
   install -m 0755 "$SRC_DIR/$f" "$BIN_DIR/$f"; echo "   $BIN_DIR/$f"
 done
 install -m 0644 "$SRC_DIR/README.md" "$OPT_DIR/service/README.md" 2>/dev/null || true
@@ -86,7 +86,7 @@ chmod 644 "$SYSTEMD_DIR/agent-team-svc@.service"
 echo "   $SYSTEMD_DIR/agent-team-svc@.service (User=$SVC_USER)"
 if [ "$REQUIRE_ROOT" = 1 ]; then systemctl daemon-reload; fi
 
-echo "-- sudoers: $SVC_USER may run deploy-service.sh"
+echo "-- sudoers: $SVC_USER may run deploy-service.sh and service-host.sh"
 mkdir -p "$SUDOERS_DIR"
 sed "s|__USER__|$SVC_USER|g" "$SRC_DIR/agent-team-deploy.sudoers" > "$SUDOERS_DIR/agent-team-deploy.tmp"
 if command -v visudo >/dev/null 2>&1; then

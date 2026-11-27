@@ -16,3 +16,14 @@
 #
 # Still true: any process of __USER__ can start a deploy, a rollback or --force of any registered service.
 __USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/deploy-service.sh
+#
+# service-host.sh (owner 27.11): the same user may add a second address to a registered service, make an alias the main
+# address and drop an alias. As root it runs: the check of its arguments (slug [a-z0-9-], host a plain FQDN), the DNS
+# check that the host points at this server, certbot --webroot for that host, the files <slug>-alias-<host>.conf and
+# <slug>-old-host.conf under /etc/nginx/sites-available with their links, render-vhost.sh for the main vhost, nginx -t
+# and a graceful reload, HOST= / OLD_HOST= in the service definition. Its settings come from root's files and sudo's
+# env_reset keeps the caller's environment out, so the caller chooses the command, a registered slug and a host name.
+# What a process of __USER__ can therefore do without a human: make any name that already points at this server answer
+# with a registered service, switch the main address of a service among its aliases (the old one then redirects), and
+# stop an alias. It cannot serve other content, read a key or touch another site's vhost.
+__USER__ ALL=(root) NOPASSWD: /opt/agent-team/bin/service-host.sh
