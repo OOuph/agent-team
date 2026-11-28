@@ -1,0 +1,17 @@
+# Who changes what (owner 28.11). Every session works under one GitHub account, so GitHub cannot ask a «code owner» for
+# a review; this file is the map, and the check `shared-parts` (.github/workflows/tests.yml) is what enforces it.
+#
+# Shared parts — changed only through the thread «agent-team: большая доработка» (label `core-change` on the pull request):
+/team/            @OOuph
+/tests/           @OOuph
+/bin/             @OOuph
+/*.sh             @OOuph
+/*.md             @OOuph
+/pyproject.toml   @OOuph
+/team.yaml        @OOuph
+/docs/            @OOuph
+/.github/         @OOuph
+# A product's own ground — its session changes it without the label:
+/products/        @OOuph
+/products-retired/ @OOuph
+/docs/notes/      @OOuph

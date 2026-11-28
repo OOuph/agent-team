@@ -1,0 +1,52 @@
+# The check before a merge into main (owner 28.11: «первые две меры делаем», measure 2).
+# Two jobs, both meant to be REQUIRED by the branch protection of main (the owner switches that on in the repository
+# settings; see CONTRIBUTING.md «Who changes what»):
+#   tests        the full suite, as the rework thread runs it before every merge;
+#   shared-parts a pull request that touches the shared parts (the dispatcher's code, tests, scripts, role cards,
+#                schemas, this folder) passes only with the label `core-change`, which the session that owns the
+#                shared parts sets. A pull request that stays inside products/<slug>/ needs no label.
+name: checks
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+permissions:
+  contents: read
+  pull-requests: read
+concurrency:
+  group: checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+env:
+  TEAM_PUBLISH_DRY_RUN: "1"          # tests never reach a real channel
+  SHARED_LABEL: core-change
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install -q --upgrade pip
+          python -m pip install -q -e ".[dev]"
+          git config --global user.name ci
+          git config --global user.email ci@example.invalid
+          git config --global init.defaultBranch main
+      - name: Full suite
+        run: python -m pytest tests -q -p no:cacheprovider
+  shared-parts:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Shared parts change only with the label
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          LABELS: ${{ join(github.event.pull_request.labels.*.name, ' ') }}
+        run: bash .github/shared-parts.sh "$BASE" "$HEAD" "$LABELS"

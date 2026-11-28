@@ -706,6 +706,9 @@ class Cycle:
             log.warning("%s: stopped (%s)", self.p.slug, reason)
             self.store.event("cycle.stopped", self.cycle_id, "dispatcher", reason)
             return {"stopped": reason}
+        if not self.dry_run:
+            from . import codegate              # the checkout moved outside update-code.sh: said aloud, the cycle goes on
+            codegate.check(self.st, self.p.slug, self.store.event, self.tell_owner)
         t0 = time.time()
         log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
         self._in_run = True
