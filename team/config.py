@@ -19,7 +19,9 @@ log = logging.getLogger("team.config")
 
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
 
-PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
+# `merged_since` (28.11, pokerbr К5): every new observation in the PO's prompt lists the tasks merged AFTER it was recorded —
+# the PO cut a task from an observation that a merge had already answered
+PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False, "merged_since": False}   # `cycle.po_prompt`, see DEFAULTS
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False, "references": False, "budget_split": False, "review_exit": False,
                                         # 28.11 (pokerbr К7, К8): `owner_ping` true = every open question to the owner goes to
                                         # the owner's channel as one line, once; `operator_hold` true = a task taken with
@@ -53,6 +55,8 @@ REVIEW_TESTS_DEFAULTS: dict[str, bool] = {
     "once_per_batch": False,      # true = the test suite runs once on the head of the main branch and every review of a merged
                                   # task whose commit is in that head takes its result (27.11: ~113 of 360 suite runs a day, each
                                   # ~1000 CPU seconds, on a server at load 28–31 on 8 cores). A red head: every task gets its own run
+    "changed_files": False,       # true = the reviewer's prompt lists the files the merged commit changed (28.11: reviewers and
+                                  # testers of the game spent 13 turns in three cycles on `git show --stat`, which they may not run)
     "docs_outside_slots": False,  # true = the review of a commit that changes documents only takes no run slot (it is a 12-second
                                   # read; 27.11 such reviews waited 19 minutes for a slot)
 }   # `cycle.review_tests`, see DEFAULTS

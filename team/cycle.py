@@ -92,6 +92,7 @@ SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main br
 PARKED_AFTER_H = 24.0                                     # `cycle.queue.remind_parked`: a proposed / deferred task this old is named
 PARKED_LIST_MAX = 15                                      # … at most this many
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
+CHANGED_FILES_CHARS = 3000                                # `cycle.review_tests.changed_files`: this much of the commit's file list in a review prompt
 OWNER_PING_MAX = 5                                        # `cycle.escalation.owner_ping`: at most this many question lines per look; the rest wait for the next look
 OWNER_PING_CHARS = 300                                    # … and this much of a question's text in its line
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
@@ -1202,6 +1203,15 @@ class Cycle:
             return                                # the lane waited for its slot and the request came meanwhile
         result = (t.get("results") or [None])[-1]
         prompt = prompts.reviewer_prompt(self.p, t, result, t.get("released_sha"))
+        if self.p.review_tests_cfg["changed_files"] and t.get("released_sha"):
+            try:                                  # the reviewer has no shell: what `git show --stat` would say is given to it
+                stat = gitops.commit_stat(self.p.repo_dir, str(t["released_sha"])).strip()
+            except Exception as exc:  # noqa: BLE001 — a missing list never costs a review
+                stat = ""
+                log.debug("%s: files of %s not listed for the review of %s: %s", self.p.slug, str(t["released_sha"])[:12], t["id"], str(exc)[:200])
+            if stat:
+                prompt += ("\n# FILES THE MERGED COMMIT CHANGED (`git show --stat`; you cannot run git, and need not)\n"
+                           + stat[:CHANGED_FILES_CHARS] + "\n")
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         tools = env = None
         sha = t.get("released_sha")

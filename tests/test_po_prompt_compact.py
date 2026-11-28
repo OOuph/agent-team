@@ -122,6 +122,6 @@ def test_stable_first_moves_cycle_and_spend_to_the_end(tmp_path: Path) -> None:
 
 def test_bad_setting_falls_back_to_off(tmp_path: Path) -> None:
     p = _product(_settings(tmp_path), cycle={"po_prompt": {"compact_finished": "yes please", "stable_first": 1}})
-    assert p.po_prompt_cfg == {"compact_finished": False, "stable_first": False}
+    assert p.po_prompt_cfg == {"compact_finished": False, "stable_first": False, "merged_since": False}
     p2 = _product(_settings(tmp_path), cycle={"po_prompt": "on"})
-    assert p2.po_prompt_cfg == {"compact_finished": False, "stable_first": False}
+    assert p2.po_prompt_cfg == {"compact_finished": False, "stable_first": False, "merged_since": False}
