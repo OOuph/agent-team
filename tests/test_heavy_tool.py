@@ -11,8 +11,8 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
-def _heavy(tmp_path: Path, *cmd: str, wait_s: int = 20, nice: int = 15, background: bool = False, slots: int = 1):
-    env = {**os.environ, "PYTHONPATH": str(REPO), "TEAM_HEAVY_LOCK": str(tmp_path / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(nice),
+def _heavy(tmp_path: Path, *cmd: str, wait_s: int = 20, nice: int = 15, background: bool = False, slots: int = 1, busy: str = "refuse"):
+    env = {**os.environ, "TEAM_HEAVY_BUSY": busy, "PYTHONPATH": str(REPO), "TEAM_HEAVY_LOCK": str(tmp_path / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(nice),
            "TEAM_HEAVY_WAIT_S": str(wait_s), "TEAM_HEAVY_SLOTS": str(slots)}
     argv = [sys.executable, "-m", "team.heavy", *cmd]
     if background:
@@ -73,3 +73,16 @@ def test_with_two_places_two_runs_overlap_and_the_third_waits(tmp_path: Path):
         running += 1 if w == "start" else -1
         most = max(most, running)
     assert most == 2
+
+
+
+def test_with_busy_run_the_queue_delays_a_run_and_never_refuses_it(tmp_path: Path):
+    """28.11: with a refusal after the wait, 36–40 % of the developers' runs ended «partial: the tests could not be run»
+    (7 % before the queue)."""
+    a = _heavy(tmp_path, sys.executable, "-c", "import time; time.sleep(6)", background=True)
+    time.sleep(0.5)
+    t0 = time.monotonic()
+    cp = _heavy(tmp_path, sys.executable, "-c", "print('ran all the same')", wait_s=1, busy="run")
+    waited = time.monotonic() - t0
+    a.kill(); a.wait(10)
+    assert cp.returncode == 0 and "ran all the same" in cp.stdout and "starting all the same" in cp.stderr and 1.0 <= waited < 5.0

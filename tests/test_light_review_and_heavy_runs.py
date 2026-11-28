@@ -113,7 +113,7 @@ def test_heavy_runs_are_denied_to_the_named_roles_and_the_role_is_told_what_to_d
     deny = ["Bash(npx tsx tests/load/*)", "Bash(npm run sim:*)"]
     st = _settings(tmp_path, {"cycle": {"heavy_runs": {"deny": deny, "roles": ["developer", "game-designer"]}}})
     p = _product(st)
-    assert p.heavy_runs_cfg == {"deny": deny, "queue": [], "roles": ["developer", "game-designer"], "nice": 15, "wait_s": 1800, "slots": 1}
+    assert p.heavy_runs_cfg == {"deny": deny, "queue": [], "roles": ["developer", "game-designer"], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
     r = Capture()
     cyc = Cycle(st, p, r, "c1")
     cyc.role_run("developer", "do the task", None, cwd=tmp_path / "w", label="dev")
@@ -127,7 +127,7 @@ def test_heavy_runs_are_denied_to_the_named_roles_and_the_role_is_told_what_to_d
 def test_heavy_runs_off_by_default_and_bad_values_are_ignored(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
-    off = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1}
+    off = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
     assert C.HEAVY_RUNS_DEFAULTS == off and p.heavy_runs_cfg == off
     r = Capture()
     cyc = Cycle(st, p, r, "c1")
@@ -140,7 +140,7 @@ def test_heavy_runs_off_by_default_and_bad_values_are_ignored(tmp_path: Path):
 
 
 def test_queued_commands_are_denied_as_typed_and_the_role_is_given_the_tool(tmp_path: Path):
-    st = _settings(tmp_path, {"cycle": {"heavy_runs": {"queue": ["Bash(npm run sim:*)"], "roles": ["developer"], "nice": 12, "wait_s": 600, "slots": 3}}})
+    st = _settings(tmp_path, {"cycle": {"heavy_runs": {"queue": ["Bash(npm run sim:*)"], "roles": ["developer"], "nice": 12, "wait_s": 600, "slots": 3, "busy": "run"}}})
     p = _product(st)
     r = Capture()
     cyc = Cycle(st, p, r, "c1")
@@ -150,5 +150,6 @@ def test_queued_commands_are_denied_as_typed_and_the_role_is_given_the_tool(tmp_
     assert r.kw[0]["disallowed_tools"] == ["Bash(npm run sim:*)"]
     assert "GO THROUGH `team-heavy` — ONLY 3 OF THEM RUN AT ONCE" in r.prompts[0] and "up to 10 minutes" in r.prompts[0] and "HEAVY RUNS ARE NOT STARTED" not in r.prompts[0]
     env = r.kw[0]["env_extra"]
-    assert env["TEAM_HEAVY_LOCK"].endswith("data/locks/heavy.lock") and env["TEAM_HEAVY_NICE"] == "12" and env["TEAM_HEAVY_WAIT_S"] == "600" and env["TEAM_HEAVY_SLOTS"] == "3"
+    assert env["TEAM_HEAVY_LOCK"].endswith("data/locks/heavy.lock") and env["TEAM_HEAVY_NICE"] == "12" and env["TEAM_HEAVY_WAIT_S"] == "600" and env["TEAM_HEAVY_SLOTS"] == "3" and env["TEAM_HEAVY_BUSY"] == "run"
+    assert "It never refuses" in r.prompts[0] and "Exit code 75" not in r.prompts[0]
     assert "TEAM_HEAVY_LOCK" not in r.kw[1]["env_extra"] and "team-heavy" not in r.prompts[1]
