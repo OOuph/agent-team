@@ -69,6 +69,17 @@ TEST_BUDGET_PROMPT = ("\n\n# THE WHOLE TEST SUITE: AT MOST {times} IN THIS RUN (
                       "suite — `{cmd}` or its test part — at most {times}: at the end, when you believe the task is done. If it is red, fix "
                       "it and check the fix with the failing files only; do not repeat the whole suite after every fix. The dispatcher runs "
                       "the whole suite again on the merged commit before the review, so nothing reaches the players untested.\n")
+# `cycle.guards.no_name_kill`. 27.11 23:33 and 23:52 UTC, ai-battles: a designer's run stopped «its» server with
+# `pkill -f "dist/server/index.js"`, and later with `kill` of two PIDs that `pgrep -f "dist/server/index"` had printed. The
+# pattern matched the command lines of OTHER roles' runs (the role card in their arguments quotes that very path): one
+# developer run of another product and two of this one died with exit 143, and refill closed for the rest of the cycle.
+NAME_KILL_RULES = ("Bash(pkill:*)", "Bash(pkill *)", "Bash(killall:*)", "Bash(killall *)", "Bash(pgrep:*)", "Bash(pgrep *)")
+NAME_KILL_PROMPT = ("\n\n# STOP ONLY WHAT YOU STARTED, AND ONLY BY ITS PID\n"
+                    "`pkill`, `killall` and `pgrep` are denied to you: this host runs other roles and other products under the same "
+                    "user, and a name or a command-line pattern matches THEIR processes too (on 27.11 one run killed three others "
+                    "this way). Keep the PID of what you start — `node server.js & echo $!` — and stop that PID alone with `kill <pid>`; "
+                    "wait for your own background job with `wait <pid>`. Never `kill` a PID you did not start. A test runner that "
+                    "starts a server itself stops it itself.\n")
 SUITE_CACHE_KEEP = 30                                     # `cycle.review_tests.once_per_batch`: results of the suite kept per product
 SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main branch that contains this task's commit {sha}; "
               "its result stands for every task merged up to it)\n")
@@ -451,16 +462,19 @@ class Cycle:
     def heavy_deny(self, role: str) -> list[str]:
         """`cycle.heavy_runs`: the permission rules this role's run is started with as denied ([] = none)."""
         cfg = self.p.heavy_runs_cfg
+        kill = list(NAME_KILL_RULES) if self.p.guards_cfg["no_name_kill"] else []     # every role: any run with a shell can do it
         if not (cfg["deny"] or cfg["queue"]) or (cfg["roles"] and role not in cfg["roles"]):
-            return []
-        return list(cfg["deny"]) + list(cfg["queue"])
+            return kill
+        return list(cfg["deny"]) + list(cfg["queue"]) + [k for k in kill if k not in cfg["deny"]]
 
     def heavy_prompt(self, role: str) -> str:
         """The block of the role's request about heavy runs ("" = the rule does not apply to this role)."""
         cfg = self.p.heavy_runs_cfg
         if not self.heavy_deny(role):
             return ""
-        out = ""
+        out = NAME_KILL_PROMPT if self.p.guards_cfg["no_name_kill"] else ""
+        if cfg["roles"] and role not in cfg["roles"]:
+            return out
         if cfg["deny"]:
             out += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["deny"]))
         if cfg["queue"]:
@@ -2463,7 +2477,13 @@ class Cycle:
             self._tl.run_ok = None                # no run of this task yet (`role_run` sets it)
             self._tl.run_error = None
             try:
-                if not self.pending_role(t):
+                if self.lanes.busy(t["id"]):
+                    # another lane of this cycle holds it — its review, queued inside the cycle, or its merge. Not an error
+                    # (28.11: `task T-0767 is already in lane review-T-0767` failed the execute phase): the task is left
+                    # alone and stays taken until the next pass
+                    log.info("%s: %s not started: another lane of this cycle is working on it", self.p.slug, t["id"])
+                    verdict = None
+                elif not self.pending_role(t):
                     # The mark first, then the task read again: whatever another process (`team task move`) or a lane wrote
                     # since the pass listed it is seen here, and from the mark on that process leaves the task alone.
                     with self.lanes.working(t["id"]):
@@ -4448,12 +4468,17 @@ OUTAGE_RE = re.compile(r"api error|overloaded|rate.?limit|usage limit|credit|quo
                        r"no result event|authentication|unauthorized", re.IGNORECASE)
 
 
+SIGNALLED_RE = re.compile(r"no result event \(exit (-?(15|9|2)|143|137|130)\)")   # 128 + SIGTERM / SIGKILL / SIGINT, or the negative signal
+
+
 def is_outage(error: Any, started: bool) -> bool:
     """Does a failed run say that the NEXT run would fail too? Yes when it did not start (budget, limits) or its error
     reads like the service, the network or the CLI; no when the run failed for its own reason — its cap
     (`error_max_budget_usd`), the time limit, the loop guard, no structured answer."""
     if not started or error is None:
         return True
+    if SIGNALLED_RE.search(str(error)):
+        return False        # the run was terminated by a signal on this host — another run killed it, the time limit did: its own misfortune
     return bool(OUTAGE_RE.search(str(error)))
 
 
