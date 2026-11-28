@@ -14,6 +14,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import signal
 import re
 import shutil
 import statistics
@@ -40,6 +41,7 @@ from . import nodecache
 from . import testworkers
 from . import firstcycle
 from . import drain as drain_mod
+from . import heavy as heavy_mod
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -57,12 +59,13 @@ HEAVY_RUNS_PROMPT = ("\n\n# HEAVY RUNS ARE NOT STARTED FROM THIS RUN (the team's
                      "If the task cannot be finished without such a run — a load test, a simulation of hundreds of battles — finish "
                      "everything else, then report `needs_context` (or `partial`) and name the exact command, how long it runs and what "
                      "its output must show: the operator starts it when the server is free and the result comes back to this task.\n")
-HEAVY_QUEUE_PROMPT = ("\n\n# LONG SIMULATIONS RUN ONE AT A TIME ON THIS SERVER — START THEM THROUGH `team-heavy`\n"
+HEAVY_QUEUE_PROMPT = ("\n\n# HEAVY COMMANDS GO THROUGH `team-heavy` — ONLY {slots} OF THEM RUN AT ONCE ON THIS SERVER\n"
                       "These commands are denied to you as typed:\n{rules}\n"
-                      "Start them as `team-heavy <the same command>`, for example `team-heavy npm run sim:weapons`. The tool waits until no "
-                      "other such run is going on the server (up to {wait} minutes), then runs yours at low priority and gives you its "
-                      "output and exit code. Give the command enough time: it may wait before it starts. If it answers that the server is "
-                      "still busy, report the command in your result instead of starting it another way.\n")
+                      "Start them as `team-heavy <the same command>` — `team-heavy npm test`, `team-heavy npx vitest run tests/unit/x.test.ts`, "
+                      "`team-heavy npm run sim:weapons`. The tool waits for a free place (up to {wait} minutes), then runs the command at low "
+                      "priority and gives you its output and exit code. Call it with the longest timeout your shell tool allows (600000 ms) "
+                      "or in the background: it may wait before it starts. Exit code 75 means no place came free — run the same "
+                      "`team-heavy` command again; never start the work another way, and never run two of them at once.\n")
 TEST_BUDGET_PROMPT = ("\n\n# THE WHOLE TEST SUITE: AT MOST {times} IN THIS RUN (the server is shared: every whole run costs every other run minutes)\n"
                       "While you work, run only the tests of what you touched: the test files of the modules you changed and the ones that "
                       "import them (name the files on the command line of the test tool; do not run everything «to be sure»). Run the whole "
@@ -478,7 +481,7 @@ class Cycle:
         if cfg["deny"]:
             out += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["deny"]))
         if cfg["queue"]:
-            out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=int(cfg["wait_s"]) // 60)
+            out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=int(cfg["wait_s"]) // 60, slots=int(cfg["slots"]))
         return out
 
     def test_budget_prompt(self, role: str) -> str:
@@ -493,7 +496,50 @@ class Cycle:
         cfg = self.p.heavy_runs_cfg
         if not cfg["queue"]:
             return {}
-        return {"TEAM_HEAVY_LOCK": str(self.st.data_dir / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(cfg["nice"]), "TEAM_HEAVY_WAIT_S": str(cfg["wait_s"])}
+        return {"TEAM_HEAVY_LOCK": str(self.st.data_dir / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(cfg["nice"]), "TEAM_HEAVY_WAIT_S": str(cfg["wait_s"]),
+                "TEAM_HEAVY_SLOTS": str(cfg["slots"])}
+
+    def suite_tests(self, sha: str, dest: Path, full_log: Path | None = None) -> str:
+        """`run_tests_for_review` for this product — in one of the server's places for heavy runs when the product queues
+        heavy runs (`cycle.heavy_runs.queue`): the dispatcher's own test runs then count in the same total as the roles'.
+        A place that does not come free within the tests' own time limit: the run goes all the same (a review is never
+        left without its tests)."""
+        cfg = self.p.heavy_runs_cfg
+        fh = None
+        if cfg["queue"] and not self.dry_run:
+            t0 = time.monotonic()
+            fh = heavy_mod.take_slot(str(self.st.data_dir / "locks" / "heavy.lock"), int(cfg["slots"]), float(self.review_tests_timeout()))
+            waited = time.monotonic() - t0
+            if waited >= 5:
+                log.info("%s: the test run on %s waited %.0fs for a place among the heavy runs%s", self.p.slug, sha[:12], waited,
+                         "" if fh is not None else " and goes without one")
+        try:
+            return run_tests_for_review(self.p.repo_dir, sha, dest, self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
+                                        timeout_s=self.review_tests_timeout(), full_log=full_log)
+        finally:
+            if fh is not None:
+                fh.close()
+
+    def reap_orphans(self) -> int:
+        """`cycle.guards.reap_orphans`: end the processes whose working folder is a folder of this product's work directory
+        that no longer exists — what a run left behind when its worktree was removed (a test runner started in the
+        background, a server). The caller holds the product lock; a process of a live run sits in a folder that exists.
+        Linux only (reads /proc); returns how many were signalled. Never raises."""
+        if not self.p.guards_cfg["reap_orphans"] or self.dry_run:
+            return 0
+        n = 0
+        for pid in orphan_pids(str(self.p.work_dir.resolve())):
+            if pid == os.getpid():
+                continue
+            try:
+                os.kill(pid, signal.SIGTERM)
+                n += 1
+            except OSError:
+                continue
+        if n:
+            self.store.event("workdir.orphans", self.cycle_id, "dispatcher", {"ended": n})
+            log.warning("%s: %d process(es) left in deleted work folders were ended", self.p.slug, n)
+        return n
 
     def role_run(self, role: str, prompt: str, schema_name: str | None, *, cwd: Path, label: str, cap: float | None = None,
                  allowed_tools: list[str] | None = None, env_extra: dict[str, str] | None = None,
@@ -1238,8 +1284,7 @@ class Cycle:
                     except OSError as exc:
                         log.warning("full test output not kept in %s: %s", full_log, exc)
                 return shared
-        return run_tests_for_review(self.p.repo_dir, sha, dest, self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
-                                    timeout_s=self.review_tests_timeout(), full_log=full_log)
+        return self.suite_tests(str(sha), dest, full_log)
 
     def batch_suite(self, t: dict[str, Any], sha: str) -> str | None:
         """The report of the suite run on the head of the main branch, for a task whose commit is in that head — or None:
@@ -1294,9 +1339,7 @@ class Cycle:
                     self._suite_going = head
                 t0 = time.time()
                 cache.mkdir(parents=True, exist_ok=True)
-                report = run_tests_for_review(self.p.repo_dir, head, self.p.work_dir / self.cycle_id / f"suite-{head[:12]}", self.p.test_cmd,
-                                              lock=self.repo_lock, prepare=self.seed_node_modules, timeout_s=self.review_tests_timeout(),
-                                              full_log=cache / f"{head}.log")
+                report = self.suite_tests(head, self.p.work_dir / self.cycle_id / f"suite-{head[:12]}", cache / f"{head}.log")
                 rec = {"sha": head, "passed": tests_passed(report), "report": report, "at": utcnow(), "seconds": round(time.time() - t0, 1),
                        "cycle": self.cycle_id, "for": t["id"]}
                 cache.mkdir(parents=True, exist_ok=True)
@@ -2105,6 +2148,10 @@ class Cycle:
             self.release_orphans()
         except Exception as exc:  # noqa: BLE001 — housekeeping
             log.warning("%s: orphaned tasks not released: %s", self.p.slug, str(exc)[:300])
+        try:
+            self.reap_orphans()
+        except Exception as exc:  # noqa: BLE001 — housekeeping
+            log.warning("%s: orphaned processes not ended: %s", self.p.slug, str(exc)[:300])
         try:
             self.sweep_worktrees()
         except Exception as exc:  # noqa: BLE001 — housekeeping must not cost the product its execute phase
@@ -4466,6 +4513,24 @@ def accepted_moment(t: dict[str, Any]) -> datetime | None:
 
 OUTAGE_RE = re.compile(r"api error|overloaded|rate.?limit|usage limit|credit|quota|\b(429|500|502|503|529)\b|connection|network|cli error|not found|"
                        r"no result event|authentication|unauthorized", re.IGNORECASE)
+
+
+def orphan_pids(base: str, proc: str = "/proc") -> list[int]:
+    """PIDs whose working folder is a folder under `base` that no longer exists (Linux shows it as «<path> (deleted)»).
+    [] where there is no such `proc` tree."""
+    out: list[int] = []
+    try:
+        names = [x for x in os.listdir(proc) if x.isdigit()]
+    except OSError:
+        return out
+    for name in names:
+        try:
+            cwd = os.readlink(os.path.join(proc, name, "cwd"))
+        except OSError:
+            continue
+        if cwd.endswith(" (deleted)") and cwd.startswith(base.rstrip(os.sep) + os.sep):
+            out.append(int(name))
+    return sorted(out)
 
 
 SIGNALLED_RE = re.compile(r"no result event \(exit (-?(15|9|2)|143|137|130)\)")   # 128 + SIGTERM / SIGKILL / SIGINT, or the negative signal

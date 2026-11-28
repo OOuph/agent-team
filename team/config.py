@@ -61,7 +61,9 @@ TEST_BUDGET_DEFAULTS: dict[str, Any] = {"full_runs": 0, "roles": ["developer", "
 # `cycle.heavy_runs` (27.11): commands a role's run must not start on the team's server — load tests, simulations of hundreds of
 # battles. `deny`: Claude Code permission rules, e.g. "Bash(npx tsx tests/load/*)"; `roles`: whose runs ([] = every role).
 # `queue`: rules denied as typed but allowed through `team-heavy <command>` — one such run at a time on the server, at `nice`.
-HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800}
+# `slots`: how many such runs may go at once on the server, the dispatcher's own test runs before a review included (28.11: five
+# whole-suite runs at once, 44 vitest processes, load 45 on 8 cores).
+HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1}
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
     "loop_repeats": 5,            # … after this many identical calls in a row (3..50)
@@ -73,6 +75,8 @@ GUARDS_DEFAULTS: dict[str, Any] = {
     "idle_reasons": False,        # true = at the end of the execute phase every task that is still `ready` gets its reason on record
                                   # (one event `execute.left` per cycle) — not only when the cycle executed nothing (26.11: a task of
                                   # a role without a seat lay three hours and nothing said why)
+    "reap_orphans": False,        # true = before the seats start, processes whose working folder is a DELETED folder of this product's
+                                  # work directory are ended (28.11: vitest of worktrees removed hours ago was still running)
     "no_name_kill": False,        # true = a role's run may not stop processes by name or pattern: pkill, killall, pgrep are denied
                                   # to it and its request says how to stop what it started (28.11: one run killed three others)
     "budget_halt": False,         # true = once the day's budget is used up and nothing in flight can free any, the seats take
@@ -534,7 +538,7 @@ class Product:
             for k, v in src.items():
                 if k not in out:
                     continue
-                if k in ("loop", "cost", "crash_release", "idle_reasons", "budget_halt", "no_name_kill"):
+                if k in ("loop", "cost", "crash_release", "idle_reasons", "budget_halt", "no_name_kill", "reap_orphans"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
@@ -604,7 +608,7 @@ class Product:
     def heavy_runs_cfg(self) -> dict[str, Any]:
         """`cycle.heavy_runs`: this product's block replaces team.yaml's, list by list; anything that is not a list of
         strings is ignored with a warning."""
-        out: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800}
+        out: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("heavy_runs")), (f"{self.slug} product.yaml", own.get("heavy_runs") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
@@ -617,7 +621,7 @@ class Product:
                     out[k] = [x.strip() for x in v]
                 else:
                     log.warning("%s: cycle.heavy_runs.%s=%r is not a list of strings — ignored", where, k, v)
-            for k, lo, hi in (("nice", 0, 19), ("wait_s", 0, 86400)):
+            for k, lo, hi in (("nice", 0, 19), ("wait_s", 0, 86400), ("slots", 1, 64)):
                 v = src.get(k)
                 if v is None:
                     continue

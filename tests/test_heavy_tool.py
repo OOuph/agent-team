@@ -11,9 +11,9 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 
 
-def _heavy(tmp_path: Path, *cmd: str, wait_s: int = 20, nice: int = 15, background: bool = False):
+def _heavy(tmp_path: Path, *cmd: str, wait_s: int = 20, nice: int = 15, background: bool = False, slots: int = 1):
     env = {**os.environ, "PYTHONPATH": str(REPO), "TEAM_HEAVY_LOCK": str(tmp_path / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(nice),
-           "TEAM_HEAVY_WAIT_S": str(wait_s)}
+           "TEAM_HEAVY_WAIT_S": str(wait_s), "TEAM_HEAVY_SLOTS": str(slots)}
     argv = [sys.executable, "-m", "team.heavy", *cmd]
     if background:
         return subprocess.Popen(argv, env=env, cwd=tmp_path, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
@@ -35,7 +35,7 @@ def test_two_heavy_runs_do_not_overlap(tmp_path: Path):
     assert a.wait(60) == 0 and b.wait(60) == 0
     lines = (tmp_path / "log.txt").read_text().split("\n")
     assert [ln.split()[0] for ln in lines if ln] == ["start", "end", "start", "end"]      # the second waited for the first
-    assert "waiting for it to end" in b.stderr.read()
+    assert "waiting for one" in b.stderr.read()
 
 
 def test_it_gives_up_when_the_server_stays_busy_and_says_what_to_do(tmp_path: Path):
@@ -43,7 +43,7 @@ def test_it_gives_up_when_the_server_stays_busy_and_says_what_to_do(tmp_path: Pa
     time.sleep(0.5)
     cp = _heavy(tmp_path, sys.executable, "-c", "print('must not run')", wait_s=1)
     a.kill(); a.wait(10)
-    assert cp.returncode == 75 and "must not run" not in cp.stdout and "Report the command in your result" in cp.stderr
+    assert cp.returncode == 75 and "must not run" not in cp.stdout and "Run the same `team-heavy` command again" in cp.stderr
 
 
 def test_no_command_and_an_unknown_command(tmp_path: Path):
@@ -55,3 +55,21 @@ def test_the_tool_is_on_the_path_the_roles_get():
     script = REPO / "bin" / "team-heavy"
     assert script.exists() and os.access(script, os.X_OK) and "team.heavy" in script.read_text()
     assert 'team-heavy = "team.heavy:main"' in (REPO / "pyproject.toml").read_text()
+
+
+
+def test_with_two_places_two_runs_overlap_and_the_third_waits(tmp_path: Path):
+    """28.11: five whole-suite runs at once, 44 vitest processes, a load of 45 on 8 cores."""
+    mark = "import time,sys; open(sys.argv[1],'a').write('start\\n'); time.sleep(2.0); open(sys.argv[1],'a').write('end\\n')"
+    procs = []
+    for _ in range(3):
+        procs.append(_heavy(tmp_path, sys.executable, "-c", mark, str(tmp_path / "log.txt"), background=True, slots=2))
+        time.sleep(0.3)
+    assert [p.wait(60) for p in procs] == [0, 0, 0]
+    words = (tmp_path / "log.txt").read_text().split()
+    assert words[:2] == ["start", "start"] and words[2] == "end" and words.count("start") == 3      # two at once, the third after one ended
+    running = most = 0
+    for w in words:
+        running += 1 if w == "start" else -1
+        most = max(most, running)
+    assert most == 2
