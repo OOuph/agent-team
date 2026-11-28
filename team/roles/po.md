@@ -43,6 +43,9 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   else is pending, create it (type `content`).
 - Every task names its `role`: `developer` (site code and content in the repository), `marketer` (posts via the publish
   tool; only channels listed in VISION), `analyst` (a measurement with a question).
+  An analyst task that needs search demand (volumes, competitor keywords) names the phrases × locations (gb, us, ie, all) or
+  the competitor domains in its scope: the dispatcher fetches DataForSEO / Bing Webmaster data for it within the product's
+  paid ceiling (`keywords.dataforseo_cap_usd`), and the analyst writes the document (e.g. `seo/keyword-map.md`).
 - Marketing is run by a plan, not post by post. The prompt's `MARKETING PLAN` block shows `products/<slug>/marketing-plan.md`
   (a week of slots per channel: date UTC, channel, rubric, angle, goal) or says there is none. When there is none, or it is
   older than 7 days: create ONE plan task — type `marketing`, role `marketer`, `plan: true`, acceptance "marketing-plan.md

@@ -189,6 +189,8 @@ class Store:
             CREATE TABLE IF NOT EXISTS cycles(cycle_id TEXT PRIMARY KEY, started TEXT, finished TEXT, phases TEXT, spent_usd REAL);
             CREATE TABLE IF NOT EXISTS posts(day TEXT, channel TEXT, post_id TEXT, url TEXT, task_id TEXT, ts TEXT);
             CREATE TABLE IF NOT EXISTS working(task_id TEXT PRIMARY KEY, lane TEXT, pid INTEGER, since TEXT);
+            CREATE TABLE IF NOT EXISTS api_spend(ts TEXT, provider TEXT, endpoint TEXT, task_id TEXT, usd REAL,
+                                                 balance_before REAL, detail TEXT);
         """)
         cols = {r[1] for r in self.db.execute("PRAGMA table_info(posts)")}
         if "text" not in cols:          # 03.11: the marketer's memory ("published in the last 7 days") needs the text that went out
@@ -254,6 +256,23 @@ class Store:
         self.db.execute("INSERT INTO spend(day, run_id, role, usd, reported, ts) VALUES(?,?,?,?,?,?)",
                         (datetime.now(timezone.utc).strftime("%Y-%m-%d"), run_id, role, float(usd), int(reported), utcnow()))
         self.db.commit()
+
+    @_locked
+    def book_api_spend(self, provider: str, endpoint: str, task_id: str | None, usd: float, balance_before: float | None = None,
+                       detail: str = "") -> None:
+        """Money paid to an external data API (team/keywords.py, owner 28.11: DataForSEO) — not model spend, its own ledger."""
+        self.db.execute("INSERT INTO api_spend(ts, provider, endpoint, task_id, usd, balance_before, detail) VALUES(?,?,?,?,?,?,?)",
+                        (utcnow(), provider, endpoint, task_id, float(usd), balance_before, detail[:500]))
+        self.db.commit()
+
+    def api_spent(self, provider: str, task_id: str | None = None) -> float:
+        q, args = "SELECT COALESCE(SUM(usd), 0) FROM api_spend WHERE provider=?", [provider]
+        if task_id:
+            q, args = q + " AND task_id=?", args + [task_id]
+        return float(self.db.execute(q, args).fetchone()[0] or 0.0)
+
+    def api_calls(self, provider: str) -> int:
+        return int(self.db.execute("SELECT COUNT(*) FROM api_spend WHERE provider=?", (provider,)).fetchone()[0] or 0)
 
     def spent_by_cycle(self, cycle_id: str) -> float:
         """What the runs of one cycle spent: the rows of `spend` whose run id is `<cycle_id>-<label>`, whatever day they

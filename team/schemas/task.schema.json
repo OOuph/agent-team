@@ -10,6 +10,8 @@
   "problem": {"type": "string"},
   "scope": {"type": "string"},
   "acceptance": {"type": "array", "items": {"type": "string"}},
+  "data_request": {"type": "object", "description": "Analyst research task (owner 28.11): keyword data the dispatcher fetches before the run (team/keywords.py) — keywords (phrases), locations (gb, us, ie, all), sources (google_ads_volume, ranked_keywords, bing_keyword, bing_related), competitors (domains), include (filter words); paid calls within product.yaml keywords.dataforseo_cap_usd."},
+  "data": {"type": "object", "description": "Set by the dispatcher: the last fetch of data_request (key, file, spent_usd, refused)."},
   "negative_cases": {"type": "array", "items": {"type": "string"}},
   "visible": {"type": "boolean", "description": "The task changes what a player or reader SEES (a screen, its layout, visuals, on-screen text). With cycle.visible.review_before_merge it is reviewed on its branch and merged only by a pass."},
   "redesign": {"type": "boolean", "description": "It changes the layout, size or look of a screen that already exists. Owner 26.11: a redesign comes only with a new function."},

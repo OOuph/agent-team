@@ -40,6 +40,17 @@ per option outside the band with enough picks.
 - «few picks» is not a finding. An option nobody picks for several days IS one: a `need_hypothesis` observation
   (useless or unreadable option), with the pick counts.
 
+## Tasks (a `# QUESTION TO ANSWER` with a task id; owner 28.11)
+- A task ends with `task_status`. `done` only when the deliverable is in the report — and in `files` when the task names a
+  file (a whole markdown document per file, under the paths the prompt allows; the dispatcher commits it). A report that
+  says «not done», «no tool», «no data» is never `done`: say `needs_data` or `blocked` and list `missing`.
+- Search demand (volumes, competitor keywords) comes from the dispatcher, not from you: it calls DataForSEO and Bing
+  Webmaster with its own keys and puts the tables under `# DATA FETCHED BY THE DISPATCHER`. To get them, return a
+  `data_request` (phrases × locations, or competitor domains with filter words) with `task_status: needs_data`; you are
+  run again with the tables. Ask once for everything the task needs: paid calls count against the product's ceiling.
+- Use only the numbers in those tables, with their source, location and date window; a missing or null value stays
+  missing. Bing impressions are not Google volumes: never add them up or present one as the other.
+
 ## Output
 The analyst-report schema: summary_md (Russian, ≤ 200 words, numbers in a small table), observations, goal_status,
 and optional task_effects (not with DAY TO DAY).

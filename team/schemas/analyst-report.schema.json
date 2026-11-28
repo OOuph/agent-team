@@ -107,6 +107,93 @@
      }
     }
    }
+  },
+  "task_status": {
+   "type": "string",
+   "enum": [
+    "done",
+    "needs_data",
+    "blocked"
+   ],
+   "description": "An analyst TASK only (not the daily measurement): done = the deliverable is in this report; needs_data = keyword data is needed (see data_request); blocked = something else is missing"
+  },
+  "missing": {
+   "type": "array",
+   "maxItems": 8,
+   "items": {
+    "type": "string",
+    "maxLength": 300
+   }
+  },
+  "data_request": {
+   "type": "object",
+   "additionalProperties": false,
+   "description": "Keyword data the dispatcher fetches for this task (DataForSEO, Bing Webmaster); you are run again with the tables",
+   "properties": {
+    "keywords": {
+     "type": "array",
+     "maxItems": 1000,
+     "items": {
+      "type": "string",
+      "maxLength": 80
+     }
+    },
+    "locations": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "sources": {
+     "type": "array",
+     "items": {
+      "type": "string",
+      "enum": [
+       "google_ads_volume",
+       "ranked_keywords",
+       "bing_keyword",
+       "bing_related"
+      ]
+     }
+    },
+    "competitors": {
+     "type": "array",
+     "maxItems": 10,
+     "items": {
+      "type": "string"
+     }
+    },
+    "include": {
+     "type": "array",
+     "maxItems": 8,
+     "items": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "files": {
+   "type": "array",
+   "maxItems": 4,
+   "description": "Whole documents the dispatcher commits (paths under keywords.outputs)",
+   "items": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+     "path",
+     "content"
+    ],
+    "properties": {
+     "path": {
+      "type": "string",
+      "maxLength": 200
+     },
+     "content": {
+      "type": "string",
+      "maxLength": 60000
+     }
+    }
+   }
   }
  }
 }

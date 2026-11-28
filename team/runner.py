@@ -22,6 +22,7 @@ import yaml
 from .config import RUN_TIMEOUT_CEILING_S
 
 log = logging.getLogger("team.runner")
+ROLE_ENV_DENY_PREFIXES = ("DATAFORSEO_", "BING_WEBMASTER_")      # never in a role's environment (team/keywords.py)
 
 # never available to a role: the dispatcher routes everything through files and the allowed Bash commands
 AGENTS_ARG_MAX = 100_000   # bytes; the kernel limit for a single argv string is 128 KiB
@@ -168,7 +169,8 @@ class Runner:
             argv += ["--disallowedTools", *dis]
         for d in add_dirs or []:
             argv += ["--add-dir", str(d)]
-        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT")}
+        # owner 28.11: the keyword-data credentials are the dispatcher's alone (team/keywords.py); no role process gets them
+        env = {k: v for k, v in os.environ.items() if k not in ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT") and not k.startswith(ROLE_ENV_DENY_PREFIXES)}
         env.update(env_extra or {})
         auth = str(self.cfg.get("auth", "oauth_token"))
         if auth == "oauth_token":

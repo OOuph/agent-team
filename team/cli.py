@@ -330,6 +330,10 @@ def cmd_status(st: C.Settings, a: argparse.Namespace) -> int:
             print(f"   {ln}")
         print(f"   tasks {sm['tasks']}: " + ", ".join(f"{k} {v}" for k, v in sorted(sm['by_state'].items())))
         print(f"   open questions {sm['open_questions']} · new observations {sm['new_observations']} · spent today ${sm['spent_today']:.2f} / cap ${p.daily_cap:.0f}")
+        from . import keywords
+        kw_line = keywords.spend_line(s, keywords.settings(p.raw))     # owner 28.11: DataForSEO money, its own ledger
+        if kw_line:
+            print(f"   {kw_line}")
         for c in s.cycles(5):
             print(f"   cycle {c['cycle_id']}: {c['phases']} ${c['spent_usd'] or 0:.2f} {c['finished'] or 'running'}")
         for q in s.questions(["open"]):

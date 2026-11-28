@@ -42,6 +42,7 @@ from . import testworkers
 from . import firstcycle
 from . import drain as drain_mod
 from . import heavy as heavy_mod
+from . import keywords
 from . import lanes as lanes_mod
 from . import flow as flow_mod
 from .lanes import LANE_EXECUTE, LANE_REVIEW
@@ -195,7 +196,7 @@ SCHEMAS = Path(__file__).parent / "schemas"
 # retro PRs (#218 #225 #238 #240 #244 #251) only added more patterns. Replan probe T-0146 (T-0143 stuck) proposed this.
 REPO_ONLY_REVIEW_TOOLS = ["Read", "Glob", "Grep", "Bash(team-fetch *)", "Bash(team-fetch:*)"]
 SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN",
-                       "ANTHROPIC_API_KEY", "GSC_")
+                       "ANTHROPIC_API_KEY", "GSC_", "DATAFORSEO_", "BING_WEBMASTER_")
 REVIEW_TEST_TIMEOUT_S = 900                               # the tests before a review, one command; product.yaml `review: {tests_timeout_s: N}` overrides
 REVIEW_TEST_TIMEOUT_RANGE = (60, 7200)                    # … within these seconds
 GD_CHECKOUT_TOOLS = ["Read", "Glob", "Grep"]      # the game designer with `cycle.game_designer.checkout`: reads, never writes
@@ -4174,12 +4175,57 @@ class Cycle:
         return out
 
     def exec_analyst_task(self, t: dict[str, Any], run_id: str) -> bool:
-        rr = self.analyst_run(label=f"an-{t['id']}", question=f"Task {t['id']}: {t.get('problem')}\nScope: {t.get('scope')}")
-        if rr is None or not (rr.ok and rr.structured):
-            self.store.transition(t["id"], "ready", "dispatcher", "analyst run failed", force=True, assignee_run=None)
-            return True
-        summary = str(rr.structured.get("summary_md", ""))
-        if is_stub_result(summary):
+        """An analyst task. Owner 28.11: a task may carry a `data_request` (phrases × locations, competitor domains) — the
+        dispatcher fetches it from DataForSEO / Bing itself (team/keywords.py, the role never sees a key or the network)
+        and gives the tables to the analyst; the analyst may answer with a `data_request` of its own, fetched and run
+        again (`keywords.max_rounds`). `files` it returns under `keywords.outputs` are committed to the repository.
+        A report that says the work was not done (status, the usual words, or no file the task names) is not `done`:
+        the task is blocked with a question (27.11: T-0068, T-0084, T-0085, T-0087 were closed without data)."""
+        kw = keywords.settings(self.p.raw)
+        rounds, data_md, fetched = 0, "", None
+        question = f"Task {t['id']}: {t.get('problem')}\nScope: {t.get('scope')}"
+        if t.get("acceptance"):
+            question += "\nAcceptance:\n" + "\n".join(f"- {a}" for a in t.get("acceptance") or [])
+        while True:
+            if t.get("data_request") and kw["enabled"]:
+                fetched = self.fetch_task_data(t, kw)
+                if fetched.get("refused") and not keywords.has_data(fetched):
+                    reason = str(fetched["refused"])
+                    self.store.add_result(t["id"], {"run_id": run_id, "status": "blocked", "summary": f"keyword data not fetched: {reason}"[:1200]})
+                    self.store.transition(t["id"], "blocked", "dispatcher", f"keyword data refused: {reason}"[:300], force=True, assignee_run=None)
+                    self.store.ask(from_="dispatcher", to="owner", task_id=t["id"], blocks=[t["id"]],
+                                   question=f"Task {t['id']}: the dispatcher did not buy its keyword data: {reason}. Raise "
+                                            "keywords.dataforseo_cap_usd in product.yaml (or top up the account), or narrow the task's "
+                                            "data_request, then answer this question."[:1500])
+                    return True
+                data_md = (self.p.dir / "metrics" / "keywords" / f"{t['id']}-{fetched['key']}.md").read_text(encoding="utf-8")
+            extra = prompts.analyst_task_block(t, kw, data_md=data_md, rounds_left=int(kw["max_rounds"]) - rounds,
+                                               spent=self.store.api_spent("dataforseo"))
+            label = f"an-{t['id']}" if not rounds else f"an-{t['id']}-r{rounds}"
+            rr = self.analyst_run(label=label, question=question + extra, cap=float(kw["analyst_cap_usd"]))
+            if rr is None or not (rr.ok and rr.structured):
+                self.store.transition(t["id"], "ready", "dispatcher", "analyst run failed", force=True, assignee_run=None)
+                return True
+            rep = rr.structured
+            new_req = rep.get("data_request")
+            if new_req and kw["enabled"] and rounds < int(kw["max_rounds"]):
+                norm, _ = keywords.normalize(new_req, kw)
+                cur = keywords.normalize(t.get("data_request"), kw)[0] if t.get("data_request") else None
+                if norm != cur and (norm["keywords"] or norm["competitors"]):
+                    t = self.store.task(t["id"]) or t
+                    t["data_request"] = new_req
+                    self.store.save_task(t)
+                    self.store.event("analyst.data_request", t["id"], "analyst", {"keywords": len(norm["keywords"]), "locations": norm["locations"],
+                                                                                 "sources": norm["sources"], "competitors": norm["competitors"]})
+                    rounds += 1
+                    continue
+            break
+        summary = str(rep.get("summary_md", ""))
+        files, refused = analyst_files(rep, kw)
+        if refused:
+            self.store.event("analyst.files_refused", t["id"], "dispatcher", {"paths": refused, "allowed": kw["outputs"]})
+        why = analyst_not_done(rep, t, kw, files, kw_enabled=kw["enabled"])
+        if why is None and is_stub_result(summary) and not files:
             # a stub ("duplicate call; see the previous report") must not close the task (release-radar T-0029, 03.11)
             self.store.add_result(t["id"], {"run_id": run_id, "status": "blocked", "summary": summary[:1200]})
             self.store.transition(t["id"], "blocked", "dispatcher", "analyst returned a stub, not a measurement", force=True, assignee_run=None)
@@ -4187,8 +4233,84 @@ class Cycle:
                            f"({_short_text(summary, 160)}). Re-state the question with the data field it needs, or close the task.",
                            task_id=t["id"], blocks=[t["id"]])
             return True
-        self.store.add_result(t["id"], {"run_id": run_id, "status": "done", "summary": summary[:1200]})
-        self.store.transition(t["id"], "done", "dispatcher", "measurement delivered", force=True)
+        if why is not None:
+            self.store.add_result(t["id"], {"run_id": run_id, "status": "blocked", "summary": summary[:1200],
+                                            "missing": [str(m)[:300] for m in rep.get("missing") or []][:8]})
+            self.store.transition(t["id"], "blocked", "dispatcher", f"analyst did not deliver: {why}"[:300], force=True, assignee_run=None)
+            hint = ("Keyword data is off for this product (product.yaml `keywords.enabled`): the owner turns it on, or re-state the task "
+                    "without it." if not kw["enabled"] else
+                    "Answer what it lacks, or give the task a `data_request` (phrases × locations, or competitor domains), or close it.")
+            self.store.ask(from_="analyst", to="po", task_id=t["id"], blocks=[t["id"]],
+                           question=f"Task {t['id']}: the analyst did not deliver — {why}. {hint}"[:1500])
+            return True
+        result = {"run_id": run_id, "status": "done", "summary": summary[:1200], "changes": [f["path"] for f in files]}
+        if fetched:
+            result["data"] = {"key": fetched["key"], "spent_usd": fetched.get("spent_usd", 0.0), "errors": len(fetched.get("errors") or [])}
+        if not files:
+            self.store.add_result(t["id"], result)
+            self.store.transition(t["id"], "done", "dispatcher", "measurement delivered", force=True)
+            return True
+        return self.land_analyst_files(t, files, result, run_id)
+
+    def fetch_task_data(self, t: dict[str, Any], kw: dict[str, Any]) -> dict[str, Any]:
+        """The task's `data_request`, fetched by the dispatcher (team/keywords.py); traced on the task as `data`."""
+        req, notes = keywords.normalize(t.get("data_request"), kw)
+        for n in notes:
+            log.info("%s: %s data request: %s", self.p.slug, t["id"], n)
+        res = keywords.fetch(req, kw, out_dir=self.p.dir / "metrics" / "keywords", store=self.store, task_id=t["id"])
+        res["errors"] = [{"what": "request", "error": n} for n in notes] + list(res.get("errors") or [])
+        if notes:
+            (self.p.dir / "metrics" / "keywords" / f"{t['id']}-{res['key']}.md").write_text(keywords.to_md(res, kw), encoding="utf-8")
+        self.store.event("keywords.fetched", t["id"], "dispatcher", {"key": res["key"], "spent_usd": res.get("spent_usd"),
+                                                                     "errors": len(res["errors"]), "refused": res.get("refused")})
+        t2 = self.store.task(t["id"]) or t
+        t2["data"] = {"key": res["key"], "file": f"metrics/keywords/{t['id']}-{res['key']}.md", "spent_usd": res.get("spent_usd"),
+                      "refused": res.get("refused"), "fetched": res["generated"]}
+        self.store.save_task(t2)
+        t.update(data=t2["data"])
+        return res
+
+    def land_analyst_files(self, t: dict[str, Any], files: list[dict[str, Any]], result: dict[str, Any], run_id: str) -> bool:
+        """The analyst's documents (`keywords.outputs`, e.g. seo/keyword-map.md) on the task branch, merged like the game
+        designer's; without a repository they go to the product folder. The task is `done` once they landed."""
+        repo = self.p.repo_dir
+        with self.repo_lock:
+            if self.p.repo_url:
+                gitops.ensure_clone(repo, self.p.repo_url, self.p.repo_branch)
+            has_repo = (repo / ".git").exists() or self.ensure_local_repo()
+        names = ", ".join(f["path"] for f in files)[:200]
+        if not has_repo:
+            for f in files:
+                p = self.p.dir / f["path"]
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(str(f.get("content") or ""), encoding="utf-8")
+            self.store.add_result(t["id"], result)
+            self.store.transition(t["id"], "done", "dispatcher", f"analyst files written to the product folder: {names}", force=True)
+            return True
+        with self.repo_lock:
+            gitops.park_on_base(repo, self.p.repo_branch)
+            wt, branch = self.task_checkout(t)
+            for f in files:
+                p = wt / f["path"]
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_text(str(f.get("content") or ""), encoding="utf-8")
+            gitops.git(wt, "add", "-A")
+            gitops.git(wt, "commit", "-q", "--allow-empty", "-m", f"{t['id']}: analyst — {names[:120]}")
+            result["branch"] = branch
+            try:
+                sha = gitops.merge_and_push(repo, t["id"], self.p.repo_branch, worktree=wt)
+            except gitops.MergeConflict as exc:
+                gitops.remove_task_worktree(repo, wt, t["id"], delete_branch=True)
+                self.store.add_result(t["id"], {**result, "status": "error"})
+                self.merge_conflict_back(t, exc, "analyst", run_id, rerun=True)
+                return True
+            except gitops.GitError as exc:
+                self.store.add_result(t["id"], {**result, "status": "error"})
+                self.store.transition(t["id"], "blocked", "dispatcher", f"merge/push failed: {gitops.redact(str(exc))[:300]}", force=True)
+                return True
+        self.store.add_result(t["id"], {**result, "commit": sha})
+        self.store.transition(t["id"], "done", "dispatcher", f"measurement delivered; {names} merged {sha[:10]}", force=True,
+                              released_sha=sha, released_at=utcnow())
         return True
 
     # measure: daily analyst ---------------------------------------------------------------------------
@@ -4365,7 +4487,7 @@ class Cycle:
             t["hypothesis_readout"] = utcnow()
             self.store.save_task(t)
 
-    def analyst_run(self, *, label: str, question: str | None = None) -> RunResult | None:
+    def analyst_run(self, *, label: str, question: str | None = None, cap: float = 1.0) -> RunResult | None:
         files = sorted((self.p.dir / "metrics").glob("????-??-??.json"), reverse=True)[:4]
         metrics = [("digest", prompts.metrics_digest(files, balance_cfg=balance.settings(self.p.raw)))]     # ops 04.11: compact per-day view, not cut raw files
         gsc_md = self.p.dir / "metrics" / "gsc.md"
@@ -4377,7 +4499,7 @@ class Cycle:
         prompt = prompts.analyst_prompt(self.p, self.store, metrics=metrics, accepted=accepted, posts=posts)
         if question:
             prompt += f"\n\n# QUESTION TO ANSWER\n{question}\n"
-        return self.role_run("analyst", prompt, "analyst-report", cwd=self.p.work_dir / self.cycle_id / label, label=label, cap=1.0, allowed_tools=[], max_turns=6)
+        return self.role_run("analyst", prompt, "analyst-report", cwd=self.p.work_dir / self.cycle_id / label, label=label, cap=cap, allowed_tools=[], max_turns=6)
 
     # digest: once a day to the owner's channel ----------------------------------------------------
 
@@ -4462,6 +4584,60 @@ def is_stub_result(summary: str) -> bool:
     """A result that says nothing: shorter than MIN_RESULT_CHARS or a known 'duplicate / see previous' phrase."""
     low = " ".join(str(summary or "").lower().split())
     return len(low) < MIN_RESULT_CHARS or any(m in low for m in STUB_MARKERS)
+
+
+# Owner 28.11: «нет инструмента / нет данных» closed four hittheline tasks as done. Words that say the work was not done.
+NOT_DONE_MARKERS = ("не делал", "не сделал", "не выполн", "не могу выполн", "нет сети", "нечем снять", "нет инструмента",
+                    "задача нужна исполнителю", "no network", "no tool to", "no tool for", "not done", "did not do", "could not do", "cannot do",
+                    "can't do", "unable to do", "no access to the", "without network")
+ANALYST_STATUSES_NOT_DONE = ("blocked", "needs_data")
+
+
+def analyst_files(rep: dict[str, Any], kw: dict[str, Any]) -> tuple[list[dict[str, Any]], list[str]]:
+    """The analyst's `files` the dispatcher may commit: safe relative paths under `keywords.outputs`. (kept, refused paths)"""
+    keep, refused = [], []
+    prefixes = [str(x) for x in kw.get("outputs") or []]
+    for f in rep.get("files") or []:
+        if not isinstance(f, dict) or not str(f.get("content") or "").strip():
+            continue
+        path = str(f.get("path") or "").strip()
+        if prompts.safe_rel_path(path) and any(path.startswith(px) for px in prefixes):
+            keep.append({"path": path, "content": str(f["content"])})
+        else:
+            refused.append(path)
+    return keep, refused
+
+
+def required_outputs(t: dict[str, Any], kw: dict[str, Any]) -> list[str]:
+    """Paths under `keywords.outputs` the task's scope or acceptance names (T-0068: `seo/keyword-map.md`)."""
+    text = " ".join([str(t.get("scope") or "")] + [str(a) for a in t.get("acceptance") or []])
+    out: list[str] = []
+    for px in kw.get("outputs") or []:
+        for m in re.finditer(r"(?<![\w-])" + re.escape(str(px)) + r"[\w./-]*\w", text):
+            if m.group(0) not in out:
+                out.append(m.group(0))
+    return out
+
+
+def analyst_not_done(rep: dict[str, Any], t: dict[str, Any], kw: dict[str, Any], files: list[dict[str, Any]], *,
+                     kw_enabled: bool) -> str | None:
+    """Why an analyst task report is not a delivery, or None. Its own `task_status` first; without one, the words of
+    NOT_DONE_MARKERS in the summary; then a file the task names under `keywords.outputs` that did not come back."""
+    status = str(rep.get("task_status") or "").strip()
+    missing = "; ".join(str(m) for m in rep.get("missing") or [] if str(m).strip())
+    if status in ANALYST_STATUSES_NOT_DONE:
+        return f"status {status}" + (f": {missing}" if missing else "")
+    low = " ".join(str(rep.get("summary_md") or "").lower().split())
+    if status != "done":
+        hit = next((m for m in NOT_DONE_MARKERS if m in low), None)
+        if hit:
+            return f"the report says it was not done («{hit}»)" + (f": {missing}" if missing else "")
+    if rep.get("data_request") and not files and status != "done":
+        return "it asked for data the dispatcher could not fetch" + ("" if kw_enabled else " (keyword data is off)")
+    need = [p for p in required_outputs(t, kw) if p not in {f["path"] for f in files}]
+    if need and not files:
+        return f"the task names {', '.join(need)} and no such file came back"
+    return None
 
 
 DEPENDENCY_DONE = ("accepted", "measured", "done")
@@ -4879,8 +5055,11 @@ def daily_digest(p: Product, store: Store, day: str) -> str:
     ed_line = f"Тексты: средний балл редактора {em}/5 за последние {en} постов" + (" ⚠ ниже планки" if em is not None and en >= 5 and em < editorial.DEGRADE_BELOW else "") if em is not None else "Тексты: редактор ещё не оценивал"
     lines = [f"📦 {p.raw.get('name') or p.slug} — {day}", "", ux_line, ed_line,
              f"Задачи: {s['tasks']} всего · " + ", ".join(f"{k} {v}" for k, v in sorted(s["by_state"].items())),
-             f"Расход сегодня: ${s['spent_today']:.2f} (кап ${p.daily_cap:.0f}) · открытых вопросов: {len(qs)}, владельцу: {len(owner_q)}", "",
-             "PO: " + po_txt[:1200], "", "Аналитик: " + an_txt[:1200]]
+             f"Расход сегодня: ${s['spent_today']:.2f} (кап ${p.daily_cap:.0f}) · открытых вопросов: {len(qs)}, владельцу: {len(owner_q)}"]
+    kw_line = keywords.spend_line(store, keywords.settings(p.raw))
+    if kw_line:                                    # owner 28.11: paid keyword data is its own money, not model spend
+        lines.append(f"Данные о запросах: DataForSEO ${store.api_spent('dataforseo'):.2f} из потолка ${keywords.settings(p.raw)['dataforseo_cap_usd']:.2f}")
+    lines += ["", "PO: " + po_txt[:1200], "", "Аналитик: " + an_txt[:1200]]
     if owner_q:
         lines += ["", "❓ Владельцу:"] + [f"- {q['id']}: {q['question'][:300]}" for q in owner_q[:5]]
     lines += parked_digest_lines(p, store)

@@ -863,6 +863,38 @@ def analyst_prompt(product: Product, store: Store, *, metrics: list[tuple[str, s
             + "\n\n# POSTS PUBLISHED\n" + (_y(posts) if posts else "(none)") + "\n")
 
 
+def analyst_task_block(task: dict[str, Any], kw: dict[str, Any], *, data_md: str = "", rounds_left: int = 0, spent: float = 0.0) -> str:
+    """The part of an analyst TASK prompt (not the daily measurement) about external keyword data and the deliverable
+    (owner 28.11, team/keywords.py): the tables the dispatcher fetched, how to ask for more, where files may go."""
+    out = ["\n\n# HOW THIS TASK ENDS",
+           "Set `task_status`: `done` only when the deliverable the task asks for is in this report (and in `files` when the task "
+           "names a file); `needs_data` when you need keyword data you do not have; `blocked` for anything else you lack. With "
+           "`needs_data` or `blocked`, list what is missing in `missing`. A task is never closed by a report that says it was not done."]
+    if kw.get("outputs"):
+        out.append("Files: return each document whole in `files` (`path`, `content`, markdown). Allowed paths start with "
+                   + ", ".join(f"`{x}`" for x in kw["outputs"]) + " (repository-relative). The dispatcher commits them.")
+    if not kw.get("enabled"):
+        out.append("External keyword data (DataForSEO, Bing Webmaster) is OFF for this product: if the task needs search volumes, "
+                   "say `needs_data` and name them in `missing`.")
+        return "\n".join(out) + "\n"
+    locs = ", ".join(f"`{k}` ({v.get('name')})" for k, v in kw["locations"].items())
+    out += ["", "# KEYWORD DATA (the dispatcher calls the APIs; you never see a key and have no network)",
+            "You may ask for data by returning `data_request` and `task_status: needs_data`: `keywords` (phrases as people type "
+            f"them, ≤ {kw['max_keywords']}, ≤ 10 words, no symbols), `locations` from {locs}, `sources` from "
+            "`google_ads_volume` (DataForSEO Google Ads monthly volume, paid), `ranked_keywords` (DataForSEO Labs: what "
+            "`competitors` domains rank for in Google, filtered by `include` words, paid), `bing_keyword` and `bing_related` "
+            f"(Bing Webmaster impressions, free). The dispatcher fetches it and runs you again with the tables — rounds left: {max(0, rounds_left)}. "
+            f"Paid DataForSEO money: ${spent:.2f} spent of the product's ceiling ${float(kw['dataforseo_cap_usd']):.2f}"
+            + (" (no paid call is possible)" if float(kw["dataforseo_cap_usd"]) <= 0 else "")
+            + ". Search Console data is in the METRICS above. A value marked missing or null stays missing: never estimate a volume."]
+    if data_md:
+        lim = int(kw.get("prompt_chars") or 24000)
+        out += ["", "# DATA FETCHED BY THE DISPATCHER FOR THIS TASK", data_md[:lim] + ("\n… (cut; the full tables are in the product folder)" if len(data_md) > lim else "")]
+    elif task.get("data_request"):
+        out += ["", "(the task's data_request was not fetched in this run)"]
+    return "\n".join(out) + "\n"
+
+
 def marketer_prompt(product: Product, task: dict[str, Any], channels: dict[str, Any], previous: list[dict[str, Any]],
                     lessons: list[str] | None = None, editor_notes: list[dict[str, Any]] | None = None,
                     memory: dict[str, Any] | None = None) -> str:
