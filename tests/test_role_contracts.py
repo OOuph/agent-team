@@ -130,3 +130,14 @@ def test_the_deputy_gets_the_owners_words(tmp_path: Path):
     for words in ("Отказа игроку нет.", "вариант B отозван", "Такого быть не должно!", "owner_only"):
         assert words in prompt, f"the deputy's request does not hold «{words}»"
     assert len(prompt) <= PROMPT_LIMIT["deputy"]
+
+
+def test_machine_proofreading_is_a_draft_in_the_cards_that_accept_text():
+    """Owner 28.11 (pokerbr К9): a model's proofreading of a Portuguese site missed what a native reader saw at once, and
+    the criterion «texts are proofread» was closed by a machine. The rule lives in the cards of the roles that write the
+    criteria and accept text: the PO, the reviewer, the editor."""
+    roles = Path(__file__).resolve().parent.parent / "team" / "roles"
+    for card in ("po.md", "reviewer.md", "editor.md"):
+        text = (roles / card).read_text(encoding="utf-8")
+        assert "Machine proofreading is a draft (owner 28.11" in text, card
+        assert "human" in text.split("Machine proofreading is a draft")[1][:900], card

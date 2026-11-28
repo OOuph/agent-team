@@ -31,6 +31,8 @@ ROLE = "onboarding"
 DIR = "onboarding"                           # products/<slug>/onboarding/
 BRIEF_FILE = "brief.md"
 QUESTIONS_YAML = "questions.yaml"
+STRAY_NOTES_MAX = 40                       # notes outside the answer fields passed to the plan: at most this many pieces
+STRAY_NOTE_CHARS = 2000                    # … of this many characters each
 QUESTIONS_MD = "questions.md"
 ANSWERS_YAML = "answers.yaml"
 PLAN_YAML = "plan.yaml"
@@ -129,7 +131,7 @@ def standing_note() -> str:
             + standing.vision_section() + "\n\n")
 
 
-def plan_prompt(slug: str, brief: str, qa: dict[str, Any], raw: dict[str, Any]) -> str:
+def plan_prompt(slug: str, brief: str, qa: dict[str, Any], raw: dict[str, Any], notes: list[dict[str, str]] | None = None) -> str:
     game = _profile(raw) == "game"
     what = ("the full VISION.md by the template, GAME-DESIGN.md v1 or a first game-designer task, product fields, the first "
             "backlog (M0 only; " if game else
@@ -142,6 +144,9 @@ def plan_prompt(slug: str, brief: str, qa: dict[str, Any], raw: dict[str, Any]) 
             + (standing_note() if game else "") +
             "## BRIEF\n" + brief.strip() +
             "\n\n## QUESTIONS AND ANSWERS\n" + yaml.safe_dump(qa, sort_keys=False, allow_unicode=True, width=110) +
+            ("\n## OWNER'S NOTES OUTSIDE THE ANSWER FIELDS\nThe owner wrote these in the questions file outside `Ответ:` / `Решение:`. They are "
+             "the owner's words with the weight of an answer: a note that corrects the summary, an assumption or a default wins over it. "
+             "Name each note you applied in `decisions`.\n" + yaml.safe_dump(notes, sort_keys=False, allow_unicode=True, width=110) if notes else "") +
             "\n## PRODUCT (product.yaml as it is now)\n" + yaml.safe_dump({k: raw.get(k) for k in ("slug", "name", "host", "repo", "budget_usd_per_day")},
                                                                           sort_keys=False, allow_unicode=True) +
             "\n## VISION TEMPLATE (fill every section; keep the headings)\n" + vision_template(_profile(raw)))
@@ -211,6 +216,41 @@ def parse_answers(md: str) -> dict[str, dict[str, str]]:
             buf.append(ln.rstrip())
     flush()
     return {"answers": answers, "decisions": decisions}
+
+
+def stray_notes(md: str, rendered: str) -> list[dict[str, str]]:
+    """What the owner wrote OUTSIDE the `Ответ:` / `Решение:` fields: lines of the filled file that are neither part of
+    an answer or a decision nor a line of the file as it was rendered. Grouped by the heading they stand under.
+    28.11, pokerbr К6: a correction written under «Как мы поняли продукт» was read by nobody and the plan ignored it."""
+    known = {ln.strip() for ln in rendered.splitlines() if ln.strip()}
+    out: list[dict[str, str]] = []
+    head, cur, collecting = "(начало файла)", None, False
+    buf: list[str] = []
+
+    def flush() -> None:
+        nonlocal buf
+        if buf:
+            out.append({"under": head, "text": "\n".join(buf)[:STRAY_NOTE_CHARS]})
+        buf = []
+
+    for ln in md.splitlines():
+        text = ln.strip()
+        m = _HEAD.match(ln)
+        if m or ln.startswith("## ") or ln.startswith("# "):
+            flush()
+            head, cur, collecting = text.lstrip("# ").strip()[:120], (m.group(1) if m else None), False
+            if text not in known:
+                buf.append(text)                   # a heading the owner added or rewrote is itself a note
+            continue
+        if cur and ((ln.startswith(ANSWER_LABEL) and cur.startswith("Q")) or (ln.startswith(DECISION_LABEL) and cur.startswith("A"))):
+            flush()
+            collecting = True
+            continue
+        if collecting or not text or text in known:
+            continue
+        buf.append(text)
+    flush()
+    return out[:STRAY_NOTES_MAX]
 
 
 def merge_answers(questions: dict[str, Any], parsed: dict[str, dict[str, str]]) -> dict[str, Any]:
@@ -307,12 +347,17 @@ def apply_answers(st: C.Settings, slug: str, answers_path: Path | None = None, *
     od = _dir(d)
     questions = _read_yaml(od / QUESTIONS_YAML)
     md_path = answers_path or (od / QUESTIONS_MD)
-    parsed = parse_answers(md_path.read_text(encoding="utf-8"))
+    md_text = md_path.read_text(encoding="utf-8")
+    parsed = parse_answers(md_text)
     qa = merge_answers(questions, parsed)
-    _write_yaml(od / ANSWERS_YAML, {"source_file": str(md_path), "applied": utcnow(), **qa})
+    notes = stray_notes(md_text, render_questions_md(slug, questions))
+    if notes:
+        log.warning("%s: %d piece(s) of text outside the `%s` / `%s` fields of %s — passed to the plan as the owner's notes: %s", slug, len(notes),
+                    ANSWER_LABEL, DECISION_LABEL, md_path, "; ".join(f"«{n['under'][:40]}»: {n['text'][:80]}" for n in notes)[:600])
+    _write_yaml(od / ANSWERS_YAML, {"source_file": str(md_path), "applied": utcnow(), **qa, **({"notes": notes} if notes else {})})
     brief = (od / BRIEF_FILE).read_text(encoding="utf-8")
     p = C.load_product(st, d)
-    prompt = plan_prompt(slug, brief, qa, raw)
+    prompt = plan_prompt(slug, brief, qa, raw, notes)
     (od / "plan-prompt.md").write_text(prompt, encoding="utf-8")
     plan = _run(st, p, runner, prompt, "onboarding-plan", "onboarding-plan", PLAN_CAP_USD, dry_run)
     source = "model"
@@ -322,7 +367,7 @@ def apply_answers(st: C.Settings, slug: str, answers_path: Path | None = None, *
     created = apply_plan(d, raw, plan, qa)
     _log(d, "plan", source=source, **{k: v for k, v in created.items() if k != "tasks"}, tasks=len(created["tasks"]))
     log.info("%s: onboarding step 2 done (%s): %d tasks, VISION %d chars", slug, source, len(created["tasks"]), len(plan.get("vision_md") or ""))
-    return {"source": source, **created}
+    return {"source": source, **created, "notes_outside_fields": len(notes)}
 
 
 def apply_plan(d: Path, raw: dict[str, Any], plan: dict[str, Any], qa: dict[str, Any]) -> dict[str, Any]:

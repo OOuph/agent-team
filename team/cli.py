@@ -97,6 +97,9 @@ def cmd_onboard(st: C.Settings, a: argparse.Namespace) -> int:
             res = onboard.apply_answers(st, a.slug, Path(a.answers) if a.answers else None, runner=runner, dry_run=a.dry_run)
             print(f"{a.slug}: onboarding done ({res['source']}): VISION {res['vision']}" + (f", GDD {res['game_design']}" if res["game_design"] else "")
                   + f"; tasks {', '.join(res['tasks'])}" + (f" (deferred: {', '.join(res['deferred'])})" if res["deferred"] else ""))
+            if res.get("notes_outside_fields"):
+                print(f"WARNING: {res['notes_outside_fields']} piece(s) of text stood outside the `Ответ:` / `Решение:` fields; they went to the plan as "
+                      f"the owner's notes — see `notes` in products/{a.slug}/onboarding/answers.yaml and check that the plan applied them.")
             print("\n" + res["summary_md"].strip() + f"\n\nnext: team cycle --product {a.slug} --dry-run")
         else:
             sys.exit("team onboard: one of --brief FILE, --answers [FILE], --status is required")
@@ -408,6 +411,48 @@ def _prio_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) ->
         time.sleep(min(MOVE_POLL_S, max(0.05, deadline - time.monotonic())))
 
 
+def _hold_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) -> int:
+    """`team task <product> take --id T-… --by <who> [--note …] [--wait-s N]` and `… give --id T-… --by <who>`: the
+    operator takes a task for manual work and gives it back (28.11, pokerbr К8). While it is taken the cycle leaves it
+    alone: no seat, no review, no replan, no closing, no PO action. Needs `cycle.escalation.operator_hold: true` in the
+    product's settings — without it the mark would be ignored, so `take` refuses (exit 2) and says so. `take` is refused
+    (exit 75) while a lane of the running cycle works on this very task; `give` always passes."""
+    from . import locks
+    if not a.id:
+        print(f"team task {a.action}: --id is needed", file=sys.stderr)
+        return 2
+    if a.action == "give":
+        try:
+            t = s.give_task(a.id, a.by, a.note or "")
+        except KeyError:
+            print(f"{a.id}: not found", file=sys.stderr)
+            return 2
+        log.info("task give %s %s by %s (state %s)", p.slug, a.id, a.by, t.get("state"))
+        print(f"{a.id}: given back to the cycle (state {t.get('state')})")
+        return 0
+    if not p.escalation_cfg["operator_hold"]:
+        print(f"team task take: `cycle.escalation.operator_hold` is off for {p.slug} — the cycle would ignore the mark. "
+              f"Set `cycle: {{escalation: {{operator_hold: true}}}}` in products/{p.slug}/product.yaml first.", file=sys.stderr)
+        return 2
+    deadline = time.monotonic() + max(0.0, float(a.wait_s or 0.0))
+    while True:
+        with s.lock:
+            if s.task(a.id) is None:
+                print(f"{a.id}: not found", file=sys.stderr)
+                return 2
+            lane = s.working_lane(a.id) if locks.product_busy(st, p.slug) else None
+            if lane is None:
+                t = s.hold_task(a.id, a.by, a.note or "")
+                log.info("task take %s %s by %s (state %s)", p.slug, a.id, a.by, t.get("state"))
+                print(f"{a.id}: taken by {a.by} (state {t.get('state')}); the cycle leaves it alone until `team task {p.slug} give --id {a.id}`")
+                return 0
+        if time.monotonic() >= deadline:
+            log.warning("task take %s %s: not done — lane %s of the running cycle works on it", p.slug, a.id, lane)
+            print(f"{a.id}: not taken — lane {lane} of the running cycle is working on it; try again when it ends, or add --wait-s N", file=sys.stderr)
+            return locks.EX_TEMPFAIL
+        time.sleep(min(MOVE_POLL_S, max(0.05, deadline - time.monotonic())))
+
+
 def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
     p = _products(st, a.product)[0]
     s = Store(p.dir)
@@ -427,6 +472,8 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
         rc = _move_task(st, p, s, a)
     elif a.action == "prio":
         rc = _prio_task(st, p, s, a)
+    elif a.action in ("take", "give"):
+        rc = _hold_task(st, p, s, a)
     elif a.action == "show":
         t = s.task(a.id)
         print(yaml.safe_dump(t, sort_keys=False, allow_unicode=True, width=110) if t else "not found")
@@ -674,7 +721,7 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--dry-run", action="store_true"); s.add_argument("--due", action="store_true"); s.set_defaults(fn=cmd_cycle)
     s = sub.add_parser("status"); s.add_argument("product", nargs="?", default="all"); s.set_defaults(fn=cmd_status)
     s = sub.add_parser("tasks"); s.add_argument("product"); s.add_argument("--state", choices=TASK_STATES); s.set_defaults(fn=cmd_tasks)
-    s = sub.add_parser("task"); s.add_argument("product"); s.add_argument("action", choices=["new", "move", "show", "prio"])
+    s = sub.add_parser("task"); s.add_argument("product"); s.add_argument("action", choices=["new", "move", "show", "prio", "take", "give"])
     s.add_argument("--id"); s.add_argument("--to", choices=TASK_STATES); s.add_argument("--note"); s.add_argument("--force", action="store_true")
     s.add_argument("--title"); s.add_argument("--type", default="feature"); s.add_argument("--problem"); s.add_argument("--scope")
     s.add_argument("--acceptance", action="append"); s.add_argument("--goal"); s.add_argument("--priority", choices=["P0", "P1", "P2", "P3"])

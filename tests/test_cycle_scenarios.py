@@ -455,3 +455,117 @@ def test_14_a_task_merged_in_the_cycle_is_reviewed_in_the_same_cycle(tmp_path: P
         assert len(reviews) == 2                                       # one review per task and cycle
     else:
         assert _state(p, first)["state"] == "released" and "reviewer" not in r.calls and _events(p, "review.in_cycle") == []
+
+
+@BOTH
+def test_15_a_task_that_answers_partial_every_time_with_new_words(tmp_path: Path, name: str):
+    """28.11, pokerbr К4 (seven designer runs of one task in two hours) and К1 (three partial runs of T-0038): every
+    partial said something new, so «the same partial twice» never fired. With `cycle.guards.partial_limit: 3` the third
+    partial in a row blocks the task with a question to the PO bound to it."""
+    st, p = _make(tmp_path, name)
+    tid = _task(p, "designer", "needs a browser the seat does not have")
+    runs = 0
+    for i in range(5):
+        r = LaneRunner()
+
+        def des(cwd: Path, n: int, i=i):
+            return {"status": "partial", "summary": f"cycle {i} run {n}: drew another part, could not look at it in a browser", "changes": [],
+                    "how_to_verify": [], "self_check": [{"criterion": "works", "met": False, "evidence": ""}]}
+        r.work["designer"] = des
+        cyc = Cycle(st, p, r, f"c{i}")
+        res = run_cycle(cyc, ["execute"])
+        cyc.store.close()
+        assert violations(cyc, p, res) == []
+        runs += r.calls.count("designer")
+    t = _state(p, tid)
+    limited = _events(p, "task.partial_limit")
+    if name == "game":
+        assert runs == 3 and t["state"] == "blocked" and "3 partial results in a row" in t["history"][-2]["note"] + t["history"][-1]["note"]
+        assert len(limited) == 1 and limited[0]["subject"] == tid and limited[0]["detail"]["streak"] == 3
+        s = Store(p.dir)
+        q = [x for x in s.questions(["open"]) if tid in (x.get("blocks") or [])]
+        s.close()
+        assert len(q) == 1 and q[0]["to"] == "po" and "3 times in a row" in q[0]["question"]
+    else:
+        # known and kept while the count is off: the task goes round as long as its words differ
+        assert runs >= 5 and t["state"] == "in_progress" and limited == []
+
+
+@BOTH
+def test_16_a_question_to_the_owner_reaches_the_owners_channel_once(tmp_path: Path, name: str):
+    """28.11, pokerbr К7: a question to the owner lay in the store and reached nobody until the digest was read. With
+    `cycle.escalation.owner_ping` each one is a line in the owner's channel — once, at most five per look."""
+    st, p = _make(tmp_path, name)
+    s = Store(p.dir)
+    first = s.ask(from_="po", to="owner", question="Which domain does the site get?")["id"]
+    s.ask(from_="developer", to="po", question="Not for the owner: which file holds the copy?")
+    s.close()
+    for i in range(2):
+        cyc = Cycle(st, p, LaneRunner(), f"c{i}")
+        res = run_cycle(cyc, ["measure"])
+        cyc.store.close()
+        assert violations(cyc, p, res) == []
+    told = [e["detail"]["text"] for e in _events(p, "owner.told") if "вопрос владельцу" in e["detail"]["text"]]
+    if name == "defaults":
+        assert told == []
+        return
+    assert len(told) == 1 and first in told[0] and "Which domain" in told[0] and f"team answer {p.slug} {first}" in told[0]
+    s = Store(p.dir)
+    assert [q for q in s.questions(["open"]) if q["id"] == first][0]["told"]
+    more = [s.ask(from_="po", to="owner", question=f"Question number {k} of the night?")["id"] for k in range(7)]
+    s.close()
+    cyc = Cycle(st, p, LaneRunner(), "c2")
+    run_cycle(cyc, ["measure"])                 # one look before the phases and one after `measure`: five, then the last two
+    cyc.store.close()
+    told = [e["detail"]["text"] for e in _events(p, "owner.told") if "Question number" in e["detail"]["text"]]
+    assert len(told) == 7 and all(any(q in t for t in told) for q in more)
+    assert sum("Ещё вопросов без ответа: 2." in t for t in told) == 1
+
+
+@BOTH
+def test_17_a_task_the_operator_took_is_left_alone(tmp_path: Path, name: str):
+    """28.11, pokerbr К8: the operator moved a task by hand and the machine reviewed and replanned it all the same. With
+    `cycle.escalation.operator_hold` a task taken with `team task <product> take` gets no seat, no review and no PO
+    action until `give`, and the cycle says why it stands."""
+    st, p = _make(tmp_path, name)
+    held, free = _task(p, "developer", "the operator works on it by hand"), _task(p, "developer", "nobody holds it")
+    merged = _task(p, "developer", "merged, then taken before its review")
+    s = Store(p.dir)
+    s.hold_task(held, "operator", "checking the deploy by hand")
+    s.close()
+    r = LaneRunner()
+
+    def dev(cwd: Path, n: int):
+        if cwd.name == merged:
+            s2 = Store(p.dir)
+            s2.hold_task(merged, "operator")
+            s2.close()
+        _commit(cwd, f"src/part-{cwd.name}.ts", "part\n")
+    r.work["developer"] = dev
+    cyc = Cycle(st, p, r, "c1")
+    res = run_cycle(cyc, ["review", "execute"])
+    cyc._apply_po({"close_tasks": [{"task_id": held, "reason": "looks stale"}], "reprioritize": [{"task_id": held, "priority": "P0", "reason": "x"}]}, [])
+    cyc.store.close()
+    assert violations(cyc, p, res, r) == []
+    ran = [c.name for c in r.cwds.get("developer", [])]
+    if name == "defaults":
+        assert held in ran                         # the mark alone changes nothing: `take` refuses without the switch
+        return
+    assert free in ran and _state(p, free)["state"] != "ready"
+    t = _state(p, held)
+    assert held not in ran and t["state"] == "ready" and t["priority"] == "P2" and t["held_by"] == "operator"
+    left = [x for e in _events(p, "execute.left") for x in e["detail"]["tasks"] if x["task"] == held]
+    assert left and "the operator holds it (operator)" in left[-1]["why"]
+    assert _state(p, merged)["state"] == "released" and r.calls.count("reviewer") + r.calls.count("tester") == 1      # only the free one
+    s = Store(p.dir)
+    s.give_task(held, "operator", "done by hand")
+    s.give_task(merged, "operator")
+    s.close()
+    assert sorted(e["subject"] for e in _events(p, "task.given")) == sorted([held, merged])
+    r2 = LaneRunner()
+    r2.work["developer"] = dev
+    cyc = Cycle(st, p, r2, "c2")
+    res = run_cycle(cyc, ["review", "execute"])
+    cyc.store.close()
+    assert violations(cyc, p, res, r2) == []
+    assert held in [c.name for c in r2.cwds.get("developer", [])] and "held_by" not in _state(p, held)

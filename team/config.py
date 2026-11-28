@@ -20,7 +20,11 @@ log = logging.getLogger("team.config")
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
 
 PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
-ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False, "references": False, "budget_split": False, "review_exit": False}   # `cycle.escalation`, see DEFAULTS
+ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False, "references": False, "budget_split": False, "review_exit": False,
+                                        # 28.11 (pokerbr К7, К8): `owner_ping` true = every open question to the owner goes to
+                                        # the owner's channel as one line, once; `operator_hold` true = a task taken with
+                                        # `team task <product> take` is left alone by seats, reviews, replans and closings
+                                        "owner_ping": False, "operator_hold": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
 VISIBLE_DEFAULTS: dict[str, bool] = {"review_before_merge": False, "redesign_gate": False}   # `cycle.visible`, see DEFAULTS
 # `cycle.queue` (rework slice 9): the PO cuts tasks ahead
@@ -81,6 +85,8 @@ GUARDS_DEFAULTS: dict[str, Any] = {
                                   # work directory are ended (28.11: vitest of worktrees removed hours ago was still running)
     "no_name_kill": False,        # true = a role's run may not stop processes by name or pattern: pkill, killall, pgrep are denied
                                   # to it and its request says how to stop what it started (28.11: one run killed three others)
+    "partial_limit": 0,           # N > 0 = after N partial results in a row (whatever their summaries say) the task is blocked
+                                  # with a question to the PO (28.11, pokerbr К4: seven runs of one task, each «partial»)
     "budget_halt": False,         # true = once the day's budget is used up and nothing in flight can free any, the seats take
                                   # no further task in this cycle (27.11, found by a scenario: with retake and three passes
                                   # every ready task went ready → in_progress → ready three times per cycle)
@@ -88,7 +94,7 @@ GUARDS_DEFAULTS: dict[str, Any] = {
                                   # the PO with a question) instead of staying `in_progress` with a run id nobody holds (27.11)
 }
 _GUARDS_RANGE = {"loop_repeats": (3, 50, int), "cost_factor": (2.0, 100.0, float), "cost_min_runs": (3, 10000, int),
-                 "cost_days": (1, 90, int), "cost_floor_usd": (0.0, 100.0, float)}
+                 "cost_days": (1, 90, int), "cost_floor_usd": (0.0, 100.0, float), "partial_limit": (0, 20, int)}
 DEFAULTS: dict[str, Any] = {
     "paths": {"products_dir": "products", "data_dir": "data", "repos_dir": "data/repos"},
     "claude": {"binary": "claude", "auth": "oauth_token", "timeout_s": 1500, "inactivity_s": 300, "max_turns": 60,

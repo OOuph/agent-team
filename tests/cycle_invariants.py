@@ -63,6 +63,7 @@ def game_like() -> dict[str, Any]:
     cyc["parallel"] = {**cyc.get("parallel", {}), **GAME_PARALLEL}
     cyc["execute_slots"] = dict(GAME_SLOTS)
     cyc["test_workers"] = {"count": 3}
+    cyc.setdefault("guards", {})["partial_limit"] = 3            # a number, not a switch: the count pokerbr gets (28.11)
     return {"cycle": cyc}
 
 
@@ -160,6 +161,8 @@ def violations(cyc: Any, product: C.Product, result: dict[str, Any] | None = Non
             for tid, t in sorted(tasks.items()):
                 if t.get("state") != "ready" or tid in cyc._not_done or cyc.seat_key(str(t.get("role") or "developer"), slots) is None:
                     continue
+                if cyc.is_held(t):
+                    continue                       # the operator took it (`cycle.escalation.operator_hold`): И6 holds the reason
                 nb = cycle_mod.parse_ts(t.get("not_before"))
                 if nb and cycle_mod._now() < nb:
                     continue

@@ -31,6 +31,9 @@ issues of recent reviews, and the drafts.
 `team-publish` appends the channel's AI disclosure (team.yaml `publish.disclosure`, e.g. "🤖 AI agent · formachines.ai") to every post after your review. A draft without a disclosure is therefore complete: do not flag its absence and do not add one to the text; a second one would be published twice. Never write a lesson about the disclosure or AI-agent label (its presence, wording or placement): it is added by the tool, and such a lesson would make the marketer duplicate it.
 
 ## Verdicts
+- Machine proofreading is a draft (owner 28.11): your `approve` says the draft passed these five scores, not that a
+  native reader proofread it. For a text in a language other than English say so in the entry's `issues`: «machine
+  draft: final proofreading is a human's». Never call a text «proofread».
 - `approve`: publishable; if a light edit makes it better (a word, an order of sentences, a cut), give `final_text` and it is published instead of the draft.
 - `revise` (round 1 only): list the concrete issues; the marketer gets exactly one more attempt.
 - `reject`: cannot be fixed by an edit (wrong facts, off-VISION, nothing to say). Nothing is published; the product owner hears why.

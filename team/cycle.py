@@ -91,6 +91,8 @@ SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main br
 PARKED_AFTER_H = 24.0                                     # `cycle.queue.remind_parked`: a proposed / deferred task this old is named
 PARKED_LIST_MAX = 15                                      # … at most this many
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
+OWNER_PING_MAX = 5                                        # `cycle.escalation.owner_ping`: at most this many question lines per look; the rest wait for the next look
+OWNER_PING_CHARS = 300                                    # … and this much of a question's text in its line
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
 WORKTREE_LIVE_STATES = ("ready", "claimed", "in_progress")            # the task's checkout is kept: the next run works in it
 WORKTREE_PARKED_STATES = ("blocked", "waiting_owner", "deferred")     # kept for `cycle.parallel.worktree_keep_h` hours, then removed (the branch stays)
@@ -716,12 +718,14 @@ class Cycle:
                     self.start_early_execute()    # `cycle.flow.early_execute`: the seats begin beside collect and triage
                 except Exception as exc:  # noqa: BLE001 — the phases go on in their order; the execute phase starts the seats itself
                     log.exception("%s: early start of the seats failed: %s", self.p.slug, exc)
+            self.ping_owner_questions()           # a question asked between the cycles (the operator, onboarding)
             for ph in phases or PHASES:
                 if self.draining():
                     break                         # the phases that are left would start new runs; `finish_lanes` waits for the ones going
                 try:
                     getattr(self, f"phase_{ph}")()
                     self.phases_done.append(ph)
+                    self.ping_owner_questions()   # … and one a phase of this cycle asked
                 except Exception as exc:  # noqa: BLE001 — one phase failing must not kill the cycle
                     log.exception("%s: phase %s failed: %s", self.p.slug, ph, exc)
                     self.store.event("phase.error", ph, "dispatcher", str(exc)[:500])
@@ -1111,7 +1115,7 @@ class Cycle:
             after = timedelta(minutes=int(self.st.cycle.get("review_after_min", 6)))
         n = 0
         with self._review_lock:
-            for t in self.store.tasks(["released", "review"]):
+            for t in self.not_held(self.store.tasks(["released", "review"])):
                 if t["id"] in self._review_queued:
                     continue                      # one review per task and cycle: its verdict, whatever it is, belongs to the next one
                 if t.get(DEPLOY_PENDING):
@@ -1921,7 +1925,7 @@ class Cycle:
                 pass
         for rp in res.get("reprioritize") or []:
             t = self.store.task(str(rp.get("task_id")))
-            if t and rp.get("priority") in PRIO:
+            if t and rp.get("priority") in PRIO and not self.is_held(t):
                 t["priority"] = rp["priority"]
                 t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t["state"], "to": t["state"], "note": f"priority → {rp['priority']}: {rp.get('reason', '')[:200]}"})
                 self.store.save_task(t)
@@ -1929,7 +1933,7 @@ class Cycle:
         created_now: list[tuple[dict[str, Any], list[str]]] = []
         for c in res.get("close_tasks") or []:
             t = self.store.task(str(c.get("task_id")))
-            if t and t.get("state") in CLOSABLE_BY_PO:
+            if t and t.get("state") in CLOSABLE_BY_PO and not self.is_held(t):
                 self.store.transition(t["id"], "rejected", "po", f"closed by PO: {c.get('reason', '')[:300]}", force=True)
                 closed_now[t["id"]] = str(c.get("replaced_by") or "").strip()
         for note in self.apply_task_returns(res.get("return_tasks") or []):
@@ -1937,7 +1941,7 @@ class Cycle:
         skipped, held = [], []
         for pr in res.get("promote_tasks") or []:
             t = self.store.task(str(pr.get("task_id")))
-            if not t or t.get("state") not in ("proposed", "ready", "deferred"):
+            if not t or t.get("state") not in ("proposed", "ready", "deferred") or self.is_held(t):
                 continue
             t["hypothesis"] = pr.get("hypothesis")
             problems = self.hypothesis_problems(t)
@@ -2052,6 +2056,8 @@ class Cycle:
 
     def left_reason(self, t: dict[str, Any], slots: dict[str, int]) -> str:
         """Why a task that is `ready` at the end of the execute phase was not carried through — always some words."""
+        if self.is_held(t):
+            return f"the operator holds it ({t.get('held_by')}); `team task {self.p.slug} give --id {t['id']}` returns it"
         role = str(t.get("role") or "developer")
         key = self.seat_key(role, slots)
         if key is None:
@@ -2321,10 +2327,40 @@ class Cycle:
             if not in_flight:
                 break               # nothing ran in this pass, so nothing can have become startable
 
+    def is_held(self, t: dict[str, Any]) -> bool:
+        """`cycle.escalation.operator_hold`: the operator took this task (`team task <product> take`) — seats, reviews,
+        replans, closings and the PO's actions leave it alone until `give` (28.11, pokerbr К8: a task the operator moved
+        by hand was reviewed and replanned all the same)."""
+        return bool(t.get("held_by")) and self.p.escalation_cfg["operator_hold"]
+
+    def not_held(self, tasks: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        return [t for t in tasks if not self.is_held(t)]
+
+    def ping_owner_questions(self) -> int:
+        """`cycle.escalation.owner_ping`: one line to the owner's channel for every open question to the owner that was
+        not told yet (28.11, pokerbr К7: a question lay in the store and reached the owner only through the digest).
+        Once per question (`told` on it), at most OWNER_PING_MAX lines per look. Never raises. Returns the lines sent."""
+        try:
+            if not self.p.escalation_cfg["owner_ping"]:
+                return 0
+            fresh = [q for q in self.store.questions(["open"]) if q.get("to") == "owner" and not q.get("told")]
+            fresh.sort(key=lambda q: str(q.get("created") or ""))
+            for i, q in enumerate(fresh[:OWNER_PING_MAX]):
+                task = f" (задача {q['task']})" if q.get("task") else ""
+                more = f" Ещё вопросов без ответа: {len(fresh) - OWNER_PING_MAX}." if i == OWNER_PING_MAX - 1 and len(fresh) > OWNER_PING_MAX else ""
+                self.tell_owner(f"{self.p.slug}: вопрос владельцу {q['id']}{task} от {q.get('from')}: {_short_text(q.get('question'), OWNER_PING_CHARS)} "
+                                f"Ответить: team answer {self.p.slug} {q['id']} --text «…».{more}")
+                self.store.mark_question(q["id"], {"told": utcnow()})
+                log.info("%s: question %s to the owner sent to the owner's channel", self.p.slug, q["id"])
+            return min(len(fresh), OWNER_PING_MAX)
+        except Exception as exc:  # noqa: BLE001 — a notice must never cost a cycle
+            log.warning("%s: questions to the owner not sent: %s", self.p.slug, str(exc)[:200])
+            return 0
+
     def execute_candidates(self) -> list[dict[str, Any]]:
         """Tasks the execute phase looks at, in its order: in_progress (a failed review or a partial result) before
-        new ones, then by priority, then by age."""
-        return sorted(self.store.tasks(["in_progress", "ready"]), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", "")))
+        new ones, then by priority, then by age. A task the operator holds is not among them."""
+        return sorted(self.not_held(self.store.tasks(["in_progress", "ready"])), key=lambda x: (x["state"] != "in_progress", PRIO.get(x.get("priority"), 9), x.get("created", "")))
 
     @staticmethod
     def seat_key(role: str, slots: dict[str, int]) -> str | None:
@@ -2823,7 +2859,7 @@ class Cycle:
 
     def settle_replans(self) -> None:
         """Stuck tasks whose probes all finished: a working probe → the PO creates the implementation task; none → the owner."""
-        for t in self.store.tasks(["blocked", "waiting_owner"]):
+        for t in self.not_held(self.store.tasks(["blocked", "waiting_owner"])):
             rp = t.get("replan") or {}
             if rp.get("state") != "probing":
                 continue
@@ -2914,7 +2950,7 @@ class Cycle:
             return 0
         held = {r[0] for r in self.store.db.execute("SELECT task_id FROM claims").fetchall()}
         n = 0
-        for t in self.store.tasks(["claimed", "in_progress"]):
+        for t in self.not_held(self.store.tasks(["claimed", "in_progress"])):
             run = str(t.get("assignee_run") or "")
             if not run or t["id"] in held or run.startswith(f"{self.cycle_id}-") or self.lanes.busy(t["id"]):
                 continue
@@ -3092,6 +3128,19 @@ class Cycle:
                 self.store.transition(t["id"], "blocked", "dispatcher", "partial repeated with the same summary: stuck", force=True, assignee_run=None)
                 self.store.ask(from_="developer", to="po", question=f"Task {t['id']} returned the same partial result twice: "
                                f"{_short_text(res.get('summary'), 300)} Re-scope it, split it, or close it.", task_id=t["id"], blocks=[t["id"]])
+                return True
+            limit = int(self.p.guards_cfg["partial_limit"])
+            streak = partial_streak(t)
+            if limit and streak >= limit:
+                # 28.11, pokerbr К4: each partial said something new, so «the same partial twice» never fired and the task
+                # ran seven times; a count of partial results in a row stops it whatever the summaries say
+                self.store.transition(t["id"], "blocked", "dispatcher", f"{streak} partial results in a row (cycle.guards.partial_limit {limit}): stuck",
+                                      force=True, assignee_run=None)
+                self.store.ask(from_=role, to="po", question=f"Task {t['id']} returned a partial result {streak} times in a row; the last: "
+                               f"{_short_text(res.get('summary'), 300)} Say what it lacks (a tool, an access, a smaller scope): re-scope it, "
+                               "split it, or close it.", task_id=t["id"], blocks=[t["id"]])
+                self.store.event("task.partial_limit", t["id"], "dispatcher", {"streak": streak, "limit": limit, "role": role})
+                log.warning("%s: %s blocked after %d partial results in a row — question to the PO", self.p.slug, t["id"], streak)
                 return True
             self.store.transition(t["id"], "in_progress", "dispatcher", "partial — continues next cycle", force=True, last_review=None)
             return True
@@ -4201,7 +4250,7 @@ class Cycle:
                                         "fingerprint": fingerprint("analyst", o.get("classification", ""), o.get("url", ""), o.get("title", ""))})
         effects = {e.get("task_id"): e for e in res.get("task_effects") or []}      # optional; not asked for with `by_day`
         after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
-        for t in self.store.tasks(["accepted"]):
+        for t in self.not_held(self.store.tasks(["accepted"])):
             acc = accepted_moment(t)
             # by day: only a task the analyst did name is closed here with its effect; the rest is `close_unmeasured`'s
             if (t["id"] in effects) if by_day else (acc and _now() - acc >= after):
@@ -4238,7 +4287,7 @@ class Cycle:
         effect the analyst did name is kept). A task that waits for its deploy is left alone. Returns the ids closed."""
         after = timedelta(hours=self.cycle_hours("measure_after_h", 24))
         closed: list[str] = []
-        for t in self.store.tasks(["accepted"]):
+        for t in self.not_held(self.store.tasks(["accepted"])):
             if t.get(DEPLOY_PENDING) or self.lanes.busy(t["id"]):
                 continue
             acc = accepted_moment(t)
@@ -4581,6 +4630,16 @@ def over_budget(rr: RunResult) -> bool:
 def previous_no_commit(t: dict[str, Any]) -> bool:
     """True when the task has any earlier no-commit record, however many re-readies lie in between."""
     return no_commit_count(t) > 0
+
+
+def partial_streak(t: dict[str, Any]) -> int:
+    """Partial results in a row counting the one just returned: `t` is the task as it was BEFORE that result was recorded."""
+    n = 1
+    for r in reversed(t.get("results") or []):
+        if r.get("status") != "partial":
+            break
+        n += 1
+    return n
 
 
 def repeated_partial(t: dict[str, Any], res: dict[str, Any]) -> bool:
