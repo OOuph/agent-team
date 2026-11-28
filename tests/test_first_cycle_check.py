@@ -174,3 +174,22 @@ def test_the_thresholds_of_the_second_batch(tmp_path: Path, monkeypatch):
     quiet = fc.settings({"first_cycle_check": {"enabled": True, "execute_wait_s": 4000, "no_result_share": 0.9, "churn_per_task": 5, "load_per_core": 4}}, {})
     assert fc.findings(cyc, res, quiet) == []                          # every threshold is a setting
     cyc.store.close()
+
+
+
+def test_many_partial_results_make_the_first_cycle_red(tmp_path: Path, monkeypatch):
+    """28.11: a deny rule kept the roles from their tests; 7 of 15 developer and designer runs of one cycle ended
+    «partial», and the check of the first cycle on that setting was GREEN."""
+    st, p = _cycle(tmp_path, monkeypatch, ON, ["bbb"])
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    res = cyc.run(["execute"])
+    cfg = fc.settings(st.raw, p.raw)
+    ids = [_task(p, "developer", f"t{i}") for i in range(6)]
+    for i, tid in enumerate(ids):
+        cyc.store.event("run", f"c1-dev-{tid}", "developer", {"ok": True, "cost": 1.0, "turns": 5, "error": ""})
+        cyc.store.transition(tid, "in_progress", "dispatcher", "partial — continues next cycle" if i < 3 else "started", force=True)
+    cyc.n_executed = 6
+    text = " | ".join(fc.findings(cyc, res, cfg))
+    assert "3 of 6 executor runs ended «partial» (limit 30%)" in text and ids[0] in text
+    assert not [x for x in fc.findings(cyc, res, {**cfg, "partial_share": 0.6}) if "partial" in x]
+    cyc.store.close()
