@@ -365,6 +365,13 @@ def _move_task(st: C.Settings, p: C.Product, s: Store, a: argparse.Namespace) ->
         with s.lock:                           # look and move in one piece: the lane marks the task under the same lock
             lane = s.working_lane(a.id) if locks.product_busy(st, p.slug) else None      # no cycle running: a mark is stale
             if lane is None:
+                cur = s.task(a.id)
+                if (a.to == "review" and p.escalation_cfg["review_needs_merge"] and cur is not None and not cur.get("released_sha")
+                        and not cur.get("pr_url") and not (a.force and str(a.note or "").strip())):
+                    # pack 2 (28.11, pokerbr К1): a task moved to review by hand with nothing merged — the reviewer had no commit
+                    print(f"{a.id}: not moved — the task has no merged commit, so a review has nothing to read. If that is what you "
+                          "mean, say why: add --force and --note \"<reason>\".", file=sys.stderr)
+                    return 2
                 t = s.transition(a.id, a.to, a.by, a.note or "", force=a.force)
                 waited = time.monotonic() - t0
                 log.info("task move %s %s → %s by %s%s", p.slug, a.id, t["state"], a.by, f" after waiting {waited:.0f}s for its lane" if waited >= MOVE_POLL_S else "")
@@ -472,6 +479,21 @@ def cmd_task(st: C.Settings, a: argparse.Namespace) -> int:
         t = s.create_task(title=a.title, type_=a.type, problem=a.problem or a.title, scope=a.scope or "", acceptance=a.acceptance or [],
                           goal=a.goal or "G1", created_by=a.by, priority=a.priority or "P2", role=a.role, state="ready" if a.ready else "proposed")
         print(t["id"])
+        # pack 2 (28.11, pokerbr К1 and К2): what the task's own text says about how it can be done. Warnings always; the
+        # mark that tells the executor «not yours to prove» only with `cycle.escalation.task_checks`.
+        from . import taskcheck
+        later = taskcheck.after_deploy(t.get("acceptance"), p.host)
+        if later:
+            if p.escalation_cfg["task_checks"]:
+                t["after_deploy"] = later
+                s.save_task(t)
+            print(f"WARNING: {len(later)} acceptance criteri(on/a) can be checked only on the deployed product: "
+                  + "; ".join(f"«{c[:80]}»" for c in later[:3])
+                  + (". The executor is told they are the reviewer's, after the deploy." if p.escalation_cfg["task_checks"]
+                     else f". The executor will be asked to prove them BEFORE the merge; `cycle.escalation.task_checks` is off for {p.slug}."), file=sys.stderr)
+        warn = taskcheck.toolless_warning(a.role, t)
+        if warn:
+            print(f"WARNING: {warn}", file=sys.stderr)
     elif a.action == "move":
         rc = _move_task(st, p, s, a)
     elif a.action == "prio":

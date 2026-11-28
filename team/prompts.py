@@ -743,7 +743,10 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
 def reviewer_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None) -> str:
     repo = (product.repo_url or "").removesuffix(".git")
     raw = ""
-    if repo.startswith("https://github.com/"):
+    if product.repo_private:
+        raw = (f"Repository: {repo} (branch {product.repo_branch}) is PRIVATE: raw.githubusercontent.com and the commit page answer "
+               "404 to team-fetch. Read the files of the merged commit in the read-only checkout (section below), not by URL.\n")
+    elif repo.startswith("https://github.com/"):
         raw = (f"Repository: {repo} (branch {product.repo_branch}). Repo-only deliverables (code, tests, README, scripts) are "
                f"public: read a file with team-fetch at https://raw.githubusercontent.com/{repo.removeprefix('https://github.com/')}/"
                f"{sha or product.repo_branch}/<path> and the commit at {repo}/commit/{sha or product.repo_branch}.\n")

@@ -42,6 +42,7 @@ from . import testworkers
 from . import firstcycle
 from . import drain as drain_mod
 from . import heavy as heavy_mod
+from . import taskcheck
 from . import keywords
 from . import lanes as lanes_mod
 from . import flow as flow_mod
@@ -1228,7 +1229,8 @@ class Cycle:
         if docs_only:
             self.store.event("review.tests_skipped", t["id"], "dispatcher", {"sha": str(sha)[:12]})
             log.info("%s: %s: the reviewed commit changes documents only — no test run, no play-test", self.p.slug, t["id"])
-        if (t.get("repo_only") or docs_only or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
+        # `repo.private`: the reviewer cannot read a private repository by URL — the checkout is its only way to the files
+        if (t.get("repo_only") or docs_only or self.p.repo_private or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
             try:
                 try:
                     if docs_only:
@@ -2011,6 +2013,7 @@ class Cycle:
         for note in self.apply_task_returns(res.get("return_tasks") or []):
             log.info("%s: PO return_tasks: %s", self.p.slug, note)
         skipped, held = [], []
+        task_notes: list[str] = []                    # `cycle.escalation.task_checks`: what the dispatcher read in a new task's text
         for pr in res.get("promote_tasks") or []:
             t = self.store.task(str(pr.get("task_id")))
             if not t or t.get("state") not in ("proposed", "ready", "deferred") or self.is_held(t):
@@ -2075,6 +2078,18 @@ class Cycle:
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
+            if self.p.escalation_cfg["task_checks"]:  # pack 2 (28.11): what the task's own text says about how it can be done
+                later = taskcheck.after_deploy(new.get("acceptance"), self.p.host)
+                if later and not new.get("repo_only"):
+                    new["after_deploy"] = later
+                    self.store.save_task(new)
+                    task_notes.append(f"{new['id']}: {len(later)} критери(й/я) проверяются только после выкладки — их проверит ревьюер, исполнителю об этом сказано")
+                    self.store.event("task.after_deploy", new["id"], "dispatcher", {"criteria": len(later)})
+                warn = taskcheck.toolless_warning(str(new.get("role") or "developer"), new)
+                if warn:
+                    self.store.event("task.toolless", new["id"], "dispatcher", {"role": new.get("role")})
+                    task_notes.append(f"{new['id']}: {warn[:220]}")
+                    log.warning("%s: %s: %s", self.p.slug, new["id"], warn)
             if sid:                                   # owner 21.11: counted as the direction's task — no second one, the cadence restarts
                 new[standing.TASK_FIELD] = sid
                 docs = next((list(d.docs) for d in standing.directions(self.p) if d.id == sid and d.docs), None)
@@ -2099,6 +2114,8 @@ class Cycle:
             digest += "\n\n_Зависимости задач: " + "; ".join(dep_notes) + "._"
         if skipped:
             digest += "\n\n_Диспетчер не создал дубли (задача уже открыта или уже сделана): " + "; ".join(skipped) + "._"
+        if task_notes:
+            digest += "\n\n_Проверка новых задач диспетчером: " + "; ".join(task_notes) + "._"
         if held:
             digest += "\n\n_Правило гипотез (фича без доказательств от живых людей ждёт в proposed): " + "; ".join(held) + "._"
         (self.p.dir / "digests" / f"{self.cycle_id}.md").write_text(f"# PO digest {self.cycle_id}\n\n{digest}\n", encoding="utf-8")
@@ -3150,6 +3167,7 @@ class Cycle:
         prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
                                           budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo),
                                           conflict=conflict, base=self.p.repo_branch, port=port, answers=self.task_answers(t), refs=self.task_refs_block(t))
+        prompt += taskcheck.developer_note(t.get("after_deploy") or [])       # set only with `cycle.escalation.task_checks` (pack 2)
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],

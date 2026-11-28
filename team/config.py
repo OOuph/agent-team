@@ -26,7 +26,13 @@ ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return":
                                         # 28.11 (pokerbr К7, К8): `owner_ping` true = every open question to the owner goes to
                                         # the owner's channel as one line, once; `operator_hold` true = a task taken with
                                         # `team task <product> take` is left alone by seats, reviews, replans and closings
-                                        "owner_ping": False, "operator_hold": False}   # `cycle.escalation`, see DEFAULTS
+                                        "owner_ping": False, "operator_hold": False,
+                                        # 28.11, pack 2 (pokerbr К1, К2): `task_checks` true = a task the PO creates is read for
+                                        # criteria that only the deployed product shows (the executor is told they are the
+                                        # reviewer's) and for work a role without tools cannot do (a note in the digest);
+                                        # `review_needs_merge` true = `team task move --to review` of a task with no merged
+                                        # commit is refused without --force and a --note
+                                        "task_checks": False, "review_needs_merge": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
 VISIBLE_DEFAULTS: dict[str, bool] = {"review_before_merge": False, "redesign_gate": False}   # `cycle.visible`, see DEFAULTS
 # `cycle.queue` (rework slice 9): the PO cuts tasks ahead
@@ -358,6 +364,12 @@ class Product:
     @property
     def repo_url(self) -> str:
         return str((self.raw.get("repo") or {}).get("url") or "")
+
+    @property
+    def repo_private(self) -> bool:
+        """`repo: {private: true}` (28.11, pokerbr К1): raw.githubusercontent answers 404 for the reviewer's team-fetch, so
+        every review gets the read-only checkout of the merged commit."""
+        return (self.raw.get("repo") or {}).get("private") is True
 
     @property
     def repo_branch(self) -> str:
