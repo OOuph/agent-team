@@ -33,12 +33,14 @@ DEFAULTS: dict[str, Any] = {
     "review_wait_s": 1800,        # a review waited longer than this for a run slot
     "execute_wait_s": 1800,       # a seat lane waited longer than this for a run slot
     "no_result_share": 0.5,       # share of executor runs that carried no task through, above which the cycle is red (from min_runs)
+    "partial_share": 0.3,         # share of executor runs that ended «partial — continues next cycle» (28.11: 7 % before a deny
+                                  # rule that kept the roles from their tests, 36–40 % with it — and nothing said so for four hours)
     "churn_per_task": 1,          # a task went in_progress → ready without a run more often than this
     "load_per_core": 2.5,         # the 5-minute load of the server per core at the end of the cycle (27.11: 18–33 on 8 cores = 2.3–4.1)
 }
 _RANGES = {"cycles": (1, 20, int), "refusals_per_task": (1, 1000, int), "picks_per_task": (1, 1000, int), "idle_picks": (0, 100000, int),
            "fail_share": (0.0, 1.0, float), "min_runs": (1, 1000, int), "main_wait_s": (1, 86400, float), "review_wait_s": (1, 86400, float),
-           "execute_wait_s": (1, 86400, float), "no_result_share": (0.0, 1.0, float), "churn_per_task": (0, 1000, int), "load_per_core": (0.1, 100.0, float)}
+           "execute_wait_s": (1, 86400, float), "no_result_share": (0.0, 1.0, float), "partial_share": (0.0, 1.0, float), "churn_per_task": (0, 1000, int), "load_per_core": (0.1, 100.0, float)}
 EXEC_ROLES = ("developer", "designer", "game-designer", "analyst", "marketer", "tester")
 LOG_FILE = "framework/canary.log"             # under the data directory: one line per checked cycle, newest last
 STATE_DIR = "framework/first-cycle"           # <slug>.json: the commit this product's cycles were last checked on, and how many
@@ -157,6 +159,11 @@ def findings(cyc: Any, result: dict[str, Any], cfg: dict[str, Any]) -> list[str]
     done = int(getattr(cyc, "n_executed", 0))
     if len(exec_runs) >= cfg["min_runs"] and (len(exec_runs) - done) / len(exec_runs) > cfg["no_result_share"]:
         out.append(f"{len(exec_runs) - done} of {len(exec_runs)} executor runs carried no task through (limit {cfg['no_result_share']:.0%})")
+    partial = [e for e in events if e["kind"] == "task.transition" and isinstance(e["detail"], dict)
+               and str(e["detail"].get("note") or "").startswith("partial")]
+    if len(exec_runs) >= cfg["min_runs"] and len(partial) / len(exec_runs) > cfg["partial_share"]:
+        out.append(f"{len(partial)} of {len(exec_runs)} executor runs ended «partial» (limit {cfg['partial_share']:.0%}): "
+                   + ", ".join(sorted({e["subject"] for e in partial})[:6]))
     # 9. tasks walked into work and back without a run
     back: dict[str, int] = {}
     ran: dict[str, int] = {}
