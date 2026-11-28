@@ -73,6 +73,8 @@ GUARDS_DEFAULTS: dict[str, Any] = {
     "idle_reasons": False,        # true = at the end of the execute phase every task that is still `ready` gets its reason on record
                                   # (one event `execute.left` per cycle) — not only when the cycle executed nothing (26.11: a task of
                                   # a role without a seat lay three hours and nothing said why)
+    "no_name_kill": False,        # true = a role's run may not stop processes by name or pattern: pkill, killall, pgrep are denied
+                                  # to it and its request says how to stop what it started (28.11: one run killed three others)
     "budget_halt": False,         # true = once the day's budget is used up and nothing in flight can free any, the seats take
                                   # no further task in this cycle (27.11, found by a scenario: with retake and three passes
                                   # every ready task went ready → in_progress → ready three times per cycle)
@@ -532,7 +534,7 @@ class Product:
             for k, v in src.items():
                 if k not in out:
                     continue
-                if k in ("loop", "cost", "crash_release", "idle_reasons", "budget_halt"):
+                if k in ("loop", "cost", "crash_release", "idle_reasons", "budget_halt", "no_name_kill"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:
