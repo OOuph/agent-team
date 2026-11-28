@@ -176,3 +176,27 @@ def test_the_tasks_unit_log_holds_the_whole_output_of_the_shared_run(tmp_path: P
     assert "filler line 5\n" not in r.prompts["reviewer"][0] and "filler line 400" in r.prompts["reviewer"][0]      # the request: the tail
     unit_log = (p.dir / "reviews" / t["id"] / cycle_mod.UNIT_LOG_NAME).read_text(encoding="utf-8")
     assert "\nFIRST-LINE-new-test-passes\n" in unit_log and "filler line 5\n" in unit_log and "LAST-LINE" in unit_log   # the log: all of it
+
+
+def test_the_dispatchers_own_test_run_takes_a_place_among_the_heavy_runs(tmp_path: Path, monkeypatch):
+    """28.11: the roles' test runs were to be limited to a few at once — the dispatcher's runs before a review count in the
+    same total, or the limit is not one."""
+    from team import heavy
+    over = C._merge(ON, {"cycle": {"heavy_runs": {"queue": ["Bash(npm test:*)"], "slots": 1}}})
+    st, p, ids, shas, count = _setup(tmp_path, over, monkeypatch, n=1)
+    held = heavy.take_slot(str(st.data_dir / "locks" / "heavy.lock"), 1, 5)         # a role's test run holds the only place
+    assert held is not None
+    seen = {}
+    real = heavy.take_slot
+
+    def spy(lock, slots, wait_s, on_wait=None):
+        seen["asked"] = (Path(lock).name, slots)
+        held.close()                                                   # the role's run ends while the dispatcher waits
+        return real(lock, slots, wait_s, on_wait)
+    monkeypatch.setattr(heavy, "take_slot", spy)
+    r = LaneRunner(); _honest_reviewer(r)
+    cyc = Cycle(st, p, r, "c1"); run_cycle(cyc, ["review"]); cyc.store.close()
+    assert seen["asked"] == ("heavy.lock", 1) and _suite_runs(count) == [shas[-1]] and _state(p, ids[0])["state"] == "accepted"
+    again = heavy.take_slot(str(st.data_dir / "locks" / "heavy.lock"), 1, 5)        # … and gave the place back
+    assert again is not None
+    again.close()

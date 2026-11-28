@@ -6,7 +6,8 @@ they are queued instead: the commands named in `cycle.heavy_runs.queue` are deni
 starts them as `team-heavy npm run sim:weapons`. This tool waits for the server-wide lock, then runs the command under
 `nice`, with its output and its exit code passed through.
 
-The dispatcher gives the run: TEAM_HEAVY_LOCK (the lock file), TEAM_HEAVY_NICE, TEAM_HEAVY_WAIT_S.
+The dispatcher gives the run: TEAM_HEAVY_LOCK (the lock file), TEAM_HEAVY_SLOTS (how many such runs at once, 1 by default),
+TEAM_HEAVY_NICE, TEAM_HEAVY_WAIT_S. The dispatcher's own test runs take a place of the same set (`take_slot`).
 """
 from __future__ import annotations
 
@@ -16,6 +17,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 # ------------------------------------------------------------------ parameters (overridden by the environment the dispatcher sets)
 DEFAULT_NICE = 15                 # 0..19; the simulation gets the processor that nothing else wants
@@ -32,6 +34,29 @@ def _num(name: str, default: int, lo: int, hi: int) -> int:
         return default
 
 
+def take_slot(lock: str, slots: int, wait_s: float, on_wait: Any = None) -> Any:
+    """One of `slots` server-wide places for a heavy run: the open lock file (close it to give the place back), or None
+    when none came free within `wait_s`. The places are the files `<lock>` (the first) and `<lock>.2 … <lock>.N`."""
+    Path(lock).parent.mkdir(parents=True, exist_ok=True)
+    names = [lock] + [f"{lock}.{i}" for i in range(2, max(1, int(slots)) + 1)]
+    t0 = time.monotonic()
+    said = False
+    while True:
+        for name in names:
+            fh = open(name, "a+", encoding="utf-8")
+            try:
+                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fh
+            except OSError:
+                fh.close()
+        if time.monotonic() - t0 >= wait_s:
+            return None
+        if not said and on_wait is not None:
+            said = True
+            on_wait()
+        time.sleep(POLL_S)
+
+
 def main(argv: list[str] | None = None) -> int:
     cmd = list(sys.argv[1:] if argv is None else argv)
     if cmd and cmd[0] == "--":
@@ -41,25 +66,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     lock = os.environ.get("TEAM_HEAVY_LOCK")
     nice, wait_s = _num("TEAM_HEAVY_NICE", DEFAULT_NICE, 0, 19), _num("TEAM_HEAVY_WAIT_S", DEFAULT_WAIT_S, 0, 86400)
+    slots = _num("TEAM_HEAVY_SLOTS", 1, 1, 64)
     fh = None
     t0 = time.monotonic()
     if lock:
-        Path(lock).parent.mkdir(parents=True, exist_ok=True)
-        fh = open(lock, "a+", encoding="utf-8")
-        said = False
-        while True:
-            try:
-                fcntl.flock(fh, fcntl.LOCK_EX | fcntl.LOCK_NB)
-                break
-            except OSError:
-                if time.monotonic() - t0 >= wait_s:
-                    print(f"team-heavy: another heavy run still holds the server after {wait_s}s — not started. Report the command in your "
-                          "result so that it is run later; do not start it another way.", file=sys.stderr)
-                    return EX_TEMPFAIL
-                if not said:
-                    said = True
-                    print("team-heavy: another heavy run is going on this server; waiting for it to end …", file=sys.stderr, flush=True)
-                time.sleep(POLL_S)
+        fh = take_slot(lock, slots, wait_s, on_wait=lambda: print(
+            f"team-heavy: all {slots} place(s) for heavy runs on this server are taken; waiting for one …", file=sys.stderr, flush=True))
+        if fh is None:
+            print(f"team-heavy: no place came free in {wait_s}s — not started. Run the same `team-heavy` command again (it only "
+                  "waits); do not start the work another way.", file=sys.stderr)
+            return EX_TEMPFAIL
     waited = time.monotonic() - t0
     print(f"team-heavy: started after {waited:.0f}s of waiting, at nice {nice}: {' '.join(cmd)}", file=sys.stderr, flush=True)
     try:

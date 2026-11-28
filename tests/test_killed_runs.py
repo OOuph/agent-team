@@ -105,3 +105,30 @@ def test_a_seat_leaves_alone_a_task_another_lane_of_the_cycle_holds(tmp_path: Pa
     assert held not in seen and _state(p, held)["state"] == "ready"         # left alone, no exception
     assert r.calls.count("game-designer") == 1 and _state(p, free)["state"] != "ready"
     cyc.store.close()
+
+
+def test_processes_left_in_deleted_work_folders_are_ended(tmp_path: Path, monkeypatch):
+    """28.11 01:30 UTC: vitest of worktrees removed hours before (T-0512, T-0672, T-0738) was still running on the server.
+    A stand-in /proc: the reaper reads only the `cwd` link of every process."""
+    import os
+    st = _settings(tmp_path, {"cycle": {"guards": {"reap_orphans": True}}})
+    p = _product(st)
+    base = str(p.work_dir.resolve())
+    proc = tmp_path / "proc"
+    for pid, cwd in ((101, f"{base}/wt/T-0512 (deleted)"), (102, f"{base}/wt/T-0689"), (103, "/home/other/wt/T-0001 (deleted)"),
+                     (104, f"{base}-other/wt/T-0002 (deleted)"), (105, f"{base}/c1/playtest-T-0750/tests-run (deleted)")):
+        (proc / str(pid)).mkdir(parents=True)
+        os.symlink(cwd, proc / str(pid) / "cwd")
+    (proc / "self").mkdir()
+    assert cycle_mod.orphan_pids(base, str(proc)) == [101, 105]         # deleted AND under this product's work folder
+    assert cycle_mod.orphan_pids(base, str(tmp_path / "no-proc")) == []
+    killed = []
+    monkeypatch.setattr(cycle_mod, "orphan_pids", lambda b, proc="/proc": [101, 105])
+    monkeypatch.setattr(cycle_mod.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    assert cyc.reap_orphans() == 2 and killed == [(101, 15), (105, 15)]
+    assert [e["detail"] for e in cyc.store.events() if e["kind"] == "workdir.orphans"] == [{"ended": 2}]
+    cyc.store.close()
+    off = Cycle(_settings(tmp_path / "off"), _product(_settings(tmp_path / "off")), LaneRunner(), "c1")
+    assert off.reap_orphans() == 0 and len(killed) == 2                 # off by default: nothing is touched
+    off.store.close()
