@@ -46,6 +46,9 @@ DEPENDENCIES_DEFAULTS: dict[str, Any] = {
     "roles": [],                  # … only for dependencies whose own role is in this list; [] = every role
     "report_stuck": False,        # true = a dependency that is finished without a usable result, or that leads back to the task
                                   # itself (a circle), is reported like a rejected one: an event and a question to the PO (27.11)
+    "in_answers": False,          # true = the PO may answer a question with `wait_for: [T-…]`: the blocked task returns to ready
+                                  # with those tasks as dependencies instead of an hour guessed for `not_before` (28.11: T-0690 and
+                                  # T-0742 of the game were put off to 12:30 and 14:00 when they waited for another task's acceptance)
 }
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
@@ -577,7 +580,7 @@ class Product:
     @property
     def dependencies_cfg(self) -> dict[str, Any]:
         """`cycle.dependencies`: team.yaml first, this product's block on top; a wrong value keeps the default."""
-        out = {"at_merge": False, "roles": [], "report_stuck": False}
+        out = {"at_merge": False, "roles": [], "report_stuck": False, "in_answers": False}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("dependencies")), (f"{self.slug} product.yaml", own.get("dependencies") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
@@ -585,7 +588,7 @@ class Product:
                     log.warning("%s: cycle.dependencies=%r is not a mapping — ignored", where, src)
                 continue
             for k, v in src.items():
-                if k in ("at_merge", "report_stuck"):
+                if k in ("at_merge", "report_stuck", "in_answers"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:

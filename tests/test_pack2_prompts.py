@@ -72,3 +72,63 @@ def test_the_reviewer_is_given_the_files_the_commit_changed(tmp_path: Path) -> N
 def test_the_developers_card_says_how_to_wait_without_monitor() -> None:
     card = (Path(prompts.__file__).parent / "roles" / "developer.md").read_text(encoding="utf-8")
     assert "the `Monitor` tool is not available to you" in card and 'until grep -q "^exit="' in card
+
+
+# ------------------------------------------------------------------ «wait for a task» in the PO's answer
+
+def _blocked_with_a_question(p):
+    s = Store(p.dir)
+    other = s.create_task(title="the ruling the tower waits for", type_="design", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po",
+                          role="game-designer", state="ready")
+    waits = s.create_task(title="tower floor built by the ruling", type_="feature", problem="p", scope="s", acceptance=["a"], goal="G1", created_by="po", state="ready")
+    q = s.ask(from_="developer", to="po", question="Which ruling of the tower applies?", task_id=waits["id"])
+    s.close()
+    return other["id"], waits["id"], q["id"]
+
+
+def test_the_po_answers_wait_for_a_task_and_the_task_starts_when_it_is_met(tmp_path: Path) -> None:
+    """28.11: the PO put T-0690 and T-0742 of the game off to 12:30 and 14:00 — hours it guessed — when they waited for the
+    acceptance of another task. With `cycle.dependencies.in_answers` the answer names the task and the wait ends with it."""
+    st = _settings(tmp_path, {"cycle": {"dependencies": {"in_answers": True}}})
+    p = _product(st)
+    other, waits, qid = _blocked_with_a_question(p)
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    assert cyc.store.task(waits)["state"] == "blocked"
+    cyc._apply_po({"answers": [{"question_id": qid, "answer": "Wait for the ruling.", "wait_for": [other, waits, "T-9999"]}]}, [])
+    t = cyc.store.task(waits)
+    assert t["state"] == "ready" and t["depends_on"] == [other] and not t.get("not_before")      # itself and an unknown id are left out
+    assert f"waits for {other}" in t["history"][-1]["note"]
+    assert cyc.startable(t) is None                                    # not yet: its dependency is not finished
+    cyc.store.transition(other, "accepted", "reviewer", force=True, accepted_at="2026-11-28T12:00:00+00:00", released_at="2026-11-28T11:00:00+00:00")
+    assert cyc.startable(cyc.store.task(waits)) is not None and cyc.startable(cyc.store.task(waits)) is not False
+    cyc.store.close()
+    from test_parallel_lanes import _events
+    assert [e["detail"]["wait_for"] for e in _events(p, "task.wait_for")] == [[other]]
+
+
+def test_wait_for_is_ignored_while_the_switch_is_off_and_the_prompt_says_nothing(tmp_path: Path) -> None:
+    st = _settings(tmp_path)
+    p = _product(st)
+    other, waits, qid = _blocked_with_a_question(p)
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    cyc._apply_po({"answers": [{"question_id": qid, "answer": "Wait.", "wait_for": [other]}]}, [])
+    t = cyc.store.task(waits)
+    assert t["state"] == "ready" and t["depends_on"] == []
+    cyc.store.close()
+
+
+def test_the_po_is_told_about_wait_for_only_when_the_switch_is_on(tmp_path: Path) -> None:
+    from test_parallel_lanes import PO_NOTHING
+    seen = {}
+    for name, over in (("on", {"cycle": {"dependencies": {"in_answers": True}}}), ("off", {})):
+        st = _settings(tmp_path / name, over)
+        p = _product(st)
+        _blocked_with_a_question(p)
+        r = LaneRunner()
+        r.answers["po"] = dict(PO_NOTHING)
+        cyc = Cycle(st, p, r, "c1")
+        cyc.run(["triage"])
+        cyc.store.close()
+        seen[name] = (r.prompts.get("po") or [""])[0]
+    assert seen["on"] and seen["off"]
+    assert "# WAIT FOR A TASK" in seen["on"] and "# WAIT FOR A TASK" not in seen["off"]

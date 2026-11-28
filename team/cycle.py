@@ -1922,6 +1922,12 @@ class Cycle:
                 f"# JUST MERGED\nThe design task {cut_for['id']} «{_short_text(cut_for.get('title'), 100)}» was merged a moment ago"
                 + (f" ({changes})" if changes else "") + ". Its proposals are among NEW OBSERVATIONS. Cut the tasks it calls for NOW, in the "
                 "order they depend on each other: the seats are working and take them in this cycle. Decide the other observations as usual.")
+        if self.p.dependencies_cfg["in_answers"]:
+            queue_md = ((queue_md + "\n\n") if queue_md else "") + (
+                "# WAIT FOR A TASK\nWhen your answer to a question is «wait until task T-… is merged or accepted», put that task's id "
+                "into the answer's `wait_for` and leave `not_before` empty: the blocked task returns to ready with it as a dependency "
+                "and starts the moment it is met. `not_before` is for a date or an hour the task itself names, never for a guess of "
+                "when another task will be done.")
         if queue_wake and cut_for is None:
             self.mark_queue_wake()
             self.store.event("queue.low", self.cycle_id, "dispatcher", {"low": low, "target": qcfg["target_ready"]})
@@ -1955,6 +1961,27 @@ class Cycle:
         with self.store.lock:
             self._apply_po(res, new_obs)
 
+    def wait_for_tasks(self, q: dict[str, Any], wait_for: list[str]) -> None:
+        """`cycle.dependencies.in_answers`: the PO answered «wait until T-… is done» — the tasks the question blocked get
+        those tasks as dependencies (the ones that exist, never the task itself), with a line in their history."""
+        for tid in q.get("blocks") or []:
+            t = self.store.task(tid)
+            if not t:
+                continue
+            new = [d for d in dict.fromkeys(wait_for) if d != tid and self.store.task(d) is not None and d not in (t.get("depends_on") or [])]
+            unknown = [d for d in wait_for if d != tid and self.store.task(d) is None]
+            if unknown:
+                log.warning("%s: answer to %s names task(s) that do not exist: %s — not made dependencies of %s", self.p.slug, q.get("id"), unknown, tid)
+            if not new:
+                continue
+            t["depends_on"] = list(t.get("depends_on") or []) + new
+            t.pop("dead_deps_reported", None)
+            t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t.get("state"), "to": t.get("state"),
+                                                "note": f"waits for {', '.join(new)} (answer to {q.get('id')})"})
+            self.store.save_task(t)
+            self.store.event("task.wait_for", tid, "po", {"question": q.get("id"), "wait_for": new})
+            log.info("%s: %s waits for %s (the PO's answer to %s)", self.p.slug, tid, ", ".join(new), q.get("id"))
+
     def _apply_po(self, res: dict[str, Any], new_obs: list[dict[str, Any]]) -> None:
         ids = {o["id"] for o in new_obs}
         for d in res.get("decisions") or []:
@@ -1963,9 +1990,11 @@ class Cycle:
                 self.store.update_observation(oid, status="triaged", decision={**d, "cycle": self.cycle_id})
         for a in res.get("answers") or []:
             try:
-                self.store.answer(str(a["question_id"]), str(a["answer"]), "po", not_before=a.get("not_before"))
+                q = self.store.answer(str(a["question_id"]), str(a["answer"]), "po", not_before=a.get("not_before"))
             except FileNotFoundError:
-                pass
+                continue
+            if self.p.dependencies_cfg["in_answers"] and a.get("wait_for"):
+                self.wait_for_tasks(q, [str(x) for x in a.get("wait_for") or []])
         for rp in res.get("reprioritize") or []:
             t = self.store.task(str(rp.get("task_id")))
             if t and rp.get("priority") in PRIO and not self.is_held(t):
