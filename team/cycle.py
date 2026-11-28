@@ -2492,14 +2492,18 @@ class Cycle:
         feed and the count; a task being executed holds a place, so the seat is never over-filled."""
         healthy = True                            # refill: this lane's last task was carried through and its run went well
         first = True
+        worked = False                            # the task this lane took last was started (not refused)
         while True:
             if self._budget_out:
                 return                            # the day's budget is used up: taking a task would only walk it to in_progress and back
             if self.draining():
                 return                            # a drain request: this lane takes nothing more (it may not have taken anything yet)
-            if not first:
+            # Only after a task this lane really worked on. After a refusal («waits for …», a question still open) the lane
+            # goes straight to the next task: 28.11 04:21–04:29 three developer lanes each met a waiting task first, gave
+            # their slots away and came back 260 s later for the next one — which waited, too.
+            if not first and worked:
                 self.reviews_in_cycle("a seat finished a task")      # `cycle.flow.review_in_cycle`: what may be reviewed now is queued now
-            if self.flow.fair_seats and not first:
+            if self.flow.fair_seats and not first and worked:
                 # between two tasks: a seat without a lane gets one, and a lane that waits for a run slot gets this one
                 try:
                     self.start_idle_seats()
@@ -2526,6 +2530,7 @@ class Cycle:
                 self._taken.add(t["id"])
                 self.picks[t["id"]] = self.picks.get(t["id"], 0) + 1      # for the tests' invariants and the canary: how often a lane took it
                 self._seat_running[key] = self._seat_running.get(key, 0) + 1
+            worked = False
             ok, verdict = False, False            # an exception below counts as «dealt with»: the task is not offered again this cycle
             self._tl.run_ok = None                # no run of this task yet (`role_run` sets it)
             self._tl.run_error = None
@@ -2548,6 +2553,7 @@ class Cycle:
                             t = now
                             verdict = self.startable(t)
                             if verdict:
+                                worked = True
                                 ok = bool(self.execute_task(t))
                                 if ok:
                                     self.cut_after_design(self.store.task(t["id"]) or t)
@@ -4455,7 +4461,7 @@ def dead_reason(store: Any, t: dict[str, Any], dep: str, wide: bool = False) -> 
     if not wide:
         return ""
     res = d.get("results") or []
-    if d.get("state") in DEPENDENCY_DONE and (not res or is_stub_result(str(res[-1].get("summary") or ""))):
+    if d.get("state") in DEPENDENCY_DONE and not proven(d) and (not res or is_stub_result(str(res[-1].get("summary") or ""))):
         return f"{d.get('state')} without a usable result"
     if d.get("state") not in DEPENDENCY_DONE and leads_back(store, str(d.get("id") or dep), str(t.get("id"))):
         return "a circle: it waits for this very task"
@@ -4466,6 +4472,16 @@ def dead_dependencies(store: Any, t: dict[str, Any], wide: bool = False) -> list
     """Ids from `depends_on` that can never be met (`dead_reason`): the task does not exist, or it was rejected and nothing
     replaced it (hittheline 26.11: three ready tasks waited 100 minutes for tasks the same PO answer had closed)."""
     return [str(dep) for dep in t.get("depends_on") or [] if dead_reason(store, t, str(dep), wide)]
+
+
+def proven(d: dict[str, Any]) -> bool:
+    """Was this task's work checked — merged by the dispatcher or accepted by a review — before it was closed? Then its
+    result is real whatever its summary says. The stub test («too short», «placeholder», «no new data») is for a task that
+    was closed with nothing behind it; applied to everything, it called a merged and accepted task «done without a usable
+    result» because its summary used the word «placeholder» (ai-battles 28.11, T-0766 — every tower task behind it waited)."""
+    if d.get("released_sha") or d.get("accepted_at"):
+        return True
+    return any(h.get("to") in ("accepted", "released") for h in (d.get("history") or []))
 
 
 def merged_counts(cfg: dict[str, Any] | None) -> Any:
@@ -4486,7 +4502,7 @@ def unmet_dependencies(store: Any, t: dict[str, Any], merged_ok: Any = None) -> 
         d = resolve_dependency(store, str(dep))
         res = (d.get("results") or []) if d else []
         done = bool(d) and (d.get("state") in DEPENDENCY_DONE or (merged_ok is not None and merged_ok(d)))
-        if not done or not res or is_stub_result(str(res[-1].get("summary") or "")):
+        if not done or not (proven(d) or (res and not is_stub_result(str(res[-1].get("summary") or "")))):
             out.append(str(dep))
     return out
 
