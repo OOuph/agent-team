@@ -19,12 +19,20 @@ log = logging.getLogger("team.config")
 
 ROOT = Path(os.environ.get("TEAM_ROOT") or Path(__file__).resolve().parent.parent)
 
-PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False}   # `cycle.po_prompt`, see DEFAULTS
+# `merged_since` (28.11, pokerbr К5): every new observation in the PO's prompt lists the tasks merged AFTER it was recorded —
+# the PO cut a task from an observation that a merge had already answered
+PO_PROMPT_DEFAULTS: dict[str, bool] = {"compact_finished": False, "stable_first": False, "merged_since": False}   # `cycle.po_prompt`, see DEFAULTS
 ESCALATION_DEFAULTS: dict[str, bool] = {"needs_context": False, "review_return": False, "references": False, "budget_split": False, "review_exit": False,
                                         # 28.11 (pokerbr К7, К8): `owner_ping` true = every open question to the owner goes to
                                         # the owner's channel as one line, once; `operator_hold` true = a task taken with
                                         # `team task <product> take` is left alone by seats, reviews, replans and closings
-                                        "owner_ping": False, "operator_hold": False}   # `cycle.escalation`, see DEFAULTS
+                                        "owner_ping": False, "operator_hold": False,
+                                        # 28.11, pack 2 (pokerbr К1, К2): `task_checks` true = a task the PO creates is read for
+                                        # criteria that only the deployed product shows (the executor is told they are the
+                                        # reviewer's) and for work a role without tools cannot do (a note in the digest);
+                                        # `review_needs_merge` true = `team task move --to review` of a task with no merged
+                                        # commit is refused without --force and a --note
+                                        "task_checks": False, "review_needs_merge": False}   # `cycle.escalation`, see DEFAULTS
 DUPLICATES_DEFAULTS: dict[str, bool] = {"closed_list": False, "closed_check": False}   # `cycle.duplicates`, see DEFAULTS
 VISIBLE_DEFAULTS: dict[str, bool] = {"review_before_merge": False, "redesign_gate": False}   # `cycle.visible`, see DEFAULTS
 # `cycle.queue` (rework slice 9): the PO cuts tasks ahead
@@ -44,6 +52,9 @@ DEPENDENCIES_DEFAULTS: dict[str, Any] = {
     "roles": [],                  # … only for dependencies whose own role is in this list; [] = every role
     "report_stuck": False,        # true = a dependency that is finished without a usable result, or that leads back to the task
                                   # itself (a circle), is reported like a rejected one: an event and a question to the PO (27.11)
+    "in_answers": False,          # true = the PO may answer a question with `wait_for: [T-…]`: the blocked task returns to ready
+                                  # with those tasks as dependencies instead of an hour guessed for `not_before` (28.11: T-0690 and
+                                  # T-0742 of the game were put off to 12:30 and 14:00 when they waited for another task's acceptance)
 }
 ANALYST_PROMPT_DEFAULTS: dict[str, bool] = {"compact_tasks": False}   # `cycle.analyst_prompt`, see DEFAULTS
 MEASURE_DEFAULTS: dict[str, bool] = {"by_day": False}   # `cycle.measure`, see DEFAULTS
@@ -53,6 +64,8 @@ REVIEW_TESTS_DEFAULTS: dict[str, bool] = {
     "once_per_batch": False,      # true = the test suite runs once on the head of the main branch and every review of a merged
                                   # task whose commit is in that head takes its result (27.11: ~113 of 360 suite runs a day, each
                                   # ~1000 CPU seconds, on a server at load 28–31 on 8 cores). A red head: every task gets its own run
+    "changed_files": False,       # true = the reviewer's prompt lists the files the merged commit changed (28.11: reviewers and
+                                  # testers of the game spent 13 turns in three cycles on `git show --stat`, which they may not run)
     "docs_outside_slots": False,  # true = the review of a commit that changes documents only takes no run slot (it is a 12-second
                                   # read; 27.11 such reviews waited 19 minutes for a slot)
 }   # `cycle.review_tests`, see DEFAULTS
@@ -353,6 +366,12 @@ class Product:
         return str((self.raw.get("repo") or {}).get("url") or "")
 
     @property
+    def repo_private(self) -> bool:
+        """`repo: {private: true}` (28.11, pokerbr К1): raw.githubusercontent answers 404 for the reviewer's team-fetch, so
+        every review gets the read-only checkout of the merged commit."""
+        return (self.raw.get("repo") or {}).get("private") is True
+
+    @property
     def repo_branch(self) -> str:
         return str((self.raw.get("repo") or {}).get("branch") or "main")
 
@@ -573,7 +592,7 @@ class Product:
     @property
     def dependencies_cfg(self) -> dict[str, Any]:
         """`cycle.dependencies`: team.yaml first, this product's block on top; a wrong value keeps the default."""
-        out = {"at_merge": False, "roles": [], "report_stuck": False}
+        out = {"at_merge": False, "roles": [], "report_stuck": False, "in_answers": False}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("dependencies")), (f"{self.slug} product.yaml", own.get("dependencies") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
@@ -581,7 +600,7 @@ class Product:
                     log.warning("%s: cycle.dependencies=%r is not a mapping — ignored", where, src)
                 continue
             for k, v in src.items():
-                if k in ("at_merge", "report_stuck"):
+                if k in ("at_merge", "report_stuck", "in_answers"):
                     if isinstance(v, bool):
                         out[k] = v
                     else:

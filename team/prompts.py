@@ -108,13 +108,41 @@ def closed_block(store: Store) -> str:
     return head + "\n".join(lines)
 
 
+MERGED_SINCE_MAX = 8                # tasks merged after an observation that its card names (the newest)
+
+
+def merged_since(tasks: list[dict[str, Any]], obs: dict[str, Any]) -> list[str]:
+    """`cycle.po_prompt.merged_since`: «T-0042 title (merged 2026-11-28T03:10)» for every task merged or accepted after the
+    observation was recorded, newest first. 28.11, pokerbr К5: a task was cut from an observation that an earlier
+    merge had already answered — the card did not say what had changed since."""
+    seen = str(obs.get("last_seen") or obs.get("observed_at") or "")
+    if not seen:
+        return []
+    out = []
+    for t in tasks:
+        when = str(t.get("released_at") or t.get("accepted_at") or "")
+        if when and when > seen:
+            out.append((when, f"{t['id']} {' '.join(str(t.get('title') or '').split())[:100]} (merged {when[:16]})"))
+    return [x for _, x in sorted(out, reverse=True)[:MERGED_SINCE_MAX]]
+
+
 def po_prompt(product: Product, store: Store, *, cycle_id: str, observations: list[dict[str, Any]], questions: list[dict[str, Any]],
               metrics_md: str, spent_today: float, cap: float, max_ready: int, idle: bool, dev_idle: bool = False,
               channel_caps: dict[str, Any] | None = None, stuck_md: str = "", queue_md: str = "") -> str:
     cfg = product.po_prompt_cfg
     tasks = [t for t in store.tasks() if t.get("state") not in ("done", "rejected")]
     recent_done = [t for t in store.tasks(["done", "measured", "accepted", "released"])][-10:]
+    if cfg["merged_since"]:
+        every = store.tasks()
+        cards = []
+        for o in observations:
+            after = merged_since(every, o)
+            cards.append({**o, "merged_after_this_observation": after} if after else o)
+        observations = cards
     obs_txt = "\n\n".join(_y({k: v for k, v in o.items() if k not in ("fingerprint",)}) for o in observations) or "(none)"
+    if cfg["merged_since"] and "merged_after_this_observation" in obs_txt:
+        obs_txt = ("`merged_after_this_observation` lists the tasks merged after the card was recorded: check whether one of them "
+                   "already answers it before you cut a task from it.\n\n" + obs_txt)
     q_txt = "\n\n".join(_y(q) for q in questions) or "(none)"
     answered = [q for q in store.questions(["answered"]) if q.get("to") == "owner" and str(q.get("answered") or "") >= _hours_ago(72)][-8:]
     answered_txt = "\n\n".join(_y({k: q.get(k) for k in ("id", "question", "answer", "answered_by", "answered")}) for q in answered) or "(none)"
@@ -715,7 +743,10 @@ def game_designer_prompt(product: Product, task: dict[str, Any], gdd_dir: Path, 
 def reviewer_prompt(product: Product, task: dict[str, Any], result: dict[str, Any] | None, sha: str | None) -> str:
     repo = (product.repo_url or "").removesuffix(".git")
     raw = ""
-    if repo.startswith("https://github.com/"):
+    if product.repo_private:
+        raw = (f"Repository: {repo} (branch {product.repo_branch}) is PRIVATE: raw.githubusercontent.com and the commit page answer "
+               "404 to team-fetch. Read the files of the merged commit in the read-only checkout (section below), not by URL.\n")
+    elif repo.startswith("https://github.com/"):
         raw = (f"Repository: {repo} (branch {product.repo_branch}). Repo-only deliverables (code, tests, README, scripts) are "
                f"public: read a file with team-fetch at https://raw.githubusercontent.com/{repo.removeprefix('https://github.com/')}/"
                f"{sha or product.repo_branch}/<path> and the commit at {repo}/commit/{sha or product.repo_branch}.\n")

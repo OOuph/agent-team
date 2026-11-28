@@ -53,6 +53,9 @@ repository checkout you were started in (the task branch is already checked out)
   unclear»). The dispatcher turns the list into one question to the PO, the task waits for the answer and the stop is
   not counted against it; the answer comes back in the prompt as ANSWERS TO THIS TASK'S QUESTIONS — act on it and do
   not raise the same point again. A half-done task built on a guess is worse than a stop.
+- Waiting for a long command (28.11: 12 denied calls in three cycles): the `Monitor` tool is not available to you, and
+  neither are `pgrep`, `pkill`, `killall`. Start the command with its output in a file (`team-heavy npm test > /tmp/<task>-test.log 2>&1; echo "exit=$?" >> /tmp/<task>-test.log`
+  in the background) and wait with one shell loop: `until grep -q "^exit=" /tmp/<task>-test.log; do sleep 15; done; tail -20 /tmp/<task>-test.log`.
 - If the PR edits or deletes any file under `tests/`, the result `summary` has a line of its own that starts with
   `tests-change-reason: F-xxxx` followed by the reason (F-xxxx = the register entry that justifies the change). The
   dispatcher builds the PR body from the summary and the auto-merge gate reads that line; without it a legitimate test

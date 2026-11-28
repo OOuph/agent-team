@@ -42,6 +42,7 @@ from . import testworkers
 from . import firstcycle
 from . import drain as drain_mod
 from . import heavy as heavy_mod
+from . import taskcheck
 from . import keywords
 from . import lanes as lanes_mod
 from . import flow as flow_mod
@@ -92,6 +93,7 @@ SUITE_NOTE = ("(the suite was run once on commit {head}, the head of the main br
 PARKED_AFTER_H = 24.0                                     # `cycle.queue.remind_parked`: a proposed / deferred task this old is named
 PARKED_LIST_MAX = 15                                      # … at most this many
 CRASHES_MAX = 3                                           # `cycle.guards.crash_release`: returns to `ready` after an exception before the PO is asked
+CHANGED_FILES_CHARS = 3000                                # `cycle.review_tests.changed_files`: this much of the commit's file list in a review prompt
 OWNER_PING_MAX = 5                                        # `cycle.escalation.owner_ping`: at most this many question lines per look; the rest wait for the next look
 OWNER_PING_CHARS = 300                                    # … and this much of a question's text in its line
 EXECUTE_WAVES_MAX = 3                                     # passes of the execute phase in a parallel cycle: the first starts what is ready, a later one what the reviews and the other lanes of this cycle made startable
@@ -1202,6 +1204,15 @@ class Cycle:
             return                                # the lane waited for its slot and the request came meanwhile
         result = (t.get("results") or [None])[-1]
         prompt = prompts.reviewer_prompt(self.p, t, result, t.get("released_sha"))
+        if self.p.review_tests_cfg["changed_files"] and t.get("released_sha"):
+            try:                                  # the reviewer has no shell: what `git show --stat` would say is given to it
+                stat = gitops.commit_stat(self.p.repo_dir, str(t["released_sha"])).strip()
+            except Exception as exc:  # noqa: BLE001 — a missing list never costs a review
+                stat = ""
+                log.debug("%s: files of %s not listed for the review of %s: %s", self.p.slug, str(t["released_sha"])[:12], t["id"], str(exc)[:200])
+            if stat:
+                prompt += ("\n# FILES THE MERGED COMMIT CHANGED (`git show --stat`; you cannot run git, and need not)\n"
+                           + stat[:CHANGED_FILES_CHARS] + "\n")
         work = self.p.work_dir / self.cycle_id / f"review-{t['id']}"
         tools = env = None
         sha = t.get("released_sha")
@@ -1218,7 +1229,8 @@ class Cycle:
         if docs_only:
             self.store.event("review.tests_skipped", t["id"], "dispatcher", {"sha": str(sha)[:12]})
             log.info("%s: %s: the reviewed commit changes documents only — no test run, no play-test", self.p.slug, t["id"])
-        if (t.get("repo_only") or docs_only or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
+        # `repo.private`: the reviewer cannot read a private repository by URL — the checkout is its only way to the files
+        if (t.get("repo_only") or docs_only or self.p.repo_private or (pre_merge and not self.playtest_due(t))) and sha:   # read-only checkout of the commit (T-0011)
             try:
                 try:
                     if docs_only:
@@ -1912,6 +1924,12 @@ class Cycle:
                 f"# JUST MERGED\nThe design task {cut_for['id']} «{_short_text(cut_for.get('title'), 100)}» was merged a moment ago"
                 + (f" ({changes})" if changes else "") + ". Its proposals are among NEW OBSERVATIONS. Cut the tasks it calls for NOW, in the "
                 "order they depend on each other: the seats are working and take them in this cycle. Decide the other observations as usual.")
+        if self.p.dependencies_cfg["in_answers"]:
+            queue_md = ((queue_md + "\n\n") if queue_md else "") + (
+                "# WAIT FOR A TASK\nWhen your answer to a question is «wait until task T-… is merged or accepted», put that task's id "
+                "into the answer's `wait_for` and leave `not_before` empty: the blocked task returns to ready with it as a dependency "
+                "and starts the moment it is met. `not_before` is for a date or an hour the task itself names, never for a guess of "
+                "when another task will be done.")
         if queue_wake and cut_for is None:
             self.mark_queue_wake()
             self.store.event("queue.low", self.cycle_id, "dispatcher", {"low": low, "target": qcfg["target_ready"]})
@@ -1945,6 +1963,27 @@ class Cycle:
         with self.store.lock:
             self._apply_po(res, new_obs)
 
+    def wait_for_tasks(self, q: dict[str, Any], wait_for: list[str]) -> None:
+        """`cycle.dependencies.in_answers`: the PO answered «wait until T-… is done» — the tasks the question blocked get
+        those tasks as dependencies (the ones that exist, never the task itself), with a line in their history."""
+        for tid in q.get("blocks") or []:
+            t = self.store.task(tid)
+            if not t:
+                continue
+            new = [d for d in dict.fromkeys(wait_for) if d != tid and self.store.task(d) is not None and d not in (t.get("depends_on") or [])]
+            unknown = [d for d in wait_for if d != tid and self.store.task(d) is None]
+            if unknown:
+                log.warning("%s: answer to %s names task(s) that do not exist: %s — not made dependencies of %s", self.p.slug, q.get("id"), unknown, tid)
+            if not new:
+                continue
+            t["depends_on"] = list(t.get("depends_on") or []) + new
+            t.pop("dead_deps_reported", None)
+            t.setdefault("history", []).append({"ts": utcnow(), "actor": "po", "from": t.get("state"), "to": t.get("state"),
+                                                "note": f"waits for {', '.join(new)} (answer to {q.get('id')})"})
+            self.store.save_task(t)
+            self.store.event("task.wait_for", tid, "po", {"question": q.get("id"), "wait_for": new})
+            log.info("%s: %s waits for %s (the PO's answer to %s)", self.p.slug, tid, ", ".join(new), q.get("id"))
+
     def _apply_po(self, res: dict[str, Any], new_obs: list[dict[str, Any]]) -> None:
         ids = {o["id"] for o in new_obs}
         for d in res.get("decisions") or []:
@@ -1953,9 +1992,11 @@ class Cycle:
                 self.store.update_observation(oid, status="triaged", decision={**d, "cycle": self.cycle_id})
         for a in res.get("answers") or []:
             try:
-                self.store.answer(str(a["question_id"]), str(a["answer"]), "po", not_before=a.get("not_before"))
+                q = self.store.answer(str(a["question_id"]), str(a["answer"]), "po", not_before=a.get("not_before"))
             except FileNotFoundError:
-                pass
+                continue
+            if self.p.dependencies_cfg["in_answers"] and a.get("wait_for"):
+                self.wait_for_tasks(q, [str(x) for x in a.get("wait_for") or []])
         for rp in res.get("reprioritize") or []:
             t = self.store.task(str(rp.get("task_id")))
             if t and rp.get("priority") in PRIO and not self.is_held(t):
@@ -1972,6 +2013,7 @@ class Cycle:
         for note in self.apply_task_returns(res.get("return_tasks") or []):
             log.info("%s: PO return_tasks: %s", self.p.slug, note)
         skipped, held = [], []
+        task_notes: list[str] = []                    # `cycle.escalation.task_checks`: what the dispatcher read in a new task's text
         for pr in res.get("promote_tasks") or []:
             t = self.store.task(str(pr.get("task_id")))
             if not t or t.get("state") not in ("proposed", "ready", "deferred") or self.is_held(t):
@@ -2036,6 +2078,18 @@ class Cycle:
             if rt.get("repo_only"):                   # T-0015: reviewer gets the read-only checkout (task.schema.json)
                 new["repo_only"] = True
                 self.store.save_task(new)
+            if self.p.escalation_cfg["task_checks"]:  # pack 2 (28.11): what the task's own text says about how it can be done
+                later = taskcheck.after_deploy(new.get("acceptance"), self.p.host)
+                if later and not new.get("repo_only"):
+                    new["after_deploy"] = later
+                    self.store.save_task(new)
+                    task_notes.append(f"{new['id']}: {len(later)} критери(й/я) проверяются только после выкладки — их проверит ревьюер, исполнителю об этом сказано")
+                    self.store.event("task.after_deploy", new["id"], "dispatcher", {"criteria": len(later)})
+                warn = taskcheck.toolless_warning(str(new.get("role") or "developer"), new)
+                if warn:
+                    self.store.event("task.toolless", new["id"], "dispatcher", {"role": new.get("role")})
+                    task_notes.append(f"{new['id']}: {warn[:220]}")
+                    log.warning("%s: %s: %s", self.p.slug, new["id"], warn)
             if sid:                                   # owner 21.11: counted as the direction's task — no second one, the cadence restarts
                 new[standing.TASK_FIELD] = sid
                 docs = next((list(d.docs) for d in standing.directions(self.p) if d.id == sid and d.docs), None)
@@ -2060,6 +2114,8 @@ class Cycle:
             digest += "\n\n_Зависимости задач: " + "; ".join(dep_notes) + "._"
         if skipped:
             digest += "\n\n_Диспетчер не создал дубли (задача уже открыта или уже сделана): " + "; ".join(skipped) + "._"
+        if task_notes:
+            digest += "\n\n_Проверка новых задач диспетчером: " + "; ".join(task_notes) + "._"
         if held:
             digest += "\n\n_Правило гипотез (фича без доказательств от живых людей ждёт в proposed): " + "; ".join(held) + "._"
         (self.p.dir / "digests" / f"{self.cycle_id}.md").write_text(f"# PO digest {self.cycle_id}\n\n{digest}\n", encoding="utf-8")
@@ -3111,6 +3167,7 @@ class Cycle:
         prompt = prompts.developer_prompt(self.p, t, repo, branch, t.get("results") or [], t.get("last_review"), role=role,
                                           budget_s=int(self.p.run_limits(role)["timeout_s"]), continuation=self.continuation_context(t, repo),
                                           conflict=conflict, base=self.p.repo_branch, port=port, answers=self.task_answers(t), refs=self.task_refs_block(t))
+        prompt += taskcheck.developer_note(t.get("after_deploy") or [])       # set only with `cycle.escalation.task_checks` (pack 2)
         cap = float(t.get("budget_usd") or self.st.budget["max_usd_per_run"])
         rr = self.role_run(role, prompt, "task-result", cwd=repo, label=f"{'dev' if role == 'developer' else role}-{t['id']}", cap=cap,
                            allowed_tools=["Bash", "Read", "Edit", "Write", "Glob", "Grep"],
