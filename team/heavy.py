@@ -6,6 +6,8 @@ they are queued instead: the commands named in `cycle.heavy_runs.queue` are deni
 starts them as `team-heavy npm run sim:weapons`. This tool waits for the server-wide lock, then runs the command under
 `nice`, with its output and its exit code passed through.
 
+TEAM_HEAVY_BUSY=run: when no place comes free within the wait, the command runs all the same (default: it is refused, exit 75).
+
 The dispatcher gives the run: TEAM_HEAVY_LOCK (the lock file), TEAM_HEAVY_SLOTS (how many such runs at once, 1 by default),
 TEAM_HEAVY_NICE, TEAM_HEAVY_WAIT_S. The dispatcher's own test runs take a place of the same set (`take_slot`).
 """
@@ -72,10 +74,14 @@ def main(argv: list[str] | None = None) -> int:
     if lock:
         fh = take_slot(lock, slots, wait_s, on_wait=lambda: print(
             f"team-heavy: all {slots} place(s) for heavy runs on this server are taken; waiting for one …", file=sys.stderr, flush=True))
-        if fh is None:
+        if fh is None and os.environ.get("TEAM_HEAVY_BUSY", "refuse") != "run":
             print(f"team-heavy: no place came free in {wait_s}s — not started. Run the same `team-heavy` command again (it only "
                   "waits); do not start the work another way.", file=sys.stderr)
             return EX_TEMPFAIL
+        if fh is None:
+            # `cycle.heavy_runs.busy: run` — the queue delays a run, it never refuses one (28.11: with a refusal after the
+            # wait 36–40 % of the developers' runs ended «partial: the tests could not be run»)
+            print(f"team-heavy: no place came free in {wait_s}s — starting all the same.", file=sys.stderr, flush=True)
     waited = time.monotonic() - t0
     print(f"team-heavy: started after {waited:.0f}s of waiting, at nice {nice}: {' '.join(cmd)}", file=sys.stderr, flush=True)
     try:

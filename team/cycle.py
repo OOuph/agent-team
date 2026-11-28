@@ -64,8 +64,10 @@ HEAVY_QUEUE_PROMPT = ("\n\n# HEAVY COMMANDS GO THROUGH `team-heavy` — ONLY {sl
                       "Start them as `team-heavy <the same command>` — `team-heavy npm test`, `team-heavy npx vitest run tests/unit/x.test.ts`, "
                       "`team-heavy npm run sim:weapons`. The tool waits for a free place (up to {wait} minutes), then runs the command at low "
                       "priority and gives you its output and exit code. Call it with the longest timeout your shell tool allows (600000 ms) "
-                      "or in the background: it may wait before it starts. Exit code 75 means no place came free — run the same "
-                      "`team-heavy` command again; never start the work another way, and never run two of them at once.\n")
+                      "or in the background: it may wait before it starts. {busy} Never start the work another way, and never run two "
+                      "of them at once. The tests of your task ARE part of the task: a wait is not a reason to report without them.\n")
+HEAVY_BUSY_REFUSE = "Exit code 75 means no place came free — run the same `team-heavy` command again."
+HEAVY_BUSY_RUN = "It never refuses: when no place comes free in that time, your command starts all the same."
 TEST_BUDGET_PROMPT = ("\n\n# THE WHOLE TEST SUITE: AT MOST {times} IN THIS RUN (the server is shared: every whole run costs every other run minutes)\n"
                       "While you work, run only the tests of what you touched: the test files of the modules you changed and the ones that "
                       "import them (name the files on the command line of the test tool; do not run everything «to be sure»). Run the whole "
@@ -481,7 +483,8 @@ class Cycle:
         if cfg["deny"]:
             out += HEAVY_RUNS_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["deny"]))
         if cfg["queue"]:
-            out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=int(cfg["wait_s"]) // 60, slots=int(cfg["slots"]))
+            out += HEAVY_QUEUE_PROMPT.format(rules="\n".join(f"- `{d}`" for d in cfg["queue"]), wait=max(1, int(cfg["wait_s"]) // 60), slots=int(cfg["slots"]),
+                                             busy=HEAVY_BUSY_RUN if cfg["busy"] == "run" else HEAVY_BUSY_REFUSE)
         return out
 
     def test_budget_prompt(self, role: str) -> str:
@@ -497,7 +500,7 @@ class Cycle:
         if not cfg["queue"]:
             return {}
         return {"TEAM_HEAVY_LOCK": str(self.st.data_dir / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(cfg["nice"]), "TEAM_HEAVY_WAIT_S": str(cfg["wait_s"]),
-                "TEAM_HEAVY_SLOTS": str(cfg["slots"])}
+                "TEAM_HEAVY_SLOTS": str(cfg["slots"]), "TEAM_HEAVY_BUSY": str(cfg["busy"])}
 
     def suite_tests(self, sha: str, dest: Path, full_log: Path | None = None) -> str:
         """`run_tests_for_review` for this product — in one of the server's places for heavy runs when the product queues

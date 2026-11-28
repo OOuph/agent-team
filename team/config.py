@@ -63,7 +63,9 @@ TEST_BUDGET_DEFAULTS: dict[str, Any] = {"full_runs": 0, "roles": ["developer", "
 # `queue`: rules denied as typed but allowed through `team-heavy <command>` — one such run at a time on the server, at `nice`.
 # `slots`: how many such runs may go at once on the server, the dispatcher's own test runs before a review included (28.11: five
 # whole-suite runs at once, 44 vitest processes, load 45 on 8 cores).
-HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1}
+# `busy`: what `team-heavy` does when no place came free within `wait_s` — "refuse" (exit 75, as before) or "run" (the command runs
+# all the same: the queue then only delays a run and never costs a role its tests).
+HEAVY_RUNS_DEFAULTS: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
 GUARDS_DEFAULTS: dict[str, Any] = {
     "loop": False,                # true = a run that repeats one tool call with the same input and output is stopped
     "loop_repeats": 5,            # … after this many identical calls in a row (3..50)
@@ -608,7 +610,7 @@ class Product:
     def heavy_runs_cfg(self) -> dict[str, Any]:
         """`cycle.heavy_runs`: this product's block replaces team.yaml's, list by list; anything that is not a list of
         strings is ignored with a warning."""
-        out: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1}
+        out: dict[str, Any] = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
         own = self.raw.get("cycle")
         for where, src in (("team.yaml", self.st.cycle.get("heavy_runs")), (f"{self.slug} product.yaml", own.get("heavy_runs") if isinstance(own, dict) else None)):
             if not isinstance(src, dict):
@@ -621,6 +623,12 @@ class Product:
                     out[k] = [x.strip() for x in v]
                 else:
                     log.warning("%s: cycle.heavy_runs.%s=%r is not a list of strings — ignored", where, k, v)
+            b = src.get("busy")
+            if b is not None:
+                if b in ("refuse", "run"):
+                    out["busy"] = b
+                else:
+                    log.warning("%s: cycle.heavy_runs.busy=%r is not \"refuse\" or \"run\" — %s in use", where, b, out["busy"])
             for k, lo, hi in (("nice", 0, 19), ("wait_s", 0, 86400), ("slots", 1, 64)):
                 v = src.get(k)
                 if v is None:
