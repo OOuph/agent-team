@@ -31,7 +31,8 @@ from .config import Product
 log = logging.getLogger("team.playtest")
 
 SECRET_ENV_PREFIXES = ("TELEGRAM_", "BLUESKY_", "DEVTO_", "MASTODON_", "THREADS_", "X_API_", "X_ACCESS_", "X_CLIENT_", "X_REFRESH_",
-                       "X_OAUTH2_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GSC_")
+                       "X_OAUTH2_", "GITHUB_TOKEN", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_API_KEY", "GSC_",
+                       "DATAFORSEO_", "BING_WEBMASTER_")
 START_TIMEOUT_S = 90            # health must answer within this
 HEALTH_POLL_S = 0.5
 INSTALL_TIMEOUT_S = 600
