@@ -588,6 +588,13 @@ class local_server:
             try:
                 os.killpg(self.proc.pid, signal.SIGTERM)
                 self.proc.wait(timeout=LOCAL_STOP_GRACE_S)
+                # the process we wait for is the shell; the server is its child and may outlive it by a moment (seen on
+                # Linux, 28.11: the port was still open when `with` returned). Wait for the whole group to be gone.
+                t0 = time.time()
+                while time.time() - t0 < LOCAL_STOP_GRACE_S:
+                    os.killpg(self.proc.pid, 0)            # raises ProcessLookupError once nobody is left in the group
+                    time.sleep(0.05)
+                os.killpg(self.proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
             except subprocess.TimeoutExpired:

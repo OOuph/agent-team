@@ -28,10 +28,19 @@ main() {
   log "the cycles ended $(( $(date +%s) - T0 ))s after the request to drain"
   local before after
   before=$(git rev-parse --short HEAD)
+  # the checkout is locked between updates (gate-lock.sh): this script is the one that may move it. Locked again on any exit.
+  if [ -f gate-lock.sh ] && [ -f data/locks/code.version ]; then
+    bash gate-lock.sh unlock 8>&- 9>&- || { log "the checkout could not be unlocked; nothing changed"; exit 1; }
+    trap 'rm -f data/locks/update.pending; bash gate-lock.sh lock >/dev/null 2>&1' EXIT
+  fi
+  export TEAM_CODE_GATE=1
   # 8>&- 9>&-: the children do not inherit the locks (a detached `git gc --auto` left by fetch would keep them held)
   git fetch -q origin "$BRANCH" 8>&- 9>&- || { log "git fetch origin $BRANCH failed"; exit 1; }
   git merge -q --ff-only "origin/$BRANCH" 8>&- 9>&- || { log "fast-forward to origin/$BRANCH failed (local commits or changes?)"; exit 1; }
   after=$(git rev-parse --short HEAD)
+  if [ -f gate-lock.sh ] && [ -f data/locks/code.version ]; then
+    bash gate-lock.sh record update-code.sh 8>&- 9>&- || log "the new commit was not recorded (the cycles will report a mismatch)"
+  fi
   if [ -x "$PIP" ]; then
     "$PIP" install -q -e . >/dev/null 2>&1 8>&- 9>&- || log "pip install -e . failed (the code itself is updated)"
   fi
