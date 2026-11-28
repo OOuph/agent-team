@@ -2306,6 +2306,12 @@ class Cycle:
                     self._not_done.add(t["id"])
             return
         for wave in range(1, EXECUTE_WAVES_MAX + 1):
+            if wave > 1 and self.flow.no_late_pass and self.flow.refill and self._refill_closed:
+                # refill is over: a seat seated now would hold the cycle for a whole run while the seats that used their
+                # places may take nothing — the next cycle starts at once and seats everybody
+                log.info("%s: execute: no further pass — refill has closed (%s); what is startable is the next cycle's", self.p.slug,
+                         str(self._refill_closed)[:120])
+                break
             self.start_seat_lanes(wave)
             in_flight = self.lanes.pending()
             self.finish_lanes()
