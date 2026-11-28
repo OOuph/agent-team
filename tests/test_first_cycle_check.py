@@ -193,3 +193,57 @@ def test_many_partial_results_make_the_first_cycle_red(tmp_path: Path, monkeypat
     assert "3 of 6 executor runs ended «partial» (limit 30%)" in text and ids[0] in text
     assert not [x for x in fc.findings(cyc, res, {**cfg, "partial_share": 0.6}) if "partial" in x]
     cyc.store.close()
+
+
+def test_the_thresholds_of_the_guard_plan(tmp_path: Path, monkeypatch):
+    """Plan «б» of 28.11 — the four cases of the night that the check of the first cycle called GREEN: runs ended by a
+    signal (one run killed three others), finished work called a dead dependency (the tower waited), a cycle of 84
+    minutes, seats idle for the tail of a cycle."""
+    from datetime import datetime, timedelta, timezone
+    st, p = _cycle(tmp_path, monkeypatch, ON, ["bbb"])
+    done = _task(p, "developer", "accepted work", state="accepted")
+    waits = _task(p, "developer", "waits for it")
+    cyc = Cycle(st, p, LaneRunner(), "c1")
+    res = cyc.run(["measure"])
+    cfg = fc.settings(st.raw, p.raw)
+    assert fc.findings(cyc, res, cfg) == []
+    for i in range(3):
+        cyc.store.event("run", f"c1-dev-T-90{i:02d}", "developer", {"ok": False, "cost": 0.0, "turns": 0, "error": "no result event (exit 143)"})
+    cyc.store.event("task.dependency_dead", waits, "dispatcher", {"dead": [done], "states": {done: "done without a usable result"}})
+    start = datetime.now(timezone.utc) - timedelta(minutes=150)
+    cyc.store.db.execute("UPDATE cycles SET started=? WHERE cycle_id=?", (start.isoformat(timespec="seconds"), "c1"))
+    cyc.store.db.execute("UPDATE events SET ts=? WHERE kind='run'", ((start + timedelta(minutes=30)).isoformat(timespec="seconds"),))
+    cyc.store.db.commit()
+    text = " | ".join(fc.findings(cyc, res, {**cfg, "fail_share": 1.0, "no_result_share": 1.0}))
+    assert "3 run(s) were ended by a signal (limit 0)" in text
+    assert f"1 task(s) were told their dependency can never be met although it is finished work (limit 0): {waits} ← {done} (accepted)" in text
+    assert "the cycle ran 150 minutes (limit 120)" in text
+    assert "the last executor run ended 120 minutes before the cycle did — 80% of the cycle with no seat at work (limit 50%)" in text
+    quiet = {**cfg, "fail_share": 1.0, "no_result_share": 1.0, "signalled_runs": 3, "dead_finished": 1, "cycle_min": 200.0, "idle_tail_share": 0.9}
+    assert fc.findings(cyc, res, quiet) == []                          # every threshold is a setting
+    cyc.store.close()
+
+
+def test_a_change_of_the_products_settings_opens_the_window_again(tmp_path: Path):
+    """28.11: a deny rule added to product.yaml cost the developers their tests for four hours. The code had not changed,
+    so no cycle was checked."""
+    d = tmp_path / "data"
+    assert fc.due(d, "p", "aaa", 2, "s1") is False       # the first sight of the product: remembered
+    assert fc.due(d, "p", "aaa", 2, "s1") is False
+    assert fc.due(d, "p", "aaa", 2, "s2") is True        # the settings changed: the first cycle of a new window …
+    assert fc.due(d, "p", "aaa", 2, "s2") is True        # … and the second
+    assert fc.due(d, "p", "aaa", 2, "s2") is False
+    assert fc.due(d, "p", "bbb", 2, "s2") is True        # a new commit, as before
+    assert fc.due(d, "p", "bbb", 2, "") is True          # settings that cannot be read claim nothing and break nothing
+    assert fc.due(d, "p", "bbb", 2, "") is False
+    old = tmp_path / "old"
+    assert fc.due(old, "p", "aaa", 1) is False and fc.due(old, "p", "aaa", 1) is False     # a state written before marks existed …
+    assert fc.due(old, "p", "aaa", 1, "s1") is False     # … takes its first mark without a check
+    assert fc.due(old, "p", "aaa", 1, "s2") is True
+    prod = tmp_path / "prod"
+    prod.mkdir()
+    assert fc.settings_mark(prod) == ""
+    (prod / "product.yaml").write_text("a: 1\n", encoding="utf-8")
+    one = fc.settings_mark(prod)
+    (prod / "product.yaml").write_text("a: 2\n", encoding="utf-8")
+    assert one and fc.settings_mark(prod) != one

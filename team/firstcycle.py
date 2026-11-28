@@ -10,8 +10,10 @@ team.yaml `first_cycle_check` (product.yaml `cycle.first_cycle_check` on top, ke
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
+import re
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -36,16 +38,27 @@ DEFAULTS: dict[str, Any] = {
     "partial_share": 0.3,         # share of executor runs that ended «partial — continues next cycle» (28.11: 7 % before a deny
                                   # rule that kept the roles from their tests, 36–40 % with it — and nothing said so for four hours)
     "churn_per_task": 1,          # a task went in_progress → ready without a run more often than this
+    "signalled_runs": 0,          # more runs of the cycle ended by a signal than this (28.11: one designer run killed three others
+                                  # with `pkill -f`; they ended with exit 143 and the check of that cycle was GREEN)
+    "dead_finished": 0,           # more «the dependency can never be met» reports than this where the dependency is in fact
+                                  # merged or accepted (28.11: accepted T-0766 was called dead for a word in its summary; the tower waited)
+    "cycle_min": 120.0,           # the cycle ran longer than this many minutes (28.11: 84 minutes for one late seat; normal 60–100)
+    "idle_tail_share": 0.5,       # share of the cycle that lay AFTER the last executor run ended, above which it is red (cycles
+                                  # of at least IDLE_TAIL_MIN_CYCLE_S; 27–28.11: seats stood idle for 44 % of a cycle)
     "load_per_core": 2.5,         # the 5-minute load of the server per core at the end of the cycle (27.11: 18–33 on 8 cores = 2.3–4.1)
 }
 _RANGES = {"cycles": (1, 20, int), "refusals_per_task": (1, 1000, int), "picks_per_task": (1, 1000, int), "idle_picks": (0, 100000, int),
            "fail_share": (0.0, 1.0, float), "min_runs": (1, 1000, int), "main_wait_s": (1, 86400, float), "review_wait_s": (1, 86400, float),
-           "execute_wait_s": (1, 86400, float), "no_result_share": (0.0, 1.0, float), "partial_share": (0.0, 1.0, float), "churn_per_task": (0, 1000, int), "load_per_core": (0.1, 100.0, float)}
+           "execute_wait_s": (1, 86400, float), "no_result_share": (0.0, 1.0, float), "partial_share": (0.0, 1.0, float), "churn_per_task": (0, 1000, int), "load_per_core": (0.1, 100.0, float),
+           "signalled_runs": (0, 1000, int), "dead_finished": (0, 1000, int), "cycle_min": (1.0, 1440.0, float), "idle_tail_share": (0.0, 1.0, float)}
 EXEC_ROLES = ("developer", "designer", "game-designer", "analyst", "marketer", "tester")
 LOG_FILE = "framework/canary.log"             # under the data directory: one line per checked cycle, newest last
 STATE_DIR = "framework/first-cycle"           # <slug>.json: the commit this product's cycles were last checked on, and how many
 EVENT = "canary.first_cycle"
 FINDINGS_IN_LINE = 6
+IDLE_TAIL_MIN_CYCLE_S = 1200.0                # a cycle shorter than this has no «idle tail» worth a word
+SIGNAL_RE = re.compile(r"exit (143|137|130|-15|-9|-2)\b")      # a run ended by SIGTERM / SIGKILL / SIGINT (as team/windowreport.py counts it)
+FINISHED_STATES = ("released", "accepted", "measured", "done")  # a dependency in one of these is merged work, not a dead end
 
 
 def settings(team_raw: dict[str, Any] | None, product_raw: dict[str, Any] | None, slug: str = "-") -> dict[str, Any]:
@@ -75,9 +88,19 @@ def settings(team_raw: dict[str, Any] | None, product_raw: dict[str, Any] | None
     return out
 
 
-def due(data_dir: Path, slug: str, commit: str, cycles: int) -> bool:
-    """Is this cycle inside the window after a change of the commit? Counts it when it is (idempotent per call: one call
-    per finished cycle). The very first call for a product only remembers the commit — there is nothing to compare with."""
+def settings_mark(product_dir: Path) -> str:
+    """A short hash of the product's product.yaml as it is on disk ("" when it cannot be read)."""
+    try:
+        return hashlib.sha1((product_dir / "product.yaml").read_bytes()).hexdigest()[:12]
+    except OSError:
+        return ""
+
+
+def due(data_dir: Path, slug: str, commit: str, cycles: int, mark: str = "") -> bool:
+    """Is this cycle inside the window after a change of the commit — or, with `mark`, of the product's settings (28.11:
+    a deny rule added to product.yaml cost the developers their tests for four hours; the code had not changed, so
+    nothing was checked)? Counts it when it is (idempotent per call: one call per finished cycle). The very first call
+    for a product only remembers the commit — there is nothing to compare with; so does the first call that brings a mark."""
     if not commit:
         return False
     f = data_dir / STATE_DIR / f"{slug}.json"
@@ -89,7 +112,13 @@ def due(data_dir: Path, slug: str, commit: str, cycles: int) -> bool:
         new = {"commit": commit, "checked": cycles}                 # nothing to compare with: remembered, not checked
         verdict = False
     elif state.get("commit") != commit:
-        new, verdict = {"commit": commit, "checked": 1, "before": state.get("commit")}, True
+        new, verdict = {"commit": commit, "checked": 1, "before": state.get("commit"), "settings": mark or state.get("settings")}, True
+    elif mark and not state.get("settings"):
+        new, verdict = {**state, "settings": mark}, int(state.get("checked") or 0) < cycles     # remembered; the window goes on as it was
+        if verdict:
+            new["checked"] = int(state.get("checked") or 0) + 1
+    elif mark and state.get("settings") != mark:
+        new, verdict = {**state, "checked": 1, "settings": mark, "settings_before": state.get("settings")}, True
     elif int(state.get("checked") or 0) < cycles:
         new, verdict = {**state, "checked": int(state.get("checked") or 0) + 1}, True
     else:
@@ -180,11 +209,43 @@ def findings(cyc: Any, result: dict[str, Any], cfg: dict[str, Any]) -> list[str]
     if churned:
         out.append(f"{len(churned)} task(s) went in_progress → ready without a run more than {cfg['churn_per_task']} time(s): "
                    + ", ".join(f"{t} ×{n}" for n, t in churned[:5]))
-    # 10. the load of the server
+    # 10. runs ended by a signal, finished work called a dead end, a long cycle, a long tail with no executor run
+    signalled = [e for e in runs if isinstance(e["detail"], dict) and SIGNAL_RE.search(str(e["detail"].get("error") or ""))]
+    if len(signalled) > cfg["signalled_runs"]:
+        out.append(f"{len(signalled)} run(s) were ended by a signal (limit {cfg['signalled_runs']}): " + ", ".join(str(e["subject"]) for e in signalled[:5]))
+    wrong_dead = []
+    for e in events:
+        if e["kind"] == "task.dependency_dead" and isinstance(e["detail"], dict):
+            for dep in e["detail"].get("dead") or []:
+                d = store.task(str(dep))
+                if d and d.get("state") in FINISHED_STATES:
+                    wrong_dead.append(f"{e['subject']} ← {dep} ({d.get('state')})")
+    if len(wrong_dead) > cfg["dead_finished"]:
+        out.append(f"{len(wrong_dead)} task(s) were told their dependency can never be met although it is finished work "
+                   f"(limit {cfg['dead_finished']}): " + ", ".join(wrong_dead[:5]))
+    t0, now = _when(started), datetime.now(timezone.utc)
+    if t0 is not None:
+        length = (now - t0).total_seconds()
+        if length / 60 > cfg["cycle_min"]:
+            out.append(f"the cycle ran {length / 60:.0f} minutes (limit {cfg['cycle_min']:g})")
+        last = max((x for x in (_when(e.get("ts")) for e in exec_runs) if x is not None), default=None)
+        tail = (now - last).total_seconds() if last is not None else 0.0
+        if length >= IDLE_TAIL_MIN_CYCLE_S and tail / length > cfg["idle_tail_share"]:
+            out.append(f"the last executor run ended {tail / 60:.0f} minutes before the cycle did — {tail / length:.0%} of the cycle with "
+                       f"no seat at work (limit {cfg['idle_tail_share']:.0%})")
+    # 11. the load of the server
     load = server_load()
     if load is not None and load[0] > cfg["load_per_core"]:
         out.append(f"the server's 5-minute load is {load[1]:.1f} on {load[2]} cores = {load[0]:.1f} per core (limit {cfg['load_per_core']:g})")
     return out
+
+
+def _when(ts: Any) -> datetime | None:
+    try:
+        d = datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return d if d.tzinfo else d.replace(tzinfo=timezone.utc)
+    except (TypeError, ValueError):
+        return None
 
 
 def server_load() -> tuple[float, float, int] | None:
@@ -204,7 +265,7 @@ def check(cyc: Any, result: dict[str, Any]) -> dict[str, Any] | None:
     if not cfg["enabled"] or getattr(cyc, "dry_run", False):
         return None
     commit = flow.code_version(cyc.st.root)
-    if not due(cyc.st.data_dir, cyc.p.slug, commit, int(cfg["cycles"])):
+    if not due(cyc.st.data_dir, cyc.p.slug, commit, int(cfg["cycles"]), settings_mark(cyc.p.dir)):
         return None
     found = findings(cyc, result, cfg)
     verdict = "RED" if found else "GREEN"
