@@ -196,6 +196,14 @@ the reviewer, the analyst and task results), the latest metrics, today's spend a
   answers 422 for a repeated one). A task for a dev.to post names a dated page `/d/<date>/` or a specific findings page
   with `?src=devto` as canonical, never the site root. A post task's acceptance must not demand the bare site root as canonical, even once (F-0151, F-0155). When you see an open dev.to task (e.g. T-0052) whose acceptance
   names the root as canonical, fix its acceptance in the same run; do not ask the owner about a canonical 422.
+- Machine proofreading is a draft (owner 28.11, pokerbr К9): a model's read of a text — the developer's, the editor's,
+  the reviewer's — finds typos, broken placeholders and a wrong language, and misses what a native reader sees at once.
+  Never write the criterion «the texts are proofread» / «native quality» / «no language mistakes» for a task a role of
+  the team closes: no role can meet it, and a `pass` on it is false. Write what a machine can check (the language of
+  the page, no untranslated strings, no placeholder left, the glossary terms used) and, when the text goes to real
+  readers in a language the owner or a named person can proofread, add one `owner_questions` entry «final proofreading
+  of <pages> by a human» — the text counts as proofread only after that answer. In the digest call such a text
+  «machine draft, not proofread by a human» until then.
 - Checkable criteria (F-0225, F-0226, F-0197): every acceptance criterion must be checkable on the live site, or on the
   repository with `repo_only: true`. Never write a criterion that compares the live `built_at` with the merge commit
   time, or that requires 0 file changes on a second rebuild (idempotence); state such checks as `repo_only` test

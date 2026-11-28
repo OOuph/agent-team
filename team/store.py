@@ -444,6 +444,43 @@ class Store:
         return q
 
     @_locked
+    def mark_question(self, qid: str, fields: dict[str, Any]) -> dict[str, Any]:
+        """Set fields of a question (e.g. `told`: when its line went to the owner's channel)."""
+        p = self._path("Q", qid)
+        q = yaml.safe_load(p.read_text(encoding="utf-8"))
+        q.update(fields)
+        _write(p, q)
+        return q
+
+    @_locked
+    def hold_task(self, task_id: str, by: str, note: str = "") -> dict[str, Any]:
+        """The operator takes a task (`team task <product> take`): `held_by`, a line in its history, an event. The state
+        does not change; with `cycle.escalation.operator_hold` the cycle leaves a held task alone."""
+        t = self.task(task_id)
+        if t is None:
+            raise KeyError(task_id)
+        t.update({"held_by": by, "held_at": utcnow(), "held_note": note[:300]})
+        t.setdefault("history", []).append({"ts": utcnow(), "actor": by, "from": t.get("state"), "to": t.get("state"),
+                                            "note": f"taken by {by}: the cycle leaves it alone" + (f" — {note[:200]}" if note else "")})
+        self.save_task(t)
+        self.event("task.held", task_id, by, {"note": note[:200], "state": t.get("state")})
+        return t
+
+    @_locked
+    def give_task(self, task_id: str, by: str, note: str = "") -> dict[str, Any]:
+        """The operator gives a taken task back (`team task <product> give`)."""
+        t = self.task(task_id)
+        if t is None:
+            raise KeyError(task_id)
+        was = t.pop("held_by", None)
+        t.pop("held_at", None); t.pop("held_note", None)
+        t.setdefault("history", []).append({"ts": utcnow(), "actor": by, "from": t.get("state"), "to": t.get("state"),
+                                            "note": f"given back by {by} (was held by {was or 'nobody'})" + (f" — {note[:200]}" if note else "")})
+        self.save_task(t)
+        self.event("task.given", task_id, by, {"note": note[:200], "state": t.get("state"), "was_held_by": was})
+        return t
+
+    @_locked
     def answer(self, qid: str, answer: str, by: str, not_before: str | None = None) -> dict[str, Any]:
         """Answer a question; blocked tasks return to ready. `not_before` (ISO UTC) keeps them from restarting before
         that moment — the fix for 'dated post → blocked → answered → restarted an hour later → blocked again'."""

@@ -124,6 +124,40 @@ def test_rendered_questions_md_round_trips_through_the_parser(tmp_path: Path):
     assert set(parsed["decisions"]) == {"A1", "A2", "A3"}
 
 
+def test_text_outside_the_answer_fields_goes_to_the_plan_with_a_warning(tmp_path: Path, caplog):
+    """28.11, pokerbr К6: the owner corrected «Как мы поняли продукт» and added a line after the last section; the parser
+    read only `Ответ:` / `Решение:` and the plan never saw either."""
+    st = _settings(tmp_path)
+    res = onboard.start(st, "notes", _brief(tmp_path), dry_run=True)
+    md_path = Path(res["questions_md"])
+    clean = md_path.read_text(encoding="utf-8")
+    assert onboard.stray_notes(clean, clean) == []                     # the file as it was rendered holds no notes
+    filled = clean.replace("Ответ: \n", "Ответ: ждём 2 минуты\nи ещё строка ответа\n", 1)
+    assert onboard.stray_notes(filled, clean) == []                    # an answer, however long, is not a note
+    md = filled.replace("## Вопросы", "Поправка: продукт только для Бразилии, не для всей Латинской Америки.\n\n## Вопросы", 1)
+    md += "\n## От владельца\nДомен уже куплен, новый не предлагать.\n"
+    md_path.write_text(md, encoding="utf-8")
+    notes = onboard.stray_notes(md, clean)
+    assert [n["under"] for n in notes] == ["Как мы поняли продукт", "От владельца"]
+    assert "только для Бразилии" in notes[0]["text"] and "Домен уже куплен" in notes[1]["text"]
+    with caplog.at_level("WARNING"):
+        out = onboard.apply_answers(st, "notes", dry_run=True)
+    assert out["notes_outside_fields"] == 2 and "outside the" in caplog.text
+    od = st.products_dir / "notes" / "onboarding"
+    prompt = (od / "plan-prompt.md").read_text(encoding="utf-8")
+    assert "OWNER'S NOTES OUTSIDE THE ANSWER FIELDS" in prompt and "только для Бразилии" in prompt and "Домен уже куплен" in prompt
+    assert len(onboard._read_yaml(od / onboard.ANSWERS_YAML)["notes"]) == 2
+
+
+def test_a_file_filled_only_in_its_fields_gives_the_plan_prompt_as_before(tmp_path: Path):
+    st = _settings(tmp_path)
+    onboard.start(st, "plain", _brief(tmp_path), dry_run=True)
+    out = onboard.apply_answers(st, "plain", dry_run=True)
+    od = st.products_dir / "plain" / "onboarding"
+    assert out["notes_outside_fields"] == 0 and "OWNER'S NOTES" not in (od / "plan-prompt.md").read_text(encoding="utf-8")
+    assert "notes" not in onboard._read_yaml(od / onboard.ANSWERS_YAML)
+
+
 # ------------------------------------------------------------------ step 2
 
 def test_apply_answers_writes_vision_tasks_and_finishes(tmp_path: Path):
