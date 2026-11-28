@@ -37,8 +37,10 @@ def recorded(data_dir: Path) -> tuple[str, str]:
 def mismatch(root: Path, data_dir: Path) -> dict[str, str] | None:
     """None when the checkout is where the gate left it, when there is no record, or when HEAD cannot be read."""
     want, how = recorded(data_dir)
+    if not want:
+        return None                              # no gate on this checkout: git is not even asked
     head = flow.code_version(root)
-    if not want or not head or head == want:
+    if not head or head == want:
         return None
     return {"head": head, "recorded": want, "how": how}
 
