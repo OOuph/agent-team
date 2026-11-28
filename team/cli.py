@@ -467,6 +467,31 @@ def cmd_obs(st: C.Settings, a: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_window(st: C.Settings, a: argparse.Namespace) -> int:
+    """`team window <product> --from ISO --to ISO [--vs-from ISO --vs-to ISO]`, or `--night YYYY-MM-DD` (the night that
+    ended on that day, 21:00–07:00 UTC, against the night before): the same measures for two windows (team/windowreport.py)."""
+    from datetime import timedelta
+    from . import windowreport as W
+    p = _products(st, a.product)[0]
+    if a.night:
+        day = W.parse_when(a.night + "T00:00:00")
+        start, end = day - timedelta(hours=3), day + timedelta(hours=7)
+        vs = (start - timedelta(days=1), end - timedelta(days=1))
+    elif a.frm and a.to:
+        start, end = W.parse_when(a.frm), W.parse_when(a.to)
+        vs = (W.parse_when(a.vs_from), W.parse_when(a.vs_to)) if a.vs_from and a.vs_to else None
+    else:
+        print("team window: give --from and --to, or --night YYYY-MM-DD", file=sys.stderr)
+        return 2
+    seats = int(a.seats or (p.raw.get("execute_slots") or {}).get(W.IDLE_ROLE) or 1)
+    name = lambda x, y: f"{x:%d.%m %H:%M}–{y:%d.%m %H:%M} UTC"      # noqa: E731
+    now = W.measure(p.dir, st.data_dir, p.slug, start, end, seats)
+    before = W.measure(p.dir, st.data_dir, p.slug, vs[0], vs[1], seats) if vs else None
+    print(f"# {p.slug}: {name(start, end)}" + (f" против {name(*vs)}" if vs else "") + f" (мест {W.IDLE_ROLE}: {seats})\n")
+    print(W.table(now, before, name(start, end), name(*vs) if vs else ""))
+    return 0
+
+
 def cmd_hold(st: C.Settings, a: argparse.Namespace) -> int:
     """`team hold <product> [--wait-s N] [--by X] [--why …] -- <command …>`: the product's running cycle drains, the
     command runs under the product's lock, the request is removed (team/drain.py)."""
@@ -662,6 +687,9 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--by", default="owner"); s.add_argument("--not-before", dest="not_before"); s.set_defaults(fn=cmd_answer)
     s = sub.add_parser("obs"); s.add_argument("product"); s.add_argument("--title", required=True); s.add_argument("--text", required=True)
     s.add_argument("--class", dest="cls", default="need_hypothesis"); s.add_argument("--url"); s.add_argument("--by", default="owner"); s.set_defaults(fn=cmd_obs)
+    s = sub.add_parser("window"); s.add_argument("product"); s.add_argument("--from", dest="frm"); s.add_argument("--to")
+    s.add_argument("--vs-from", dest="vs_from"); s.add_argument("--vs-to", dest="vs_to"); s.add_argument("--night"); s.add_argument("--seats", type=int)
+    s.set_defaults(fn=cmd_window)
     s = sub.add_parser("hold"); s.add_argument("product"); s.add_argument("--wait-s", type=float, default=2700.0)
     s.add_argument("--by", default="operator"); s.add_argument("--why", default=""); s.add_argument("command", nargs=argparse.REMAINDER)
     s.set_defaults(fn=cmd_hold)
