@@ -10,11 +10,18 @@ TEAM_HEAVY_BUSY=run: when no place comes free within the wait, the command runs 
 
 The dispatcher gives the run: TEAM_HEAVY_LOCK (the lock file), TEAM_HEAVY_SLOTS (how many such runs at once, 1 by default),
 TEAM_HEAVY_NICE, TEAM_HEAVY_WAIT_S. The dispatcher's own test runs take a place of the same set (`take_slot`).
+
+TEAM_HEAVY_CPU_QUOTA (`cycle.heavy_runs.cpu_quota`, percent of one core, 0 = off): the command is started inside the
+systemd slice SLICE of the user, which the dispatcher keeps at that quota — every heavy run of the server shares it, so
+however many of them start, together they get no more than that much processor (28.11: five heavy runs at two places,
+because a run that waited `wait_s` starts all the same; load 38 on 8 cores). Where the slice cannot be used (no systemd
+of the user, no `systemd-run`), the command runs as before and a line says why.
 """
 from __future__ import annotations
 
 import fcntl
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -26,6 +33,8 @@ DEFAULT_NICE = 15                 # 0..19; the simulation gets the processor tha
 DEFAULT_WAIT_S = 1800             # how long to wait for another heavy run to end before giving up
 POLL_S = 2.0
 EX_TEMPFAIL = 75
+SLICE = "team-heavy.slice"        # the slice of the user's systemd all heavy runs share (it nests under team.slice)
+PROBE_TIMEOUT_S = 15              # how long the trial start in the slice, and the setting of its quota, may take
 
 
 def _num(name: str, default: int, lo: int, hi: int) -> int:
@@ -34,6 +43,46 @@ def _num(name: str, default: int, lo: int, hi: int) -> int:
         return v if lo <= v <= hi else default
     except ValueError:
         return default
+
+
+def scope_env(env: dict[str, str] | None = None) -> dict[str, str]:
+    """The environment for `systemd-run --user` / `systemctl --user`: cron gives a run no XDG_RUNTIME_DIR, and without
+    it the user's systemd is not found («Failed to connect to bus: No medium found», seen 28.11)."""
+    out = dict(os.environ if env is None else env)
+    out.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    return out
+
+
+def scope_prefix(quota: int, env: dict[str, str] | None = None) -> tuple[list[str], str]:
+    """(what to put in front of a command so that it runs in SLICE, "") — or ([], why not). Tried with a start of
+    `true`: a prefix that does not work would otherwise look like a failed test run."""
+    if int(quota or 0) <= 0:
+        return [], "off"
+    exe = shutil.which("systemd-run", path=(env or os.environ).get("PATH"))
+    if not exe:
+        return [], "systemd-run is not on this machine"
+    prefix = [exe, "--user", "--scope", "--quiet", "--collect", f"--slice={SLICE}", "--"]
+    try:
+        cp = subprocess.run(prefix + ["true"], env=scope_env(env), capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return [], f"the trial start failed: {str(exc)[:160]}"
+    if cp.returncode != 0:
+        return [], f"the trial start ended with {cp.returncode}: {(cp.stderr or cp.stdout).strip()[:160]}"
+    return prefix, ""
+
+
+def set_slice_quota(quota: int, env: dict[str, str] | None = None) -> str:
+    """Keep SLICE at `quota` percent of one core in all ("" = done, else why not). Runtime only: nothing is written into
+    the user's configuration; the dispatcher sets it again at the start of every cycle."""
+    exe = shutil.which("systemctl", path=(env or os.environ).get("PATH"))
+    if not exe:
+        return "systemctl is not on this machine"
+    try:
+        cp = subprocess.run([exe, "--user", "set-property", "--runtime", SLICE, f"CPUQuota={int(quota)}%"], env=scope_env(env),
+                            capture_output=True, text=True, timeout=PROBE_TIMEOUT_S)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return f"the quota was not set: {str(exc)[:160]}"
+    return "" if cp.returncode == 0 else f"the quota was not set ({cp.returncode}): {(cp.stderr or cp.stdout).strip()[:160]}"
 
 
 def take_slot(lock: str, slots: int, wait_s: float, on_wait: Any = None) -> Any:
@@ -83,9 +132,14 @@ def main(argv: list[str] | None = None) -> int:
             # wait 36–40 % of the developers' runs ended «partial: the tests could not be run»)
             print(f"team-heavy: no place came free in {wait_s}s — starting all the same.", file=sys.stderr, flush=True)
     waited = time.monotonic() - t0
-    print(f"team-heavy: started after {waited:.0f}s of waiting, at nice {nice}: {' '.join(cmd)}", file=sys.stderr, flush=True)
+    quota = _num("TEAM_HEAVY_CPU_QUOTA", 0, 0, 6400)
+    prefix, why = scope_prefix(quota)
+    if quota and not prefix:
+        print(f"team-heavy: the shared processor limit is not in use ({why}); the command runs without it.", file=sys.stderr, flush=True)
+    print(f"team-heavy: started after {waited:.0f}s of waiting, at nice {nice}"
+          + (f", inside {SLICE}" if prefix else "") + f": {' '.join(cmd)}", file=sys.stderr, flush=True)
     try:
-        return subprocess.run(cmd, preexec_fn=(lambda: os.nice(nice)) if nice else None).returncode
+        return subprocess.run(prefix + cmd, env=scope_env() if prefix else None, preexec_fn=(lambda: os.nice(nice)) if nice else None).returncode
     except FileNotFoundError:
         print(f"team-heavy: command not found: {cmd[0]}", file=sys.stderr)
         return 127
