@@ -113,7 +113,7 @@ def test_heavy_runs_are_denied_to_the_named_roles_and_the_role_is_told_what_to_d
     deny = ["Bash(npx tsx tests/load/*)", "Bash(npm run sim:*)"]
     st = _settings(tmp_path, {"cycle": {"heavy_runs": {"deny": deny, "roles": ["developer", "game-designer"]}}})
     p = _product(st)
-    assert p.heavy_runs_cfg == {"deny": deny, "queue": [], "roles": ["developer", "game-designer"], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
+    assert p.heavy_runs_cfg == {"deny": deny, "queue": [], "roles": ["developer", "game-designer"], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse", "cpu_quota": 0}
     r = Capture()
     cyc = Cycle(st, p, r, "c1")
     cyc.role_run("developer", "do the task", None, cwd=tmp_path / "w", label="dev")
@@ -127,7 +127,7 @@ def test_heavy_runs_are_denied_to_the_named_roles_and_the_role_is_told_what_to_d
 def test_heavy_runs_off_by_default_and_bad_values_are_ignored(tmp_path: Path):
     st = _settings(tmp_path)
     p = _product(st)
-    off = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse"}
+    off = {"deny": [], "queue": [], "roles": [], "nice": 15, "wait_s": 1800, "slots": 1, "busy": "refuse", "cpu_quota": 0}
     assert C.HEAVY_RUNS_DEFAULTS == off and p.heavy_runs_cfg == off
     r = Capture()
     cyc = Cycle(st, p, r, "c1")

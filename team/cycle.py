@@ -275,7 +275,7 @@ def remove_named_dirs(root: Path, name: str = WORKDIR_HEAVY_NAME) -> list[Path]:
 
 
 def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "", lock: Any = None, full_log: Path | None = None,
-                         prepare: Any = None, timeout_s: int | None = None) -> str:
+                         prepare: Any = None, timeout_s: int | None = None, wrap: list[str] | None = None) -> str:
     """Runs the repository's tests on `sha` in a writable clone (tests may write scratch files, #163) with no secrets in the
     environment; returns «command / exit code / output tail» for the reviewer's prompt. Without `repo.test_cmd`:
     `python3 -m unittest discover -s <dir>` for every top-level directory that holds test_*.py files. `lock`: the
@@ -304,7 +304,11 @@ def run_tests_for_review(repo_dir: Path, sha: str, dest: Path, test_cmd: str = "
     out, full = [], []
     for c in cmds:
         try:
-            cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=timeout_s or REVIEW_TEST_TIMEOUT_S, env=env)
+            if wrap:                      # `cycle.heavy_runs.cpu_quota`: inside the slice all heavy runs share (team/heavy.py)
+                cp = subprocess.run([*wrap, "sh", "-c", c], cwd=str(dest), capture_output=True, text=True, timeout=timeout_s or REVIEW_TEST_TIMEOUT_S,
+                                    env=heavy_mod.scope_env(env))
+            else:
+                cp = subprocess.run(c, shell=True, cwd=str(dest), capture_output=True, text=True, timeout=timeout_s or REVIEW_TEST_TIMEOUT_S, env=env)
             text, code = (cp.stdout + "\n" + cp.stderr).strip(), cp.returncode
         except subprocess.TimeoutExpired:
             text, code = f"timed out after {timeout_s or REVIEW_TEST_TIMEOUT_S} s", "timeout"
@@ -503,7 +507,8 @@ class Cycle:
         if not cfg["queue"]:
             return {}
         return {"TEAM_HEAVY_LOCK": str(self.st.data_dir / "locks" / "heavy.lock"), "TEAM_HEAVY_NICE": str(cfg["nice"]), "TEAM_HEAVY_WAIT_S": str(cfg["wait_s"]),
-                "TEAM_HEAVY_SLOTS": str(cfg["slots"]), "TEAM_HEAVY_BUSY": str(cfg["busy"])}
+                "TEAM_HEAVY_SLOTS": str(cfg["slots"]), "TEAM_HEAVY_BUSY": str(cfg["busy"]),
+                **({"TEAM_HEAVY_CPU_QUOTA": str(cfg["cpu_quota"])} if cfg["cpu_quota"] else {})}
 
     def suite_tests(self, sha: str, dest: Path, full_log: Path | None = None) -> str:
         """`run_tests_for_review` for this product — in one of the server's places for heavy runs when the product queues
@@ -519,12 +524,35 @@ class Cycle:
             if waited >= 5:
                 log.info("%s: the test run on %s waited %.0fs for a place among the heavy runs%s", self.p.slug, sha[:12], waited,
                          "" if fh is not None else " and goes without one")
+        wrap: list[str] = []
+        if cfg["cpu_quota"] and not self.dry_run:
+            wrap, why = heavy_mod.scope_prefix(int(cfg["cpu_quota"]))     # the dispatcher's own suite shares the limit of the heavy runs
+            if not wrap:
+                log.warning("%s: the test run on %s goes outside the shared processor limit: %s", self.p.slug, sha[:12], why)
         try:
             return run_tests_for_review(self.p.repo_dir, sha, dest, self.p.test_cmd, lock=self.repo_lock, prepare=self.seed_node_modules,
-                                        timeout_s=self.review_tests_timeout(), full_log=full_log)
+                                        timeout_s=self.review_tests_timeout(), full_log=full_log, wrap=wrap)
         finally:
             if fh is not None:
                 fh.close()
+
+    def heavy_cpu_limit(self) -> bool | None:
+        """`cycle.heavy_runs.cpu_quota`: keep the slice of the heavy runs at its quota and try a start in it; the result is
+        one event per cycle (`heavy.cpu_limit`), so a server where the limit does not work says so instead of running
+        without it in silence. None = the setting is off. Never raises."""
+        quota = int(self.p.heavy_runs_cfg["cpu_quota"])
+        if not quota:
+            return None
+        try:
+            why = heavy_mod.set_slice_quota(quota)
+            if not why:
+                why = heavy_mod.scope_prefix(quota)[1]
+        except Exception as exc:  # noqa: BLE001 — a limit that cannot be set must never cost a cycle
+            why = str(exc)[:200]
+        self.store.event("heavy.cpu_limit", self.cycle_id, "dispatcher", {"ok": not why, "quota": quota, "slice": heavy_mod.SLICE, "why": why[:200]})
+        log.log(logging.WARNING if why else logging.INFO, "%s: shared processor limit of the heavy runs: %s%% of a core in %s — %s", self.p.slug,
+                quota, heavy_mod.SLICE, f"NOT in use: {why}" if why else "in use")
+        return not why
 
     def reap_orphans(self) -> int:
         """`cycle.guards.reap_orphans`: end the processes whose working folder is a folder of this product's work directory
@@ -709,6 +737,7 @@ class Cycle:
         if not self.dry_run:
             from . import codegate              # the checkout moved outside update-code.sh: said aloud, the cycle goes on
             codegate.check(self.st, self.p.slug, self.store.event, self.tell_owner)
+            self.heavy_cpu_limit()
         t0 = time.time()
         log.debug("%s cycle %s: lanes %s", self.p.slug, self.cycle_id, self.par.describe())      # `team status` shows the same line
         self._in_run = True
